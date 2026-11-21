@@ -75,6 +75,101 @@ async function fragmentedStarttlsMustWork() {
   }
 }
 
+
+async function expectUnsolicitedRejected(raw, description) {
+  const client = connection();
+  const pipe = new PassThrough();
+  client.socket = pipe;
+  const observed = client.readReply().then(
+    () => 'accepted',
+    () => 'rejected',
+  );
+  try {
+    pipe.write(Buffer.from(raw));
+    const outcome = await Promise.race([
+      observed,
+      new Promise(resolve => setTimeout(() => resolve('still_pending'), 750)),
+    ]);
+    assert.equal(outcome, 'rejected',
+      description + ': unsolicited response tail must reject, not enter next command');
+    assert.equal(pipe.destroyed, true,
+      description + ': fail-closed must close the synthetic stream');
+  } finally {
+    client.close();
+  }
+}
+
+async function unsolicitedPriorReplyMustFailClosed() {
+  await expectUnsolicitedRejected(
+    '250 accepted\r\n250 stale-reply-for-next-command\r\n',
+    'coalesced SMTP extra 250',
+  );
+  await expectUnsolicitedRejected(
+    '220 TLS upgrade ready\r\n250 pre-TLS stale reply\r\n',
+    'pre-TLS response must not authenticate post-TLS EHLO',
+  );
+  await expectUnsolicitedRejected(
+    '250 accepted\r\n2',
+    'partial unsolicited tail must not be cached',
+  );
+}
+
+async function staleBufferBeforeNextCommandMustFailClosed() {
+  const client = connection();
+  const pipe = new PassThrough();
+  client.socket = pipe;
+  client.buffer = '250 stale reply\r\n';
+  const observed = client.readReply().then(() => 'accepted', () => 'rejected');
+  try {
+    const result = await Promise.race([
+      observed,
+      new Promise(resolve => setTimeout(() => resolve('still_pending'), 750)),
+    ]);
+    assert.equal(result, 'rejected',
+      'previous-buffer reply must not satisfy a later SMTP command');
+    assert.equal(pipe.destroyed, true,
+      'stale pre-buffer state requires fail-closed stream destruction');
+  } finally {
+    client.close();
+  }
+}
+
+async function replyByteAndLineLimitsMustWork() {
+  const client = connection();
+  const pipe = new PassThrough();
+  client.socket = pipe;
+  try {
+    const pending = client.readReply();
+    // 4-byte SMTP prefix + 506-byte ASCII body + CRLF = 512 octets.
+    pipe.write(Buffer.from('250 ' + 'A'.repeat(506) + '\r\n'));
+    assert.equal((await pending).code, 250);
+  } finally {
+    client.close();
+  }
+
+  await expectUnsolicitedRejected(
+    '250 ' + 'A'.repeat(507) + '\r\n',
+    '513-octet over-limit reply line',
+  );
+  const many = connection();
+  const manyPipe = new PassThrough();
+  many.socket = manyPipe;
+  try {
+    const pending = many.readReply();
+    manyPipe.write(Buffer.from(
+      ('250-' + 'B'.repeat(506) + '\r\n').repeat(127)
+      + '250 ' + 'B'.repeat(506) + '\r\n',
+    ));
+    assert.equal((await pending).code, 250);
+  } finally {
+    many.close();
+  }
+  await expectUnsolicitedRejected(
+    '250-small\r\n'.repeat(128) + '250 final\r\n',
+    '129-line over-limit reply',
+  );
+}
+
 async function oversizedUnterminatedReplyMustFailClosed() {
   const client = connection();
   const pipe = new PassThrough();
@@ -110,6 +205,9 @@ async function oversizedUnterminatedReplyMustFailClosed() {
 
 await normalReplyMustWork();
 await fragmentedStarttlsMustWork();
+await unsolicitedPriorReplyMustFailClosed();
+await staleBufferBeforeNextCommandMustFailClosed();
+await replyByteAndLineLimitsMustWork();
 await oversizedUnterminatedReplyMustFailClosed();
 console.log('PASS #378 SMTP bounded external reply: short multiline accepted, oversized unterminated rejected and stream closed');
 """
