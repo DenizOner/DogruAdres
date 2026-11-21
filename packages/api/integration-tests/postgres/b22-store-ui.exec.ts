@@ -23,6 +23,7 @@ import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,createSellerPriceListsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
+import {verifyB22MultiOrgStaleStoreResponse} from "./b22-multiorg-stale-store-response.accept"
 import {verifyB22TransferredRecovery,verifyAssignedRecipientUse,createB22CompletedSourceOrderFixture} from "./b22-store-name-transfer.accept"
 import {verifyB22ScheduledSellerWindow} from "./b22-scheduled-seller-window.accept"
 import {verifyRepeatedApprovedStoreRenameHistory} from "./b22-repeated-rename-history.accept"
@@ -5115,6 +5116,15 @@ async function verifyB22ConcurrentOwnerOrganizationStores(input:{
         assert.equal(await browser.eval(
           "document.getElementById('org-stores').textContent.includes("+
           JSON.stringify(concurrentNames[n])+")"),false)
+      await verifyB22MultiOrgStaleStoreResponse({
+        browser,
+        alpha:{id:organizations[0].id,name:organizations[0].name,
+          storeIds:[ownerStoreId,secondOwnerStoreId],
+          storeNames:[concurrentNames[0],concurrentNames[1]]},
+        gamma:{id:sellerGamma.id,name:sellerGamma.name,
+          storeId:gammaSellerId,storeName:concurrentNames[2]},
+        q
+      })
       assert.equal(Number((await q(
         "select count(*)::int n from da_audit_event"))[0].n),
         auditBeforeConcurrentReads,
