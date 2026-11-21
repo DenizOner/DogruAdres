@@ -73,6 +73,7 @@ const wait = async (predicate: () => Promise<boolean>, ms: number) => {
 }
 
 async function seed(container: ExecArgs["container"], db: Client) {
+  process.stdout.write("EMRE370_STAGE SEED_STARTED\n")
   const auth: IAuthModuleService = container.resolve("auth")
   const users: IUserModuleService = container.resolve("user")
   const access: Foundation = container.resolve("dogruadresAccess")
@@ -80,9 +81,11 @@ async function seed(container: ExecArgs["container"], db: Client) {
     "da_organization","auth_mfa_factor","da_browser_session"]) {
     assert.equal(await pgCount(db, table), 0, "must begin empty")
   }
+  process.stdout.write("EMRE370_STAGE EMPTY_NATIVE_TABLES_OK\n")
   const run = randomBytes(8).toString("hex")
   const persons: string[] = []
   for (const role of ["A","B"]) {
+    process.stdout.write("EMRE370_STAGE ACTOR_"+role+"_START\n")
     const email = "emre370-" + role.toLowerCase() + "-" + run + "@example.invalid"
     const password = randomBytes(36).toString("base64url")
     const user = await users.createUsers({ email })
@@ -102,14 +105,17 @@ async function seed(container: ExecArgs["container"], db: Client) {
       [registered.authIdentity.id, person.id, user.id]
     )
     persons.push(person.id)
+    process.stdout.write("EMRE370_STAGE ACTOR_"+role+"_OK\n")
   }
   assert.notEqual(persons[0], persons[1])
+  process.stdout.write("EMRE370_STAGE ORGANIZATIONS_START\n")
   const orgs = await access.createOrganizations([
     {name:"Emre370 Alpha Synthetic",status:"active"},
     {name:"Emre370 Beta Synthetic",status:"active"},
   ])
   assert.equal(orgs.length, 2)
   assert.notEqual(orgs[0].id, orgs[1].id)
+  process.stdout.write("EMRE370_STAGE MEMBERSHIPS_START\n")
   await access.createMemberships([
     {organization_id:orgs[0].id,person_id:persons[0],role:"owner",status:"active",protected_owner:true},
     {organization_id:orgs[1].id,person_id:persons[1],role:"owner",status:"active",protected_owner:true},
@@ -281,8 +287,10 @@ async function realProbe(container: ExecArgs["container"], db: Client) {
 
 export default async function({container}:ExecArgs) {
   const target=childEnv()
+  process.stdout.write("EMRE370_STAGE CHILD_ENV_ACCEPTED\n")
   const db=new Client({connectionString:target.toString()})
   await db.connect()
+  process.stdout.write("EMRE370_STAGE CHILD_PG_CONNECTED\n")
   try {
     if(process.env.EMRE370_CHILD==="seed") await seed(container,db)
     else if(process.env.EMRE370_CHILD==="probe") await realProbe(container,db)
@@ -366,8 +374,11 @@ async function parent(){
           connection:/econnrefused|connection refused/i.test(captured),
           migration:/migration failed|migrations failed/i.test(captured),
           runtime:/typeerror|syntaxerror|referenceerror/i.test(captured),
+          assertion:/assertionerror|assertion failed/i.test(captured),
         }
-        process.stderr.write("EMRE370 FAIL: "+label+" "+code+" "+JSON.stringify(categories)+"; secret-bearing output withheld.\n")
+        const markers=String(child.stdout??"").split("\n").filter(
+          line=>/^EMRE370_STAGE (?:CHILD_ENV_ACCEPTED|CHILD_PG_CONNECTED|SEED_STARTED|EMPTY_NATIVE_TABLES_OK|ACTOR_[AB]_(?:START|OK)|ORGANIZATIONS_START|MEMBERSHIPS_START)$/.test(line))
+        process.stderr.write("EMRE370 FAIL: "+label+" "+code+" "+JSON.stringify(categories)+" last_stage="+(markers.at(-1)??"NO_MARKER")+"; secret-bearing output withheld.\n")
         throw Error("native stage failed")
       }
       const safe=phase==="seed"?"EMRE370_REAL_NATIVE_SEED_OK":"EMRE370_REAL_NATIVE_CHROME_TLS_PG16_PREFLIGHT_OK"
