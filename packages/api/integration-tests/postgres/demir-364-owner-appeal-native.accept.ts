@@ -221,7 +221,7 @@ export default async function({container}:any){
       {organization_id:orgs[1].id,person_id:B.person,role:"owner",status:"active",protected_owner:true},
       {organization_id:orgs[2].id,person_id:A.person,role:"owner",status:"active",protected_owner:true}
     ])
-    const nativeStores=[]
+    const nativeStores:string[]=[]
     for(let i=0;i<2;i++){
       const [s]=await seller.createSellers([{
         name:"Demir Native Gamma "+i+" "+nonce,
@@ -263,7 +263,7 @@ export default async function({container}:any){
       "-addext","subjectAltName=DNS:localhost,IP:127.0.0.1",
       "-addext","basicConstraints=critical,CA:TRUE"],{stdio:"ignore",timeout:20000})
     assert.equal(openssl.status,0,"Task CA creation failed")
-    const require=createRequire(import.meta.url)
+    const require=createRequire(join(process.cwd(),"package.json"))
     const mercurApi=join(dirname(require.resolve("@mercurjs/core")),"api")
     app=await createPersonalHttpApp(container,[mercurApi])
     privateServer=plainServer(app.app)
