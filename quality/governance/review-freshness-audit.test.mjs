@@ -6,6 +6,47 @@ const pr={number:418,state:'open',draft:false,head:{sha:h},base:{sha:b}}
 const comment=(type,head=h,base=b,id=type==='REVIEW-REQUEST'?2:3)=>({id,body:`<!-- DA-${type}-v2 -->\n## PR #418\n**Exact HEAD:** \`${head}\`; **exact base:** \`${base}\`\nKARAR: PASS (SCOPED)`})
 const rv=(head=h,base=b)=>({commit_id:head,body:`<!-- REVIEW-PROVENANCE-v1 -->\nExact HEAD: \`${head}\`\nbase: \`${base}\``})
 const check=(overrides={})=>assessReviewEvidence({pr,mainSha:b,queueComments:[comment('REVIEW-REQUEST'),comment('REVIEW-RESULT')],reviews:[rv()],...overrides})
+// Fail-first: a combined current-target line must not hide later labelled SHA values.
+test('same-line conflicting duplicate HEAD in RESULT cannot report PASS', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'; base: '+b+'; HEAD: '+old+'\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'PENDING')
+  assert.equal(x.mergePermitted,false)
+})
+test('same-line conflicting duplicate base in RESULT cannot report PASS', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'; base: '+b+'; base: '+old+'\nKARAR: PASS'}
+  assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).state,'PENDING')
+})
+test('same-line NOT VERIFIED duplicate base in current READY is STALE', () => {
+  const ready={id:100,body:'<!-- DA-REVIEW-REQUEST-v2 -->\nPR #418\nExact HEAD: '+h+'; base: '+b+'; base: NOT VERIFIED'}
+  assert.equal(check({queueComments:[ready,comment('REVIEW-RESULT')]}).state,'STALE')
+})
+test('same-line NOT VERIFIED duplicate HEAD in current RESULT cannot report PASS', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'; base: '+b+'; HEAD: NOT VERIFIED\nKARAR: PASS'}
+  assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).state,'PENDING')
+})
+test('same-line conflicting HEAD or invalid base in provenance is UNVERIFIED', () => {
+  for (const suffix of ['; HEAD: '+old,'; base: NOT VERIFIED']) {
+    const review={commit_id:h,body:'<!-- REVIEW-PROVENANCE-v1 -->\nExact HEAD: '+h+'; base: '+b+suffix}
+    const x=check({reviews:[review]})
+    assert.equal(x.state,'UNVERIFIED',suffix)
+    assert.equal(x.mergePermitted,false)
+  }
+})
+test('valid repeated same-line HEAD and base declarations preserve scoped advisory', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'; base: '+b+'; HEAD: '+h+'; base: '+b+'\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'REPORTED_PASS')
+  assert.equal(x.mergePermitted,false)
+})
+test('valid combined HEAD / stored base / main format still matches current result', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD / stored base / canlı main: '+h+' / '+b+' / '+b+'\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.mergePermitted,false)
+})
+
 test('same metadata returns only RECORDED, never independent PASS or merge permission',()=>{const x=check();assert.equal(x.state,'RECORDED');assert.equal(x.disposition,'REPORTED_PASS');assert.equal(x.independentIdentity,'UNVERIFIED');assert.equal(x.mergePermitted,false);assert.equal(x.ci,'NOT_CHECKED')})
 test('main drift is STALE even with current-looking request',()=>assert.equal(check({mainSha:old}).state,'STALE'))
 test('old HEAD or base request is STALE',()=>assert.equal(check({queueComments:[comment('REVIEW-REQUEST',old),comment('REVIEW-RESULT')]}).state,'STALE'))
