@@ -5156,6 +5156,7 @@ async function verifyB22ConcurrentOwnerOrganizationStores(input:{
 async function runB22NativeRedisCartCrashRecovery(
   container:any,u:URL,
   cartService:any,nativeCustomer:any,organizations:any[],
+  foundation:any,
   q:(sql:string,args?:unknown[])=>Promise<any[]>,
   query:any,region:any,market:any,variant:any,hookProbeOffer:any,
   gammaSellerId:string,
@@ -10797,6 +10798,7 @@ export default async function({container}:any){
     await runB22NativeRedisCartCrashRecovery(
       container,u,
       cartService,nativeCustomer,organizations,
+      foundation,
       q,query,region,market,variant,hookProbeOffer,
       gammaSellerId,claimCart,
       redisKey,redisEnv,cmd
