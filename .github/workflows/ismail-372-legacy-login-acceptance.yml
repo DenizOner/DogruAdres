@@ -1,0 +1,76 @@
+name: Ismail 372 task-only legacy login Next Chrome acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/ismail-372-legacy-login-acceptance.yml'
+      - 'quality/e2e/ismail-372-legacy-login-browser.accept.py'
+      - 'apps/storefront/src/components/molecules/LoginForm/LoginForm.tsx'
+      - 'apps/storefront/src/components/molecules/LoginForm/LoginForm.navigation.unit.test.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ismail-372-login-pr437
+  cancel-in-progress: true
+
+jobs:
+  task-only-next-chrome:
+    name: Ismail 372 - synthetic real Next and Chrome
+    # Never run on another PR, fork, manual dispatch, branch, or database actor.
+    if: >-
+      github.repository == 'DenizOner/DogruAdres' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 437 &&
+      github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' &&
+      github.head_ref == 'fix/ismail-372-legacy-login-no-redirect-20261118'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      DA_ISMAIL_372_TASK_ONLY: '1'
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Checkout only the PR merge ref without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned supported Node version
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - name: Fail closed on Node, Chrome, and branch preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e 'const [a,b]=process.versions.node.split(".").map(Number); if(a<22||(a===22&&b<22))process.exit(1)'
+          test "$GITHUB_HEAD_REF" = 'fix/ismail-372-legacy-login-no-redirect-20261118'
+          test "$GITHUB_EVENT_NAME" = 'pull_request'
+          test "$GITHUB_REPOSITORY" = 'DenizOner/DogruAdres'
+          command -v google-chrome
+      - name: Real source handler 5-case negative/positive Node test
+        run: node --test apps/storefront/src/components/molecules/LoginForm/LoginForm.navigation.unit.test.mjs
+      - name: Pinned Bun for locked Next storefront dependencies
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+      - name: Frozen monorepo dependency install
+        run: bun install --frozen-lockfile
+      - name: Isolated pinned open-source browser driver (no external account)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/ismail372-playwright"
+          "$RUNNER_TEMP/ismail372-playwright/bin/python" -m pip install --no-cache-dir --disable-pip-version-check 'playwright==1.56.0'
+      - name: Actual Next HTTP and Chrome with synthetic loopback Customer auth only
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/ismail372-playwright/bin/python" quality/e2e/ismail-372-legacy-login-browser.accept.py
+          echo '### #372 scoped real Next/Chrome: synthetic Customer backend only' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This is NOT native Medusa/Person MFA, protected DB, production Customer or screen-reader AT acceptance.' >> "$GITHUB_STEP_SUMMARY"
