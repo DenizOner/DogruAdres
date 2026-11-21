@@ -9,6 +9,7 @@ on:
     paths:
       - ".github/workflows/da-cem-369-focused.yml"
       - "packages/api/src/modules/dogruadres-access/__tests__/mfa-transition-369.unit.spec.ts"
+      - "packages/api/src/modules/dogruadres-access/identity-session.ts"
 
 permissions:
   contents: read
@@ -96,10 +97,16 @@ jobs:
           test "$(bun --version)" = "1.4.2"
           bun install --frozen-lockfile
 
-      - name: Run exact six MFA transition Jest cases (do not hide RED)
+      - name: Run exact MFA transition Jest and session regression tests (do not hide RED)
         working-directory: packages/api
         shell: bash
         run: |
           set -euo pipefail
           echo "RUN TARGET: src/modules/dogruadres-access/__tests__/mfa-transition-369.unit.spec.ts"
           bun run jest --runInBand --runTestsByPath src/modules/dogruadres-access/__tests__/mfa-transition-369.unit.spec.ts
+          echo "RUN REGRESSIONS: existing session/native-MFA scope, password-login and recovery"
+          bun run jest --runInBand --runTestsByPath \
+            src/modules/dogruadres-access/__tests__/identity-session.unit.spec.ts \
+            src/modules/dogruadres-access/__tests__/mfa-session-scope.unit.spec.ts \
+            src/api/personal/__tests__/mfa-login-runtime.unit.spec.ts \
+            src/api/personal/__tests__/mfa-challenge-recovery.unit.spec.ts
