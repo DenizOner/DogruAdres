@@ -1,0 +1,87 @@
+name: DA Kerem 216 governance focused (tokenless)
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'quality/governance/review-freshness-audit.mjs'
+      - 'quality/governance/review-freshness-audit.test.mjs'
+      - '.github/workflows/da-kerem-216-governance-focused.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: da-kerem-216-governance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  focused-node:
+    name: DA Kerem 216 governance tokenless native Node
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 433 && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/kerem-216-review-freshness-handoff-20261118' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout same-repo PR merge with credentials not persisted
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Set up pinned Node 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+
+      - name: Fail closed unless PR changes exactly the three owned paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-list --parents -n 1 HEAD | awk '{print NF}')" -eq 3
+          git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/da-kerem-216-paths.txt"
+          node - "$RUNNER_TEMP/da-kerem-216-paths.txt" <<'NODE'
+          const fs = require('node:fs')
+          const actual = fs.readFileSync(process.argv[2], 'utf8').trim().split('\n').filter(Boolean)
+          const allowed = new Set([
+            '.github/workflows/da-kerem-216-governance-focused.yml',
+            'quality/governance/review-freshness-audit.mjs',
+            'quality/governance/review-freshness-audit.test.mjs'
+          ])
+          if (actual.length !== 3 || actual.some(path => !allowed.has(path))) {
+            console.error('Unexpected PR path scope; no test/source execution')
+            process.exit(1)
+          }
+          console.log('Exact 3-path scope verified')
+          NODE
+
+      - name: Run only native synthetic Node source and test targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "${GITHUB_TOKEN:-}"
+          test -z "${GH_TOKEN:-}"
+          node --version
+          node --check quality/governance/review-freshness-audit.mjs
+          node --check quality/governance/review-freshness-audit.test.mjs
+          node --test quality/governance/review-freshness-audit.test.mjs
+
+      - name: Verify the no-token CLI refuses an unverified live audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "${GITHUB_TOKEN:-}"
+          test -z "${GH_TOKEN:-}"
+          set +e
+          result="$(env -u GITHUB_TOKEN -u GH_TOKEN node quality/governance/review-freshness-audit.mjs --repo=DenizOner/DogruAdres --pr=433)"
+          status=$?
+          set -e
+          test "$status" -eq 2
+          node - "$result" <<'NODE'
+          const outcome = JSON.parse(process.argv[2])
+          if (outcome.state !== 'UNKNOWN' || outcome.mergePermitted !== false || outcome.independentIdentity !== 'UNVERIFIED') {
+            console.error('No-token CLI did not fail closed')
+            process.exit(1)
+          }
+          console.log('No-token CLI UNKNOWN/UNVERIFIED/mergePermitted=false and exit 2 confirmed')
+          NODE
