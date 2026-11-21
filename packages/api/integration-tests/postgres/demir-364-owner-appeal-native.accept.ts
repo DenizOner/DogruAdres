@@ -57,7 +57,9 @@ function child(args:string[],env:NodeJS.ProcessEnv,stage:string,timeout=210000){
       "identities-ready","organizations-ready","stores-ready","email-proof-ready",
       "https-ready","owner-browser-started","owner-strong-session",
       "staff-browser-started","staff-strong-session","staff-grant",
-      "first-closure","first-clock","first-appeal","second-closure",
+      "first-closure","staff-owner-denied","owner-privacy-read","foreign-org-denied",
+      "mail-queued","mail-link-created","foreign-link-denied","csrf-link-denied",
+      "owner-link-accepted","owner-link-replay","first-clock","first-appeal","second-closure",
       "second-clock","day11-request","day30-31","privacy-clean"
     ] as const
     const matched=[...text.matchAll(/STEP DEMIR364 scenario: ([a-z0-9-]+)/g)]
@@ -364,27 +366,36 @@ export default async function({container}:any){
     await close(nativeStores[0])
     marker("STEP DEMIR364 scenario: first-closure")
     assert.equal((await browserGet(staff,ownerUrl(nativeStores[0]))).status,403)
+    marker("STEP DEMIR364 scenario: staff-owner-denied")
     assert.equal((await browserGet(owner,ownerUrl(nativeStores[0]))).status,200)
+    marker("STEP DEMIR364 scenario: owner-privacy-read")
     const forbidden=await browserGet(owner,ownerBase+"?"+
       new URLSearchParams({organization_id:orgs[0].id,seller_id:nativeStores[0]}))
     assert.equal(forbidden.status,403,"Wrong Owner Organization cannot read reason")
+    marker("STEP DEMIR364 scenario: foreign-org-denied")
     const clock=async(s:string)=>{
       const emailToken=randomBytes(32).toString("hex")
       const digest=createHash("sha256").update(emailToken).digest("hex")
       const queued=await q("select person_id from da_store_platform_closing_email "+
         "where seller_id=$1 and person_id=$2",[s,A.person])
       assert.equal(queued.length,1,"Real closing must enqueue protected Owner")
+      marker("STEP DEMIR364 scenario: mail-queued")
       await q("insert into da_store_platform_closing_email_link "+
         "(seller_id,person_id,attempt,token_sha256) values($1,$2,4,$3)",
         [s,A.person,digest])
+      marker("STEP DEMIR364 scenario: mail-link-created")
       const link="/personal/store-platform-closing-email-visit"
       assert.equal((await browserPost(staff,link,{token:emailToken})).status,403)
+      marker("STEP DEMIR364 scenario: foreign-link-denied")
       assert.equal((await browserPost(owner,link,{token:emailToken},true)).status,403)
+      marker("STEP DEMIR364 scenario: csrf-link-denied")
       const confirmed=await browserPost(owner,link,{token:emailToken})
       assert.equal(confirmed.status,200)
       assert.equal(confirmed.body?.deadline_started,true)
+      marker("STEP DEMIR364 scenario: owner-link-accepted")
       const replay=await browserPost(owner,link,{token:emailToken})
       assert.equal(replay.status,200)
+      marker("STEP DEMIR364 scenario: owner-link-replay")
       const rows=await q("select deadline_started_at from da_store_platform_closing where seller_id=$1",[s])
       assert.equal(rows.length,1)
       const original=new Date(rows[0].deadline_started_at).toISOString()
