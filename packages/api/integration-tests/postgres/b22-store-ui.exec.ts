@@ -10962,6 +10962,7 @@ export default async function({container}:any){
     // completion, OrderGroup or payment is exercised in this test.
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
+    await q("update da_browser_session set last_strong_auth_at=clock_timestamp(), last_activity_at=clock_timestamp() where person_id=$1 and status='active'",[B.person])
     const buyerRevokeBarrier=new Client({connectionString:u.toString()})
     await buyerRevokeBarrier.connect()
     let pendingBuyerRevoke:Promise<{status:number;error?:string}>|undefined
