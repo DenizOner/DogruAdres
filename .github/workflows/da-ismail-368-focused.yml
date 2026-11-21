@@ -1,0 +1,87 @@
+# #368 — İsmail task-only source-extracted Person MFA UI Node tests.
+# Advisory synthetic-only evidence, NOT Medusa/PG16/Chrome/screen-reader acceptance.
+name: "DA Ismail #368 focused Person MFA UI Node"
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/da-ismail-368-focused.yml"
+      - "quality/e2e/ismail-368-person-mfa-ui-negative.unit.test.mjs"
+      - "packages/api/src/api/personal/route.ts"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: da-ismail-368-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  person-mfa-status:
+    name: "Ismail #368 - 6 isolated Person MFA UI Node cases"
+    # DRAFT is intentionally allowed. Deny other PRs/forks/events/branches.
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.repository == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.number == 456 &&
+        github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.head.ref == 'test/ismail-368-person-mfa-ui-negative-20261120'
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout only PR merge ref with no credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify exact PR merge provenance and two task files
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "pull_request"
+          test "$GITHUB_REPOSITORY" = "DenizOner/DogruAdres"
+          test "$GITHUB_HEAD_REF" = "test/ismail-368-person-mfa-ui-negative-20261120"
+          test "$EXPECTED_PR" = "456"
+          test -n "$EXPECTED_HEAD"
+          test -n "$EXPECTED_BASE"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          # Read the raw object so even a shallow checkout reports both parents.
+          mapfile -t parents < <(git cat-file -p HEAD | sed -n 's/^parent //p')
+          test "${#parents[@]}" -eq 2
+          test "${parents[0]}" = "$EXPECTED_BASE"
+          test "${parents[1]}" = "$EXPECTED_HEAD"
+          test -f quality/e2e/ismail-368-person-mfa-ui-negative.unit.test.mjs
+          test -f packages/api/src/api/personal/route.ts
+          echo "Verified PR #456 merge parent HEAD and base; synthetic UI source only"
+
+      - name: Setup fixed supported Node 24 (no dependency install)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
+      - name: Execute all six actual Node tests without masking failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v24.22.1"
+          node --test quality/e2e/ismail-368-person-mfa-ui-negative.unit.test.mjs | tee "$RUNNER_TEMP/ismail368-target.tap"
+          grep -Eq '^(#|ℹ) tests 6$' "$RUNNER_TEMP/ismail368-target.tap"
+          grep -Eq '^(#|ℹ) pass 6$' "$RUNNER_TEMP/ismail368-target.tap"
+          grep -Eq '^(#|ℹ) fail 0$' "$RUNNER_TEMP/ismail368-target.tap"
+          grep -Eq '^(#|ℹ) skipped 0$' "$RUNNER_TEMP/ismail368-target.tap"
+          printf '%s\n' \
+            '### #368 synthetic-only Person MFA UI Node test' \
+            '6 source-extracted Node tests executed. This is NOT native Medusa MFA, PostgreSQL, Chrome, WCAG/AT, or final #208 review.' \
+            >> "$GITHUB_STEP_SUMMARY"

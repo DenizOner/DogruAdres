@@ -1523,7 +1523,26 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   async function refreshMfa(){
     try{
       const data=await api('mfa');
-      if(data.runtime_enforcement!=='enforced'&&data.runtime_enforcement!=='not_yet_enabled')throw new Error('MFA çalışma zamanı durumu doğrulanamadı');
+      if(!data||typeof data!=='object'||!data.platform||!data.personal||!data.effective_mfa_target||
+         (data.runtime_enforcement!=='enforced'&&data.runtime_enforcement!=='not_yet_enabled'))
+        throw new Error('MFA çalışma zamanı durumu doğrulanamadı');
+      const mode=data.platform.platform_mode, native=data.native_factor_state;
+      const user=data.personal.user_enabled, target=data.effective_mfa_target;
+      // Trust only the documented Person MFA status contract. An unknown value
+      // must not display a misleading switch or expose factor actions.
+      if(!['required','optional','disabled'].includes(mode)||
+         !['enabled','pending','not_enrolled'].includes(native)||
+         typeof user!=='boolean'||typeof data.can_manage_platform!=='boolean'||
+         typeof target.required!=='boolean'||typeof target.user_control_allowed!=='boolean'||
+         !['enroll_mfa','verify_mfa','reconcile_native_factor','allow_primary'].includes(target.next_step))
+        throw new Error('MFA durumu doğrulanamadı');
+      const nativeEnabled=native==='enabled';
+      const expectedRequired=mode==='required'||(mode==='optional'&&user)||nativeEnabled;
+      const expectedStep=mode==='disabled'&&nativeEnabled?'reconcile_native_factor':
+        nativeEnabled?'verify_mfa':expectedRequired?'enroll_mfa':'allow_primary';
+      if(target.required!==expectedRequired||
+         target.user_control_allowed!==(mode==='optional')||target.next_step!==expectedStep)
+        throw new Error('MFA hedef durumu doğrulanamadı');
       mfaState=data;
       el('mfa-person').hidden=false;el('mfa-platform').hidden=!data.can_manage_platform;
       el('mfa-enroll-launch').hidden=data.platform.platform_mode==='disabled'||data.native_factor_state==='enabled';
