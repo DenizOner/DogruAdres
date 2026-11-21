@@ -1,0 +1,67 @@
+name: DA Fikret 378 CSP real Vite focused
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+    paths:
+      - '.github/workflows/da-fikret-378-csp-focused.yml'
+      - 'packages/api/scripts/bundle-dashboards.mjs'
+      - 'packages/api/scripts/dashboard-csp.mjs'
+      - 'packages/api/scripts/dashboard-csp.unit.test.mjs'
+      - 'quality/e2e/test_dashboard_csp_bundle.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: da-fikret-378-csp-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  csp-admin-vendor-real-vite:
+    if: >-
+      github.repository == 'DenizOner/DogruAdres' &&
+      github.event.pull_request.number == 460 &&
+      github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' &&
+      github.event.pull_request.head.ref == 'fix/fikret-378-csp-redelivery-20261121' &&
+      github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout PR merge test ref without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup pinned Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - name: Setup pinned Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+      - name: Verify exact task PR and current checkout
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -f quality/e2e/test_dashboard_csp_bundle.py
+          test -f packages/api/scripts/bundle-dashboards.mjs
+          printf 'Task=378 PR=460 head=%s base=%s merge=%s\n' "$EXPECTED_HEAD" "$EXPECTED_BASE" "$(git rev-parse HEAD)"
+          python3 --version
+          node --version
+          bun --version
+      - name: Install locked project dependencies on ephemeral free runner
+        run: bun install --frozen-lockfile
+      - name: Run actual Vite Admin Vendor source and fail-first CSP negative suite
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          MERCUR_DISABLE_TELEMETRY: 'true'
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s quality/e2e -p 'test_dashboard_csp_bundle.py' -v
