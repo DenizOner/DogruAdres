@@ -1,0 +1,99 @@
+# Barış #377 r12 — BuyerOrg Returns API source-targeted Jest only; NOT native HTTP/PG16/Chrome.
+name: "DA Baris #377 BuyerOrg Returns focused Jest"
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/da-baris-377-returns-buyerorg-focused.yml"
+      - "packages/api/src/api/personal/return-requests/**"
+      - "packages/api/src/api/personal/security.ts"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: da-baris-377-buyerorg-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  buyerorg-returns-source-negative:
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.repository == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.number == 462 &&
+        github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.head.ref == 'feat/baris-377-buyerorg-returns-read-20261121'
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
+    steps:
+      - name: Checkout exact PR merge without saved credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify HEAD, protected merge parent, and sole writer path allowlist
+        shell: bash
+        env:
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$EXPECTED_BASE" && test -n "$EXPECTED_HEAD"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          read -r actual_base actual_head unexpected <<< "$(git show -s --format=%P HEAD)"
+          test -n "$actual_base" && test -n "$actual_head" && test -z "${unexpected:-}"
+          test "$actual_head" = "$EXPECTED_HEAD"
+          if [ "$actual_base" != "$EXPECTED_BASE" ]; then
+            git merge-base --is-ancestor "$EXPECTED_BASE" "$actual_base"
+          fi
+          test -f packages/api/src/api/personal/return-requests/__tests__/return-requests.unit.spec.ts
+          merge_base="$(git merge-base "$EXPECTED_BASE" "$EXPECTED_HEAD")"
+          changed="$(git diff --name-only "$merge_base" "$EXPECTED_HEAD")"
+          test -n "$changed"
+          while IFS= read -r changed_path; do
+            case "$changed_path" in
+              "packages/api/src/api/personal/security.ts" | \
+              "packages/api/src/api/personal/return-requests/route.ts" | \
+              "packages/api/src/api/personal/return-requests/__tests__/return-requests.unit.spec.ts" | \
+              ".github/workflows/da-baris-377-returns-buyerorg-focused.yml") ;;
+              *) echo "FAIL: unauthorized #377 r12 path: $changed_path"; exit 1 ;;
+            esac
+          done <<< "$changed"
+          echo "PASS: Baris original PR #462 HEAD/protected-main source provenance; no other paths"
+
+      - name: Set up pinned Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
+      - name: Set up pinned Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+          no-cache: true
+
+      - name: Install frozen existing workspace dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v24.22.1"
+          test "$(bun --version)" = "1.4.2"
+          bun install --frozen-lockfile
+
+      - name: Actual fail-first / green source-only GET handler Jest
+        shell: bash
+        working-directory: packages/api
+        env:
+          TEST_TYPE: unit
+          NODE_OPTIONS: --experimental-vm-modules
+        run: |
+          set -euo pipefail
+          bun run jest --runInBand --forceExit --runTestsByPath src/api/personal/return-requests/__tests__/return-requests.unit.spec.ts
+          echo "PASS SOURCE ONLY: no real PG16/HTTPS/Chrome/BuyerOrg tenant acceptance"
