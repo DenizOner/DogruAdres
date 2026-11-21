@@ -5,17 +5,19 @@
  * PostgreSQL transaction, HTTP, Chrome or the full three-mode acceptance.
  * A previously issued one-time challenge must not become a new full login
  * after the underlying policy, Person preference or security epoch changes.
- * Production session/policy code is deliberately NOT modified by this PR.
+ * Exercises actual IdentitySessions production functions through synthetic SQL.
+ * Jest pass alone cannot prove native Medusa/HTTP/PG16 acceptance.
  */
-import { IdentitySessions } from "../identity-session"
+import { IdentitySessions, digest } from "../identity-session"
 
-type Challenge = { identity: string; consumed: boolean }
+type Challenge = { identity: string; challengeId: string; consumed: boolean }
 function syntheticTransition() {
   const state = {
     platformMode: "required" as "required" | "optional" | "disabled",
     platformVersion: 4,
     personVersion: 2,
     epoch: 3,
+    personId: "daprs_synthetic",
   }
   const challenges = new Map<string, Challenge>()
   const mintedSessions: unknown[][] = []
@@ -23,19 +25,27 @@ function syntheticTransition() {
   let securityOutboxCount = 0
   const execute = jest.fn(async (sql: string, parameters: unknown[] = []): Promise<any[]> => {
     if (sql.startsWith("insert into da_login_challenge")) {
-      const [tokenHash, identity] = parameters as string[]
-      challenges.set(tokenHash, { identity, consumed: false })
+      const [tokenHash, identity, challengeId] = parameters as string[]
+      challenges.set(tokenHash, { identity, challengeId, consumed: false })
       return []
     }
     if (sql.startsWith("update da_login_challenge set consumed_at")) {
       const challenge = challenges.get(parameters[0] as string)
       if (!challenge || challenge.consumed) return []
       challenge.consumed = true
-      return [{ auth_identity_id: challenge.identity }]
+      return [{ auth_identity_id: challenge.identity, challenge_id: challenge.challengeId }]
+    }
+    if (sql.startsWith("select pg_advisory_xact_lock")) return []
+    if (sql.includes("as mfa_activated") && !sql.includes("as platform,")) {
+      return [{ mfa_activated: "true" }]
+    }
+    if (sql.startsWith("select auth_identity_id,challenge_id from da_login_challenge")) {
+      const challenge = challenges.get(parameters[0] as string)
+      return challenge && !challenge.consumed ? [{ auth_identity_id: challenge.identity, challenge_id: challenge.challengeId }] : []
     }
     if (sql.startsWith("select b.*,p.disabled_at from da_login_binding")) {
       return [{
-        person_id: "daprs_synthetic", actor_type: "user",
+        person_id: state.personId, actor_type: "user",
         actor_id: "user_synthetic", disabled_at: null,
       }]
     }
@@ -67,6 +77,10 @@ function syntheticTransition() {
     sessions: new IdentitySessions({ execute }), state, execute,
     mintedSessions, auditActions,
     outboxes: () => securityOutboxCount,
+    changeChallenge: (token: string, id: string) => {
+      const row = challenges.get(digest(token))
+      if (row) row.challengeId = id
+    },
   }
 }
 
@@ -100,6 +114,10 @@ describe("#369 MFA transition: pre-existing native challenge cannot cross revisi
   it("positive control: matching current challenge completes once with a strong full session", async () => {
     const h = syntheticTransition()
     const pending = await h.sessions.pending("auth_synthetic", "native_synthetic")
+    expect(pending.token).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    await expect(h.sessions.challenge(pending.token)).resolves.toEqual({
+      auth_identity_id: "auth_synthetic", challenge_id: "native_synthetic",
+    })
     await expect(h.sessions.complete(pending.token, freshProof()))
       .resolves.toEqual({ token: expect.any(String), csrf: expect.any(String) })
     expect(h.mintedSessions).toHaveLength(1)
@@ -146,6 +164,28 @@ describe("#369 MFA transition: pre-existing native challenge cannot cross revisi
       .rejects.toThrow("Access denied")
     expect(h.mintedSessions).toHaveLength(0)
     expect(h.outboxes()).toBe(0)
+  })
+
+  it("rejects a previously issued challenge after its AuthIdentity is rebound to another Person", async () => {
+    const h = syntheticTransition()
+    const pending = await h.sessions.pending("auth_synthetic", "native_synthetic")
+    h.state.personId = "daprs_rebound"
+    await expect(h.sessions.challenge(pending.token)).resolves.toBeNull()
+    await expect(h.sessions.complete(pending.token, freshProof()))
+      .rejects.toThrow("Access denied")
+    expect(h.mintedSessions).toHaveLength(0)
+    expect(h.outboxes()).toBe(0)
+  })
+
+  it("rejects an altered native challenge reference before issuing a full session", async () => {
+    const h = syntheticTransition()
+    const pending = await h.sessions.pending("auth_synthetic", "native_synthetic")
+    h.changeChallenge(pending.token, "native_different")
+    await expect(h.sessions.challenge(pending.token)).resolves.toBeNull()
+    await expect(h.sessions.complete(pending.token, freshProof()))
+      .rejects.toThrow("Access denied")
+    expect(h.mintedSessions).toHaveLength(0)
+    expect(h.auditActions).toHaveLength(0)
   })
 
   it("positive control: a newly issued challenge under the new policy may complete", async () => {
