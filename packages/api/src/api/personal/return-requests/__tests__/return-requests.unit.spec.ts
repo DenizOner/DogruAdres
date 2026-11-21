@@ -240,4 +240,41 @@ describe("Buyer Organization Returns read — fail closed, GET only", () => {
     await GET(req, res)
     expect(res.status).toHaveBeenLastCalledWith(403)
   })
+
+  it("403: Store association changed while reading Return cannot leak stale Store data", async () => {
+    const original = graph.getMockImplementation()!
+    let checked = 0
+    graph.mockImplementation(async (q: any) => {
+      if (q.entity === "order_seller" && q.filters.order_id === "order_a") {
+        checked++
+        return { data: checked === 1
+          ? [{ order_id: "order_a", seller_id: sellerA }]
+          : [{ order_id: "order_a", seller_id: sellerB }] }
+      }
+      return original(q)
+    })
+    await GET(req, res)
+    expect(checked).toBeGreaterThanOrEqual(2)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("return_a")
+  })
+
+  it("403: Order-to-Cart relink after reading Return must reject stale attribution", async () => {
+    const original = graph.getMockImplementation()!
+    let checked = 0
+    graph.mockImplementation(async (q: any) => {
+      if (q.entity === "order_cart" && q.filters.order_id === "order_a") {
+        checked++
+        return { data: checked === 1
+          ? [{ order_id: "order_a", cart_id: "cart_a" }]
+          : [{ order_id: "order_a", cart_id: "cart_b" }] }
+      }
+      return original(q)
+    })
+    await GET(req, res)
+    expect(checked).toBeGreaterThanOrEqual(2)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("return_a")
+  })
+
 })
