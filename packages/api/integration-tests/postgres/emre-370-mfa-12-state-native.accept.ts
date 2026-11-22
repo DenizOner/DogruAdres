@@ -34,18 +34,21 @@ const USER = "mfa_test"
 const HOST = "127.0.0.1"
 const BRANCH = "test/emre-370-mfa-12-state-live-20261122"
 const FILE = "./integration-tests/postgres/emre-370-mfa-12-state-native.accept.ts"
-// RFC 6238 TOTP: 30s step, SHA-1, 6 digits — matches Medusa's default.
-function generateTotp(secret: Buffer, stepOffset = 0): string {
-  const counter = Math.floor(Date.now() / 1000 / 30) + stepOffset
-  const buf = Buffer.alloc(8)
-  buf.writeBigUInt64BE(BigInt(counter))
-  const hmac = createHmac("sha1", secret).update(buf).digest()
-  const offset = hmac[hmac.length - 1] & 0x0f
-  const code = ((hmac[offset] & 0x7f) << 24 |
-    (hmac[offset+1] & 0xff) << 16 |
-    (hmac[offset+2] & 0xff) << 8  |
-    (hmac[offset+3] & 0xff)) % 1_000_000
-  return String(code).padStart(6, "0")
+// RFC 6238 TOTP: 30s step, SHA-1, 6 digits — matches Medusa's default native TOTP provider.
+function totp(secret: string, offset = 0): string {
+  const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+  let bits = ""
+  for (const char of secret.toUpperCase().replace(/=+$/, "")) {
+    const index = abc.indexOf(char)
+    if (index < 0) throw Error("Unsupported native TOTP encoding")
+    bits += index.toString(2).padStart(5, "0")
+  }
+  const key = Buffer.from((bits.match(/.{8}/g) ?? []).map(part => parseInt(part, 2)))
+  const counter = Buffer.alloc(8)
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000) + offset))
+  const digest = createHmac("sha1", key).update(counter).digest()
+  const off = digest[digest.length - 1] & 15
+  return ((digest.readUInt32BE(off) & 0x7fffffff) % 1000000).toString().padStart(6, "0")
 }
 const TASK_DB = /^mfa_cli_ci_[a-f0-9]{16}$/
 const credFile = () => join(process.env.RUNNER_TEMP || tmpdir(), "emre370-seed-creds.json")
@@ -146,10 +149,6 @@ async function seed(container: ExecArgs["container"], db: Client) {
   assert.equal(await pgCount(db,"da_organization"),2)
   assert.equal(await pgCount(db,"da_organization_membership"),2)
   assert.equal(await pgCount(db,"auth_mfa_factor"),0)
-  // Seed the da_session_policy row with mfa_activated=false (probe will arm it)
-  await db.query(
-    "insert into da_session_policy(id,mfa_activated,version,created_at,updated_at) values('current',false,1,now(),now()) on conflict(id) do nothing"
-  )
   // Persist credentials for the probe phase (CI-only temp file, no PII to real DB)
   const creds = { persons, emails, passwords, authIdentityIds,
     orgIds: [orgs[0].id, orgs[1].id] }
@@ -312,9 +311,7 @@ async function realProbe(container: ExecArgs["container"], db: Client) {
     // Before arming MFA: /personal/mfa must be 503 fail-closed
     await chrome.anonymousMfaGet()
     // Arm the MFA latch in this disposable DB
-    await db.query(
-      "insert into da_session_policy(id,mfa_activated,version,created_at,updated_at) values('current',true,1,now(),now()) on conflict(id) do update set mfa_activated=true,updated_at=now()"
-    )
+    await db.query("update da_session_policy set mfa_activated=true where id='current'")
     process.env.DOGRUADRES_MFA_RUNTIME_ENABLED = "true"
     process.env.DOGRUADRES_MFA_SETTINGS_ENABLED = "true"
     process.env.DOGRUADRES_MFA_ENROLLMENT_ENABLED = "true"
@@ -394,65 +391,51 @@ async function realProbe(container: ExecArgs["container"], db: Client) {
     }
     // Reset DB platform/person MFA state before each case
     const resetState = async () => {
-      // Remove all factors for person A
+      // Clear rate limiter so 12 successive logins don't hit 429
+      await db.query("delete from da_login_attempt").catch(()=>{})
+      // Remove all factors and recovery codes for person A
+      await db.query("delete from auth_mfa_recovery_code where auth_identity_id=$1",
+        [creds.authIdentityIds[0]]).catch(()=>{})
       await db.query("delete from auth_mfa_factor where auth_identity_id=$1",
-        [creds.authIdentityIds[0]])
-      // Remove platform policy row (use version 0 for initial insert each time)
-      await db.query("delete from da_mfa_policy where id='current'")
+        [creds.authIdentityIds[0]]).catch(()=>{})
+      // Remove platform policy row
+      await db.query("delete from da_mfa_policy where id='current'").catch(()=>{})
       // Remove person A preference
       await db.query("delete from da_person_mfa_preference where person_id=$1",
-        [creds.persons[0]])
-      // Close any open sessions for person A and B
-      await db.query("delete from da_browser_session where auth_identity_id=any($1)",
-        ["{"+creds.authIdentityIds.join(",")+"}"])
+        [creds.persons[0]]).catch(()=>{})
+      // Close open sessions for person A only (keep Person B reference session alive)
+      await db.query("delete from da_browser_session where auth_identity_id=$1",
+        [creds.authIdentityIds[0]]).catch(()=>{})
     }
     // Set platform mode directly (without HTTP — test driver privilege)
     const setPlatformMode = async (mode: string) => {
       await db.query(
-        "insert into da_mfa_policy(id,platform_mode,version,created_at,updated_at) values('current',$1,1,now(),now())",
+        "insert into da_mfa_policy(id,platform_mode,version,created_at,updated_at) values('current',$1,1,now(),now()) on conflict(id) do update set platform_mode=$1, version=da_mfa_policy.version+1, updated_at=now()",
         [mode]
       )
     }
     // Set person A's user_enabled preference directly in DB
     const setPersonPreference = async (enabled: boolean) => {
       await db.query(
-        "insert into da_person_mfa_preference(person_id,user_enabled,version,created_at,updated_at) values($1,$2,1,now(),now()) on conflict(person_id) do update set user_enabled=$2",
+        "insert into da_person_mfa_preference(person_id,user_enabled,version,created_at,updated_at) values($1,$2,1,now(),now()) on conflict(person_id) do update set user_enabled=$2, version=da_person_mfa_preference.version+1, updated_at=now()",
         [creds.persons[0], enabled]
       )
     }
-    // Create a real TOTP factor for person A and return its secret
-    const createEnabledTotpFactor = async (): Promise<Buffer> => {
-      const secret = randomBytes(20) // 160-bit TOTP secret
-      const secretBase32 = secret.toString("hex") // store as hex internally
-      // Create pending TOTP factor via Medusa auth service
-      const factor = await auth.createAuthMfa({
+    // Create a real TOTP factor for person A and return its base32 secret
+    const createEnabledTotpFactor = async (): Promise<string> => {
+      const setup = await auth.startAuthMfa({
         auth_identity_id: creds.authIdentityIds[0],
         provider: "totp",
-        status: "pending" as any,
-        data: { secret: secretBase32 },
+        issuer: "DogruAdres CI",
       })
-      assert.ok(factor && factor.id)
-      // Generate current TOTP and verify to promote to enabled
-      const code = generateTotp(secret)
-      let verified = false
-      for (const offset of [0, -1, 1]) {
-        const tryCode = generateTotp(secret, offset)
-        try {
-          const result = await auth.verifyAuthMfaChallenge({
-            id: factor.id,
-            auth_identity_id: creds.authIdentityIds[0],
-            method: "totp",
-            code: tryCode,
-          })
-          if (result?.completed_at) { verified = true; break }
-        } catch { /* try next offset */ }
-      }
-      assert.ok(verified, "TOTP enrollment must succeed")
-      // Check factor is now enabled
-      const factors = await auth.listAuthMfa({ auth_identity_id: creds.authIdentityIds[0] }, { take: 10, skip: 0 })
-      const enabledFactor = factors.find((f: any) => f.status === "enabled")
-      assert.ok(enabledFactor, "enabled TOTP factor must exist after enrollment")
-      return secret
+      assert.ok(setup.secret, "Native TOTP provider returned no secret")
+      const verified = await auth.verifyAuthMfa({
+        id: setup.mfa.id,
+        auth_identity_id: creds.authIdentityIds[0],
+        code: totp(setup.secret),
+      })
+      assert.equal(verified.status, "enabled")
+      return setup.secret
     }
     // Count DB deltas for negative probe assertions
     const countTables = async () => ({
@@ -472,8 +455,8 @@ async function realProbe(container: ExecArgs["container"], db: Client) {
     ) => {
       const afterCounts = await countTables()
       const delta = (before: number, after: number) => after - before
-      // foreignPerson: person B tries to read person A's MFA settings
-      const foreignPersonRes = await httpsCall("/personal/mfa", "GET", null, personBCookies)
+      // foreignPerson: person B tries to read person A's MFA settings with foreign query param -> rejected 400
+      const foreignPersonRes = await httpsCall("/personal/mfa?person_id="+creds.persons[0], "GET", null, personBCookies)
       // foreignOrganization: person B tries platform POST with person A session context (wrong person)
       const foreignOrgRes = await httpsCall("/personal/mfa", "POST", {
         action:"platform", platform_mode:"disabled", expected_version:0
@@ -565,7 +548,7 @@ async function realProbe(container: ExecArgs["container"], db: Client) {
       await resetState()
       await setPlatformMode(entry.platformMode)
       await setPersonPreference(entry.userEnabled)
-      let totpSecret: Buffer | null = null
+      let totpSecret: string | null = null
       if (entry.nativeEnabled) {
         totpSecret = await createEnabledTotpFactor()
       }
@@ -624,7 +607,7 @@ async function realProbe(container: ExecArgs["container"], db: Client) {
         assert.ok(challengeCookie && challengeCsrf,
           `Case ${entry.id}: challenge cookie+csrf required for verify_mfa`)
         // Valid TOTP code
-        const validCode = generateTotp(totpSecret!)
+        const validCode = totp(totpSecret!)
         const verifyRes = await httpsCall("/personal/challenge", "POST",
           {method:"totp", code: validCode},
           {"da_challenge": challengeCookie!},
