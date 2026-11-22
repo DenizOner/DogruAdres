@@ -31,7 +31,7 @@ const STAMP = "mfa-pg16-disposable-ci-v1"
 const BASE_DB = "mfa_ci_ephemeral"
 const USER = "mfa_test"
 const HOST = "127.0.0.1"
-const BRANCH = "test/emre-370-mfa-12-state-20261120"
+const BRANCH = "test/emre-370-mfa-12-state-live-20261122"
 const FILE = "./integration-tests/postgres/emre-370-mfa-12-state-native.accept.ts"
 const TASK_DB = /^mfa_cli_ci_[a-f0-9]{16}$/
 const assertTaskUrl = (url: URL, target = false) => {
@@ -51,7 +51,7 @@ const childEnv = () => {
   assert.equal(process.env.GITHUB_REPOSITORY, "DenizOner/DogruAdres")
   assert.equal(process.env.GITHUB_EVENT_NAME, "pull_request")
   assert.equal(process.env.GITHUB_HEAD_REF, BRANCH)
-  assert.equal(process.env.DA_EMRE370_PR, "453")
+  assert.ok(/^\d+$/.test(String(process.env.DA_EMRE370_PR)))
   assert.ok(/^[a-f0-9]{40}$/.test(String(process.env.GITHUB_SHA)))
   assert.ok(process.env.RUNNER_TEMP && process.env.GITHUB_WORKSPACE)
   const target = new URL(process.env.DATABASE_URL ?? "postgres://invalid/invalid")

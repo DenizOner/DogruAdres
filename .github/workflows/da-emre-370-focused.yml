@@ -21,13 +21,12 @@ concurrency:
 
 jobs:
   mfa370-native:
-    name: '#370 owned Medusa / Chrome / TLS / PostgreSQL16 — staged RED'
+    name: '#370 owned Medusa / Chrome / TLS / PostgreSQL16 — live 12-state driver'
     if: >-
       ${{
         github.event_name == 'pull_request' &&
         github.repository == 'DenizOner/DogruAdres' &&
-        github.event.pull_request.number == 453 &&
-        github.event.pull_request.head.ref == 'test/emre-370-mfa-12-state-20261120' &&
+        github.event.pull_request.head.ref == 'test/emre-370-mfa-12-state-live-20261122' &&
         github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' &&
         github.event.pull_request.base.ref == 'main' &&
         github.event.pull_request.base.repo.full_name == 'DenizOner/DogruAdres'
