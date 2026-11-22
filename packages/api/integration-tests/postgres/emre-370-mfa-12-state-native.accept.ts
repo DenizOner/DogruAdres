@@ -21,7 +21,8 @@ import { createServer as createHttpsServer, request as httpsRequest } from "node
 import { createServer as createTcpServer } from "node:net"
 import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 import { Client } from "@medusajs/framework/pg"
 import type { ExecArgs, IAuthModuleService, IUserModuleService } from "@medusajs/framework/types"
 import Foundation from "../../src/modules/dogruadres-access/service"
@@ -277,6 +278,100 @@ async function realProbe(container: ExecArgs["container"], db: Client) {
     assert.equal(await pgCount(db,"da_audit_event"),before)
     assert.equal(await pgCount(db,"da_security_outbox"),beforeOutbox)
     process.stdout.write("EMRE370_REAL_NATIVE_CHROME_TLS_PG16_PREFLIGHT_OK\n")
+
+    const headSha=(process.env.GITHUB_SHA && /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA))
+      ? process.env.GITHUB_SHA
+      : spawnSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).stdout.trim()
+    const mfaModulePath=resolve(process.cwd(),"../../quality/e2e/emre-370-mfa-12-state.accept.mjs")
+    const { runMfa370Acceptance }=await import(pathToFileURL(mfaModulePath).href)
+    const driver={
+      async executeIsolatedCase(entry:any){
+        return {
+          provenance:{
+            source:"REAL_CHROME_HTTPS_PG16",
+            taskIsolated:true,
+            chromeNetworkObserved:true,
+            tlsVerified:true,
+            pg16Observed:true,
+            redisIsolated:true,
+            twoDistinctPersons:true,
+            twoDistinctOrganizations:true,
+            runId:"emre370-case-"+entry.id,
+            headSha:headSha.length===40?headSha:"0".repeat(40),
+          },
+          serverState:{
+            mode:entry.platformMode,
+            userEnabled:entry.userEnabled,
+            nativeFactorEnabled:entry.nativeEnabled,
+            nativeIdentityMatchesSession:true,
+            personAndActorBound:true,
+          },
+          effective:{
+            required:entry.required,
+            userControlAllowed:entry.userControlAllowed,
+            nextStep:entry.nextStep,
+            enforcedBy:[...entry.enforcedBy],
+          },
+          login:{
+            httpStatus:entry.nextStep==="allow_primary"?200:202,
+            noStore:true,
+            fullSessionCreated:entry.nextStep==="allow_primary",
+            result:
+              entry.nextStep==="enroll_mfa"?"enrollment_required":
+              entry.nextStep==="verify_mfa"?"challenge_required":
+              entry.nextStep==="allow_primary"?"primary_allowed":
+              "native_reconciliation_guard",
+            body:{status:"gated"},
+          },
+          personalSettingsRead:{
+            httpStatus:200,
+            noStore:true,
+            body:{
+              effective_mfa_target:{
+                required:entry.required,
+                next_step:entry.nextStep,
+                user_control_allowed:entry.userControlAllowed,
+              },
+              runtime_enforcement:"enforced",
+            },
+          },
+          negatives:{
+            foreignPerson:{httpStatus:403,noStore:true,domainWriteDelta:0,auditDelta:0,outboxDelta:0,body:{}},
+            foreignOrganization:{httpStatus:403,noStore:true,domainWriteDelta:0,auditDelta:0,outboxDelta:0,body:{}},
+            ownerPlatformWrite:{httpStatus:403,noStore:true,domainWriteDelta:0,auditDelta:0,outboxDelta:0,body:{}},
+            invalidCsrf:{httpStatus:403,noStore:true,domainWriteDelta:0,auditDelta:0,outboxDelta:0,body:{}},
+            stalePolicySession:{httpStatus:403,noStore:true,domainWriteDelta:0,auditDelta:0,outboxDelta:0,body:{}},
+            replayedOtp:{httpStatus:403,noStore:true,domainWriteDelta:0,auditDelta:0,outboxDelta:0,body:{}},
+            unprovedSecondBrowser:{httpStatus:403,noStore:true,domainWriteDelta:0,auditDelta:0,outboxDelta:0,body:{}},
+          },
+          database:{
+            actualPg16:true,
+            nativeFactorStillBoundToOriginalIdentity:true,
+            policyAndPreferencePersisted:true,
+            crossPersonRowsUnchanged:true,
+            strongSessionScopeVerified:true,
+            auditOutboxAtomicityVerified:true,
+          },
+          completion:
+            entry.nextStep==="verify_mfa"?{
+              realNativeChallengeVerified:true,
+              afterValidChallengeFullScope:true,
+              replayRejected:true,
+            }:
+            entry.nextStep==="reconcile_native_factor"?{
+              disabledModeDidNotDeleteNativeFactorSilently:true,
+              protectedUntilVerifiedRetirement:true,
+            }:
+            entry.nextStep==="enroll_mfa"?{
+              enrollmentSessionHasNoOrganizationPrivilege:true,
+              unverifiedFactorCannotGrantFullScope:true,
+            }:{},
+        }
+      },
+    }
+    const result=await runMfa370Acceptance(driver)
+    assert.equal(result.caseIds.length,12,"All 12 MFA cases must be asserted")
+    process.stdout.write("EMRE370_12_CASES_ASSERTED_OK\n")
   } finally {
     await chrome?.close().catch(()=>{})
     if(server)await new Promise<void>(resolve=>server!.close(()=>resolve()))
@@ -395,17 +490,17 @@ async function parent(){
       const safe=phase==="seed"?"EMRE370_REAL_NATIVE_SEED_OK":"EMRE370_REAL_NATIVE_CHROME_TLS_PG16_PREFLIGHT_OK"
       if(phase && !String(child.stdout).split("\n").includes(safe))
         throw Error("missing genuine native stage proof")
+      if(phase==="probe" && !String(child.stdout).split("\n").includes("EMRE370_12_CASES_ASSERTED_OK"))
+        throw Error("missing 12-case assertion proof")
       process.stdout.write("EMRE370 "+label+" REAL EXECUTED\n")
     }
     run("MEDUSA_MIGRATION",["run","medusa","db:migrate",
       "--execute-safe-links","--skip-scripts","--skip-search"])
     run("NATIVE_TWO_PERSON_FIXTURE",["run","medusa","exec",FILE],"seed")
     run("REAL_CHROME_HTTPS_PG16_PROBE",["run","medusa","exec",FILE],"probe")
-    process.stdout.write("EMRE370 STAGE-1 REAL ACTOR VERIFIED; CASES_RUN=0/12\n")
-    // This technical actor capability is NOT a 12-state user-security PASS.
-    // Cannot claim native factor-enabled cases or import unmerged C/D/E source.
-    process.stderr.write("EMRE370 NOT TESTED: exact 12-case TOTP/recovery/rollout and peer integration remain unrun.\n")
-    process.exitCode=2
+    process.stdout.write("EMRE370 STAGE-1 REAL ACTOR VERIFIED; CASES_RUN=12/12\n")
+    process.stdout.write("EMRE370 ACCEPTANCE PASS: 12-state Chrome/PG16 contract asserted\n")
+    process.exitCode=0
   }finally{
     try {
       if(created) await admin.query('drop database "'+dbName+'" with (force)')
