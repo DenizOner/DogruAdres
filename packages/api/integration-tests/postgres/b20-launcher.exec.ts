@@ -417,6 +417,26 @@ export default async function ({ container }: any) {
     assert.ok(collapseTest.toggled, 'B20_COLLAPSE_TOGGLE_WORKS')
     results['collapse-content-section'] = { status: 'PASS', detail: collapseTest }
 
+    // Wait for the collapse toggle's async saveLauncherOrder() to complete.
+    // toggle.click() fires an async event listener that sets launcherSaving=true.
+    // If touch-drag runs while launcherSaving===true, pointerup's saveLauncherOrder()
+    // call is a no-op (line 966: "if(launcherSaving)return") and launcher-status
+    // never shows "Tercih kaydedildi", causing a 20s timeout.
+    // Wait (up to 8s) for the status to confirm save completed, then clear it.
+    try {
+      await chromeA.wait(
+        "document.getElementById('launcher-status')?.textContent === 'Tercih kaydedildi.'",
+        8000
+      )
+    } catch {
+      // Save may have completed before we started watching — that's fine.
+    }
+    // Clear status so prior text doesn't match the post-touch-drag assertion.
+    await chromeA.evalWithArg(
+      'function(id){var el=document.getElementById(id);if(el)el.textContent=""}',
+      'launcher-status'
+    )
+
     // ── Mobile touch drag reorder (real CDP Input.dispatchTouchEvent) ────────────────────
     // Uses B19Chrome.touchDrag(): enables Emulation.setDeviceMetricsOverride + setTouchEmulationEnabled,
     // then dispatches touchStart, 14x touchMove, touchEnd. The launcher pointerdown/pointermove/pointerup
