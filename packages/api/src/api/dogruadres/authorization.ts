@@ -108,10 +108,13 @@ export async function requireOrganizationAccess(
     throw new MedusaError(MedusaError.Types.FORBIDDEN, "Organization access denied")
   }
   const activeMembership = await service.getActiveMembership(decision.personId, decision.organizationId)
+  if (!activeMembership || activeMembership.status !== "active") {
+    throw new MedusaError(MedusaError.Types.FORBIDDEN, "Organization access denied")
+  }
   return {
     personId: decision.personId,
     organizationId: decision.organizationId,
-    role: activeMembership?.role,
+    role: activeMembership.role,
     service,
   }
 }
