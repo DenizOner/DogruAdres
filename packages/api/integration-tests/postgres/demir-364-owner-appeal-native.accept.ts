@@ -520,14 +520,25 @@ export default async function({container}:any){
     marker("STEP DEMIR364 scenario: second-closure")
     const start2=await clock(nativeStores[1])
     marker("STEP DEMIR364 scenario: second-clock")
+    const originalClosing=(await q("select deadline_started_at,deadline_audit_event_id from da_store_platform_closing where seller_id=$1",[nativeStores[1]]))[0]
     const day11=new Date(Date.now()-11*86400000).toISOString()
     try{
-      await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz "+
-        "where seller_id=$2",
-        [day11,nativeStores[1]])
-      await q("update da_audit_event set new_values=jsonb_set(new_values,'{deadline_started_at}',to_jsonb($1::text)) "+
-        "where target_id=$2 and action='organization.store_platform_closing_deadline_started'",
-        [day11,nativeStores[1]])
+      const day11Audit="daaud_"+randomBytes(16).toString("hex")
+      await q(`insert into da_audit_event
+        (id,actor_person_id,actor_type,actor_id,role_context,organization_id,
+         action,module,resource,target_id,new_values,occurred_at)
+        values ($1,$2,'user',$3,'owner',$4,
+          'organization.store_platform_closing_deadline_started',
+          'dogruadres-access','store-platform-closing',$5,$6::jsonb,$7::timestamptz)`,[
+        day11Audit,A.person,A.actor,orgs[2].id,nativeStores[1],
+        JSON.stringify({basis:"owner_delivery",deadline_started_at:day11}),day11])
+      await q(`insert into da_audit_outbox
+        (id,source_audit_event_id,source_module,envelope_version,envelope,status)
+        values ($1,$2,'dogruadres-access',1,'{}'::jsonb,'pending')`,[
+        "daaob_"+randomBytes(16).toString("hex"),day11Audit])
+      await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz, deadline_audit_event_id=$2 "+
+        "where seller_id=$3",
+        [day11,day11Audit,nativeStores[1]])
       marker("STEP DEMIR364 scenario: sc-update")
       const second=await browserGet(owner,ownerUrl(nativeStores[1]))
       assert.equal(second.status,200)
@@ -557,23 +568,32 @@ export default async function({container}:any){
       assert.equal(finalAudit.length,1,"One second-stage audit/outbox")
       for(const day of [30,31]){
         const dayTime=new Date(Date.now()-day*86400000).toISOString()
+        const dayTimeAudit="daaud_"+randomBytes(16).toString("hex")
+        await q(`insert into da_audit_event
+          (id,actor_person_id,actor_type,actor_id,role_context,organization_id,
+           action,module,resource,target_id,new_values,occurred_at)
+          values ($1,$2,'user',$3,'owner',$4,
+            'organization.store_platform_closing_deadline_started',
+            'dogruadres-access','store-platform-closing',$5,$6::jsonb,$7::timestamptz)`,[
+          dayTimeAudit,A.person,A.actor,orgs[2].id,nativeStores[1],
+          JSON.stringify({basis:"owner_delivery",deadline_started_at:dayTime}),dayTime])
+        await q(`insert into da_audit_outbox
+          (id,source_audit_event_id,source_module,envelope_version,envelope,status)
+          values ($1,$2,'dogruadres-access',1,'{}'::jsonb,'pending')`,[
+          "daaob_"+randomBytes(16).toString("hex"),dayTimeAudit])
         await q("update da_store_platform_closing "+
-          "set deadline_started_at=$1::timestamptz where seller_id=$2",
-          [dayTime,nativeStores[1]])
-        await q("update da_audit_event set new_values=jsonb_set(new_values,'{deadline_started_at}',to_jsonb($1::text)) "+
-          "where target_id=$2 and action='organization.store_platform_closing_deadline_started'",
-          [dayTime,nativeStores[1]])
+          "set deadline_started_at=$1::timestamptz, deadline_audit_event_id=$2 where seller_id=$3",
+          [dayTime,dayTimeAudit,nativeStores[1]])
         const expired=await browserGet(owner,ownerUrl(nativeStores[1]))
         assert.equal(expired.status,200)
         assert.equal(expired.body?.permanent_finalization_enabled,false)
         assert.equal(expired.body?.first_appeal_open,false)
       }
     }finally{
-      await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz "+
-        "where seller_id=$2",[start2,nativeStores[1]])
-      await q("update da_audit_event set new_values=jsonb_set(new_values,'{deadline_started_at}',to_jsonb($1::text)) "+
-        "where target_id=$2 and action='organization.store_platform_closing_deadline_started'",
-        [start2,nativeStores[1]])
+      if(originalClosing?.deadline_started_at&&originalClosing?.deadline_audit_event_id){
+        await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz, deadline_audit_event_id=$2 "+
+          "where seller_id=$3",[originalClosing.deadline_started_at,originalClosing.deadline_audit_event_id,nativeStores[1]])
+      }
     }
     marker("STEP DEMIR364 scenario: day30-31")
     const denied=await browserGet(staff,ownerUrl(nativeStores[0]))
