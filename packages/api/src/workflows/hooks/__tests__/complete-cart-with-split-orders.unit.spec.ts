@@ -4,6 +4,7 @@ import {
   CheckoutCartSnapshot,
 } from "../complete-cart-with-split-orders"
 import { DOGRUADRES_ACCESS_MODULE } from "../../../modules/dogruadres-access/constants"
+import { nativeIngress } from "../../../api/personal/security"
 
 describe("B22 Split Cart Validation Hook & Checkout Security Contract (#254)", () => {
   const validCartId = "cart_01JBCDEF0123456789ABCDEF01"
@@ -331,49 +332,49 @@ describe("B22 Split Cart Validation Hook & Checkout Security Contract (#254)", (
     })
   })
 
-  describe("Payment Security & Callback Contract Protection", () => {
-    it("ensures unconfigured payment callback invocations fail closed and cannot perform capture", () => {
+  describe("Payment Security & Callback Ingress Protection (security.ts nativeIngress)", () => {
+    it("ensures unconfigured payment callback invocations fail closed via nativeIngress and downstream handler is never called", async () => {
       // In accordance with security.ts:
       // Mercur 2.4.0 can capture payment in processPaymentWorkflow BEFORE split-cart validate hook.
-      // Callbacks must fail closed until provider-specific authorization -> order -> capture is proven.
-      const simulatePaymentCallback = (reqMethod: string, reqPath: string) => {
-        if (reqMethod === "POST" && /^\/hooks\/payment\/[^/]+$/.test(reqPath)) {
-          return { status: 403, body: { message: "Payment callback is not enabled" } }
-        }
-        return { status: 200 }
+      // Callbacks must fail closed in nativeIngress middleware until provider-specific authorization -> order -> capture is proven.
+      const createMockReqRes = (method: string, path: string) => {
+        const req = {
+          method,
+          originalUrl: path,
+          headers: {},
+        } as any
+
+        let statusCode = 0
+        let jsonPayload: any = null
+        const res = {
+          status: jest.fn((code: number) => {
+            statusCode = code
+            return {
+              json: jest.fn((payload: any) => {
+                jsonPayload = payload
+              }),
+            }
+          }),
+        } as any
+
+        const next = jest.fn()
+
+        return { req, res, next, getStatus: () => statusCode, getPayload: () => jsonPayload }
       }
 
-      const res1 = simulatePaymentCallback("POST", "/hooks/payment/stripe")
-      expect(res1.status).toBe(403)
-      expect(res1.body?.message).toBe("Payment callback is not enabled")
+      // First callback attempt: must return 403 and never proceed to payment capture
+      const attempt1 = createMockReqRes("POST", "/hooks/payment/stripe")
+      await nativeIngress(attempt1.req, attempt1.res, attempt1.next)
+      expect(attempt1.getStatus()).toBe(403)
+      expect(attempt1.getPayload()?.message).toBe("Payment callback is not enabled")
+      expect(attempt1.next).not.toHaveBeenCalled()
 
-      // Repeated callback attempt (idempotency check: must still fail closed without capture)
-      const res2 = simulatePaymentCallback("POST", "/hooks/payment/stripe")
-      expect(res2.status).toBe(403)
-      expect(res2.body?.message).toBe("Payment callback is not enabled")
-    })
-  })
-
-  describe("TRY Currency & Price Immutability Contract (#69–#77, #82)", () => {
-    it("verifies price reconfirmation requirement and prevents amount alteration after authorization", () => {
-      const cartSnapshot = {
-        cartId: validCartId,
-        currency: "TRY",
-        totalAmount: 150000, // 1500.00 TRY
-        authorizedAt: new Date().toISOString(),
-      }
-
-      // If price changes after initial authorization, checkout must be re-confirmed
-      const isPriceReconfirmationRequired = (
-        snapshotAmount: number,
-        currentCatalogAmount: number
-      ) => {
-        return snapshotAmount !== currentCatalogAmount
-      }
-
-      expect(isPriceReconfirmationRequired(cartSnapshot.totalAmount, 150000)).toBe(false)
-      expect(isPriceReconfirmationRequired(cartSnapshot.totalAmount, 160000)).toBe(true)
-      expect(isPriceReconfirmationRequired(cartSnapshot.totalAmount, 140000)).toBe(true)
+      // Repeated callback attempt (idempotency check: must still fail closed without calling downstream payment handler)
+      const attempt2 = createMockReqRes("POST", "/hooks/payment/stripe")
+      await nativeIngress(attempt2.req, attempt2.res, attempt2.next)
+      expect(attempt2.getStatus()).toBe(403)
+      expect(attempt2.getPayload()?.message).toBe("Payment callback is not enabled")
+      expect(attempt2.next).not.toHaveBeenCalled()
     })
   })
 })
