@@ -4710,6 +4710,9 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
   await browser.click("#login button")
   await browser.wait("!document.getElementById('workspace').hidden || "+
     "!document.getElementById('mfa-enrollment').hidden")
+  if(await browser.eval("!document.getElementById('mfa-enrollment').hidden")){
+    await assertWcag22AxeInChrome(browser,"#mfa-enrollment","mfa-enrollment-visible")
+  }
   if(await browser.eval("!document.getElementById('workspace').hidden")){
     await browser.wait("!document.getElementById('mfa-person').hidden && "+
       "!document.getElementById('mfa-enroll-launch').hidden")
@@ -13115,6 +13118,7 @@ export default async function({container}:any){
         assert.equal(loginResponse?.status,202,
           "Real strong-MFA challenge must begin with HTTP 202, not throttled or bypassed")
         await browser.wait("document.getElementById('challenge').hidden===false")
+        await assertWcag22AxeInChrome(browser,"#challenge","mfa-challenge-visible")
         assert.equal(await browser.eval("(()=>{const s=document.querySelector('#challenge select[name=method]');s.value='recovery_code';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"),"recovery_code")
         await browser.input("#challenge input[name=code]",recoveryCode)
         const recoveryHttpBefore=browser.http.filter((row:any)=>

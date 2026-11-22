@@ -17,7 +17,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
    if(url.searchParams.has('invitation_token')){url.searchParams.delete('invitation_token');history.replaceState(null,'',url.pathname+url.search+url.hash);}}
   </script>
   <style nonce="${nonce}">
-  :root{color-scheme:light;--ink:#243247;--muted:#506079;--line:#d6dfea;--accent:#1453a3}
+  :root{color-scheme:light;--ink:#243247;--muted:#506079;--line:#d6dfea;--accent:#1453a3;--error:#ba1a1a;--error-bg:#ffdad6;--error-text:#93000a;--success:#1a6a1a;--success-bg:#d4edda;--warn:#7a5a00;--warn-bg:#fdf4d7;--focus-ring:#4c91e5;--focus-offset:3px;--inv-border:#c1c6d4;--inv-bg:#f9f9ff;--inv-heading:#004e99;--inv-mismatch-border:#ba1a1a;--inv-card-border:#bfd5ff;--inv-btn-bg:#0e66c2}
   *{box-sizing:border-box}
   [hidden]{display:none!important}
   body{margin:0;padding:0 1rem 3rem;background:#f6f8fb;color:var(--ink);font:16px/1.5 system-ui,-apple-system,sans-serif}
@@ -27,16 +27,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   body>p{margin-top:.15rem;color:var(--muted)}
   #status{min-height:2.5rem;margin-top:1rem;margin-bottom:1rem;padding:.65rem 1rem;border-left:3px solid var(--accent);background:#eaf1fa;border-radius:.35rem}
   #login,#challenge{max-width:30rem;margin-top:1.25rem;padding:1.25rem;border:1px solid var(--line);border-radius:1rem;background:white}
-  #notification-panel{max-width:60rem;margin:1rem auto;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
+  #login .da-help-text{margin:.5rem 0 0;font-size:.875rem;font-weight:400;color:var(--muted);text-align:center}
+  #login .da-help-text a{color:var(--accent)}
+  #notification-panel{max-width:60rem;margin:1rem auto;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white;scroll-padding-top:4rem}
   #notification-list{padding-left:1.5rem;overflow-wrap:anywhere}
   #notification-list li{margin-bottom:1.5rem}
   #personal-header>div{display:flex;flex-wrap:wrap;gap:.5rem;justify-content:flex-end}
   #workspace{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;align-items:start}
   #workspace>h2{grid-column:1/-1;margin:1.5rem 0 0;font-size:1.4rem}
   #workspace>h2+p{grid-column:1/-1;margin:0;color:var(--muted)}
-  #workspace>p:first-child,#workspace>#organizations,#workspace>#memberships,#workspace>#bindings,#workspace>#mfa-info{grid-column:1/-1}
+  #workspace>p:first-child,#workspace>#organizations,#workspace>#memberships,#workspace>#bindings,#workspace>#mfa-info,#workspace>section{grid-column:1/-1}
   #workspace>:not(h2):not(h2+p){min-width:0}
-  #workspace>form,#workspace>div,#workspace>pre,#workspace>p,#workspace>button{margin:0;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
+  #workspace>form,#workspace>div,#workspace>pre,#workspace>p,#workspace>button,#workspace>section{margin:0;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
   form{display:grid;gap:.8rem}
   label{display:grid;gap:.3rem;font-size:.95rem;font-weight:600}
   input,select,button{font:inherit;max-width:100%;border-radius:.5rem}
@@ -44,17 +46,38 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   button{min-height:2.75rem;padding:.55rem .9rem;border:1px solid #b1c2d8;background:#edf3fb;color:#153f77;cursor:pointer;overflow-wrap:anywhere}
   button:hover:not(:disabled){background:#dfeafa}
   button:disabled{opacity:.58;cursor:not-allowed}
-  button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #4c91e5;outline-offset:2px}
+  button:focus-visible,input:focus-visible,select:focus-visible,details>summary:focus-visible,a:focus-visible{outline:3px solid var(--focus-ring);outline-offset:var(--focus-offset)}
+  details>summary{cursor:pointer;border-radius:.35rem}
   #organizations button,#memberships button,#bindings button{margin:.35rem .4rem .35rem 0}
   #bindings p,#memberships p{overflow-wrap:anywhere;padding:.4rem 0;margin:.3rem 0;border-bottom:1px solid var(--line)}
   pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}
   #workspace>pre{background:#f0f4fa}
-   #verification-status{grid-column:1/-1;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
-   #verification-status h2{font-size:1.2rem;margin:0 0 .5rem}
-   #verification-status p{margin:.4rem 0;overflow-wrap:anywhere}
+  #verification-status{grid-column:1/-1;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
+  #verification-status h2{font-size:1.2rem;margin:0 0 .5rem}
+  #verification-status p{margin:.4rem 0;overflow-wrap:anywhere}
+  #company-launcher-panel{grid-column:1/-1;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
+  #company-launcher-list{list-style:none;padding:0;margin:1rem 0;display:grid;gap:.75rem}
+  #company-launcher-list>li{padding:.75rem 1rem;border:1px solid var(--line);border-radius:.6rem;background:#f9fafb;display:grid;gap:.5rem}
+  #company-launcher-list>li>div{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;justify-content:space-between}
+  #company-launcher-list>li button{min-height:2.25rem;padding:.35rem .7rem;font-size:.875rem}
+  #organization-document-section{margin-top:1rem;padding:1rem;border:1px solid var(--line);border-radius:.6rem;background:#fff}
+  #organization-document-dropzone{padding:1rem;border:2px dashed #9aa9bd;border-radius:.5rem;background:#f8fafc;text-align:center}
+  #organization-document-dropzone:focus-within{border-color:var(--focus-ring)}
   fieldset{border:1px solid var(--line);border-radius:.6rem;padding:1rem} fieldset label{display:flex;align-items:center;gap:.65rem;margin:.5rem 0} input[type=radio],input[type=checkbox]{width:auto;min-height:auto}
+  .da-invitation-section{margin-bottom:1.5rem;padding:1.25rem;border:1px solid var(--inv-border);border-radius:.75rem;background:var(--inv-bg)}
+  .da-invitation-section h2{margin-top:0;color:var(--inv-heading)}
+  .da-mismatch-banner{padding:.875rem 1.125rem;background:var(--error-bg);border:1px solid var(--inv-mismatch-border);border-radius:.5rem;margin-bottom:1rem}
+  .da-mismatch-banner p{color:var(--error-text);font-weight:600;margin:0;font-size:.875rem}
+  .da-invitation-card{padding:1.125rem;border:1px solid var(--inv-card-border);border-radius:.5rem;background:#fff}
+  .da-invitation-card .da-card-title{margin:0 0 .5rem;font-size:.9375rem;font-weight:600;color:#191c21}
+  .da-invitation-card .da-card-desc{margin:0 0 1rem;font-size:.8125rem;color:#414752}
+  .da-invitation-card .da-card-result{margin-top:.75rem;font-size:.8125rem;font-weight:500}
+  .da-invitation-btn{min-height:2.75rem;padding:.625rem 1.25rem;background:var(--inv-btn-bg);color:#fff;border:none;border-radius:.375rem;font-weight:600;cursor:pointer;font:inherit}
+  .da-invitation-btn:hover:not(:disabled){background:#0a52a3}
+  .da-invitation-btn:focus-visible{outline:3px solid var(--focus-ring);outline-offset:var(--focus-offset)}
   @media(max-width:700px){body{padding:0 .75rem 2rem}#personal-header{margin-top:1.5rem}#workspace{grid-template-columns:minmax(0,1fr)}}
-  @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+  @media(max-width:320px){body{padding:0 .5rem 2rem}}
+  @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto;transition:none!important;animation:none!important}}
   </style>
   <header id="personal-header"><h1>DoğruAdres</h1><div><button id="notification-bell" type="button" aria-expanded="false" aria-controls="notification-panel" hidden><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg> Bildirimler <span id="notification-count"></span></button> <button id="session-lock" type="button" hidden>Oturumu kilitle</button></div></header>
   <section id="notification-panel" aria-labelledby="notification-heading" hidden>
@@ -65,19 +88,19 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="notification-next" type="button" hidden>Sonraki bildirimler</button>
     <button id="notification-close" type="button">Bildirimleri kapat</button>
   </section><p>Kişisel çalışma alanı</p><p id="status" role="status" aria-live="polite"></p>
-  <section id="invitation-section" hidden style="margin-bottom: 24px; padding: 20px; border: 1px solid #c1c6d4; border-radius: 12px; background: #f9f9ff;">
-    <h2 style="margin-top: 0; color: #004e99;">Kuruluş Üyelik Daveti</h2>
-    <div id="invitation-mismatch-banner" hidden role="alert" style="padding: 14px 18px; background: #ffdad6; border: 1px solid #ba1a1a; border-radius: 8px; margin-bottom: 16px;">
-      <p id="invitation-mismatch-text" style="color: #93000a; font-weight: 600; margin: 0; font-size: 14px;">Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.</p>
+  <section id="invitation-section" class="da-invitation-section" hidden>
+    <h2>Kuruluş Üyelik Daveti</h2>
+    <div id="invitation-mismatch-banner" class="da-mismatch-banner" hidden role="alert">
+      <p id="invitation-mismatch-text">Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.</p>
     </div>
-    <div id="invitation-card" hidden style="padding: 18px; border: 1px solid #bfd5ff; border-radius: 8px; background: #ffffff;">
-      <p style="margin: 0 0 8px 0; font-size: 15px; font-weight: 600; color: #191c21;">DoğruAdres Kuruluş Üyeliği</p>
-      <p style="margin: 0 0 16px 0; font-size: 13px; color: #414752;">Size iletilen davet bağlantısı üzerinden kuruluş üyeliğinizi onaylayabilirsiniz. Üyelik işlemi yalnızca davetin tanımlandığı doğrulanmış hesapla tamamlanabilir.</p>
-      <button id="accept-invitation-btn" type="button" style="min-height: 44px; padding: 10px 20px; background: #0e66c2; color: #ffffff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer;">Daveti Onayla ve Katıl</button>
-      <p id="invitation-result" role="status" aria-live="polite" style="margin-top: 12px; font-size: 13px; font-weight: 500;"></p>
+    <div id="invitation-card" class="da-invitation-card" hidden>
+      <p class="da-card-title">DoğruAdres Kuruluş Üyeliği</p>
+      <p class="da-card-desc">Size iletilen davet bağlantısı üzerinden kuruluş üyeliğinizi onaylayabilirsiniz. Üyelik işlemi yalnızca davetin tanımlandığı doğrulanmış hesapla tamamlanabilir.</p>
+      <button id="accept-invitation-btn" class="da-invitation-btn" type="button">Daveti Onayla ve Katıl</button>
+      <p id="invitation-result" class="da-card-result" role="status" aria-live="polite"></p>
     </div>
   </section>
-  <form id="login"><label>E-posta<input name="email" type="email" autocomplete="username" required></label><label>Parola<input name="password" type="password" autocomplete="current-password" required></label><button>Giriş yap</button></form>
+  <form id="login"><label>E-posta<input name="email" type="email" autocomplete="username" required></label><label>Parola<input name="password" type="password" autocomplete="current-password" required></label><button>Giriş yap</button><p class="da-help-text"><a href="mailto:destek@dogruadres.com.tr">Yardım veya erişim sorunu mu var?</a></p></form>
   <details id="register-details"><summary>Yeni kişi hesabı oluştur</summary>
     <p>Tek kişisel hesap oluşturun. İşletme ve mağaza yetkileri kayıtla birlikte verilmez; cep telefonu numaranızın sahipliği henüz doğrulanmaz.</p>
     <form id="register">
@@ -90,13 +113,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     </form>
     <p id="register-status" role="status" aria-live="polite"></p>
   </details>
-  <form id="challenge" hidden><label>İkinci faktör yöntemi<select name="method">
+  <form id="challenge" hidden aria-labelledby="challenge-heading"><h2 id="challenge-heading">İki faktörlü doğrulama</h2><label>İkinci faktör yöntemi<select name="method">
       <option value="totp">Kimlik doğrulama uygulaması</option>
       <option value="recovery_code">Tek kullanımlık kurtarma kodu</option>
-    </select></label><label>Doğrulama veya kurtarma kodu<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="128" required></label>
+    </select></label><label>Doğrulama veya kurtarma kodu<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="128" required aria-describedby="challenge-code-hint"></label><p id="challenge-code-hint" style="font-size:.85rem;color:var(--muted);margin:0">TOTP uygulamasındaki 6 haneli kodu veya kurtarma kodunuzu girin.</p>
     <button>İkinci faktörü doğrula</button></form>
-  <section id="mfa-enrollment" hidden>
-    <h2>MFA ilk kurulumu</h2>
+  <section id="mfa-enrollment" hidden aria-labelledby="mfa-enrollment-heading">
+    <h2 id="mfa-enrollment-heading">MFA ilk kurulumu</h2>
     <p>Kurulum için mevcut hesabınızın parolasını yeniden doğrulayın. Daha önce başlanmış kurulum, aynı kimlik doğrulama uygulamasındaki kodla sürdürülebilir.</p>
     <form id="mfa-enroll-start"><label>Kurulum işlemi<select name="setup_action">
       <option value="start">Yeni TOTP kurulumu</option>
@@ -176,7 +199,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     </form>
     <p id="smtp-test-result" role="status" aria-live="polite"></p>
   </section>
-  <section id="organization-draft-panel" style="grid-column:1/-1">
+  <section id="organization-draft-panel">
     <h2 id="organization-draft-title" tabindex="-1">Yeni Şirket Oluştur — özel başvuru taslağı</h2>
     <p>Gerçek kişi ticari işletmesi ve tüzel şirket aynı başvuru yolunu kullanır. Bu aşama yalnız taslaktır: vergi levhası henüz yüklenmez, başvuru gönderilmez ve işletme/Owner/alışveriş yetkisi oluşmaz.</p>
     <form id="organization-draft-form">
@@ -211,10 +234,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <label>Vergi Kimlik Numarası (VKN 10 hane / Şahıs işletmesi için TCKN 11 hane)<input name="tax_identifier" pattern="[0-9]{10,11}" maxlength="11" minlength="10" autocomplete="off" placeholder="10 veya 11 haneli vergi kimliği (başvuru gönderimi için zorunlu)"></label>
       <button type="submit">Taslağı kaydet</button>
     </form>
-    <div id="organization-document-section" hidden style="margin-top:1em;padding:1em;border:1px solid #ccc">
+    <div id="organization-document-section" hidden>
       <h3>Vergi levhası (başvuru belgesi)</h3>
       <p>PDF, JPEG veya PNG biçiminde, en fazla 10 MiB. İlk yüklemede virüs taraması ve güvenli önizleme hazırlanır; kontrol başarısızsa belge kabul edilmez. Dosya özel alanda saklanır; başvuru gönderilmeden işletme yetkisi verilmez.</p>
-      <div id="organization-document-dropzone" role="group" aria-label="Vergi levhası dosyası bırakma alanı" style="padding:1em;border:1px dashed #777">
+      <div id="organization-document-dropzone" role="group" aria-label="Vergi levhası dosyası bırakma alanı">
         <p>PDF, JPEG veya PNG dosyasını buraya sürükleyip bırakın ya da dosya seçicisini kullanın.</p>
         <label>Belge dosyası seçin
           <input type="file" id="organization-document-file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
@@ -232,7 +255,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <div id="organization-draft-list"></div>
     <button id="organization-draft-more" type="button" hidden>Daha eski taslakları göster</button>
   </section>
-  <section id="organization-review-panel" hidden style="grid-column:1/-1">
+  <section id="organization-review-panel" hidden>
     <h2>İncelenecek işletme başvuruları</h2>
     <p>Yalnız açık platform organization.review görevi olan yetkili personel için gönderilmiş başvurular listelenir. Bu liste otomatik kuruluş veya mağaza yetkisi açmaz.</p>
     <p id="organization-review-status" role="status" aria-live="polite"></p>
@@ -247,7 +270,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p id="platform-closing-email-link-status" role="status" aria-live="polite"></p>
   </section>
   <h2 id="organizations-title" tabindex="-1">Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
-  <section id="company-launcher-panel" hidden style="grid-column:1/-1" aria-labelledby="company-launcher-title">
+  <section id="company-launcher-panel" hidden aria-labelledby="company-launcher-title">
     <h2 id="company-launcher-title">Şirket çalışma alanı başlatıcısı</h2>
     <p>Yalnız mevcut, seçili kuruluşta yetkili olduğunuz işlevleri sıralayın ve katlayın. Bu tercih yeni yetki vermez.</p>
     <p id="company-launcher-status" role="status" aria-live="polite"></p>
@@ -255,7 +278,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="company-launcher-reset" type="button">Standart düzeni geri yükle</button>
   </section>
 
-  <section id="platform-closing-panel" hidden style="grid-column:1/-1" aria-labelledby="platform-closing-title">
+  <section id="platform-closing-panel" hidden aria-labelledby="platform-closing-title">
     <h2 id="platform-closing-title">Platform mağaza kapatma süreci</h2>
     <p>Gerekçeli platform kararı yeni satışları derhal durdurur. Korunan Owner'lar gerekçeyi okuyabilir ve itiraz edebilir. E-posta bütün korunan Owner'lara gönderilir. En az bir doğrulanmış teslim veya dört denemeden sonra yöneticilere kalıcı uyarı ile 10+20 günlük itiraz süresi otomatik başlar. Owner onayı beklenmez. Kalıcı kapanış ve isim hakkı devri ayrı, henüz etkin değildir.</p>
     <p id="platform-closing-status" role="status" aria-live="polite"></p>
@@ -269,7 +292,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button type="button" id="platform-closing-refresh">Mağazaları yenile</button>
     <button type="button" id="platform-closing-more" hidden>Diğer mağazalar</button>
   </section>
-  <section id="platform-closing-review-panel" hidden style="grid-column:1/-1"
+  <section id="platform-closing-review-panel" hidden
     aria-labelledby="platform-closing-review-title">
     <h2 id="platform-closing-review-title">Bağımsız mağaza kapatma incelemesi</h2>
     <p>Yalnız açık platform inceleme görevi ve güncel güçlü girişle gerekçeli karar verilebilir.
@@ -279,7 +302,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button type="button" id="platform-closing-review-refresh">Dosyaları yenile</button>
     <button type="button" id="platform-closing-review-more" hidden>Diğer dosyalar</button>
   </section>
-  <section id="store-approval-panel" hidden style="grid-column:1/-1">
+  <section id="store-approval-panel" hidden>
     <h2>Platform mağaza onayları</h2>
     <p>Yalnız açık mağaza onay görevi ve güncel güçlü giriş ile bekleyen mağazalar onaylanabilir. Kuruluş ile mağaza bağı başvuruda kurulmuştur; ayrıca ilişki onayı yapılmaz.</p>
     <p id="store-approval-status" role="status" aria-live="polite"></p>
@@ -291,7 +314,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="store-approval-older" type="button" hidden>Önceki başvuruları göster</button>
     <button id="store-approval-newer" type="button" hidden>Yeni başvurulara dön</button>
   </section>
-  <section id="store-rename-review-panel" hidden style="grid-column:1/-1">
+  <section id="store-rename-review-panel" hidden>
     <h2>Platform mağaza ad/bağlantı değişiklik başvuruları</h2>
     <p>Yalnız mağaza onay görevi olan platform görevlisi inceleyebilir. Ret mağazayı değiştirmez. Onay, aynı mağazanın adını ve bağlantısını birlikte değiştirir; eski bağlantı yeni adrese yönlendirilmez. Belirsiz sonuçta aynı işlemi yeniden göndermeyin.</p>
     <p id="store-rename-review-status" role="status" aria-live="polite"></p>
@@ -300,7 +323,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="store-rename-review-older" type="button" hidden>Daha eski başvuruları göster</button>
     <button id="store-rename-review-newer" type="button" hidden>Yeni başvurulara dön</button>
   </section>
-  <section id="store-application-panel" hidden style="grid-column:1/-1">
+  <section id="store-application-panel" hidden>
     <h3>Kuruluşun mağaza başvuruları</h3>
     <p>Kuruluş Owner'ı yeni mağaza başvurusu oluşturur. Mağaza doğrudan bu kuruluşa bağlanır; faaliyete geçmesi için platform yöneticisinin ayrıca mağazayı onaylaması gerekir.</p>
     <p>Kaydedilmiş taslağı yalnız korunan şirket Owner yetkilisi, güncel güçlü kimlik doğrulamasıyla gönderebilir. Çalışan taslak izni başvuru gönderme hakkı vermez.</p>
@@ -323,7 +346,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="store-applications-refresh" type="button">Başvuruları ve taslakları yenile</button>
   </section>
 
-  <section id="store-draft-grants-panel" hidden style="grid-column:1/-1">
+  <section id="store-draft-grants-panel" hidden>
     <h3>Çalışanın mağaza başvuru taslağı izni</h3>
     <p>Yalnız korunan Owner, kendi şirketindeki etkin üyeye süresiz kişisel taslak izni verir veya geri alır. Bu izin mağaza başvurusu gönderme ya da mağaza açma hakkı vermez.</p>
     <p id="store-draft-grants-status" role="status" aria-live="polite"></p>
@@ -337,7 +360,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button type="button" id="store-draft-grants-older" hidden>Sonraki çalışanlar</button>
     <button type="button" id="store-draft-grants-refresh">İzinleri yenile</button>
   </section>
-  <section id="org-stores-panel" hidden aria-labelledby="org-stores-title" style="grid-column:1/-1">
+  <section id="org-stores-panel" hidden aria-labelledby="org-stores-title">
     <h3 id="org-stores-title">Seçili kuruluşun mağazaları</h3>
     <p>Yalnızca bu kuruluşta oluşturulmuş, Mercur tarafından ayrıca onaylanmış ve erişim yetkiniz bulunan faal mağazalar listelenir. Bu görünüm satın alma veya satış işlemi yetkisi vermez.</p>
     <p id="org-stores-status" role="status" aria-live="polite"></p>

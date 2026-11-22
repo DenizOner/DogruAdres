@@ -8,7 +8,7 @@ import {readFileSync} from "node:fs"
 import type {B06Chrome} from "./b06-ui-browser"
 
 const AXE_VERSION="4.14.0"
-type AuditedScope="#login"|"#person-mobile-form"|"#store-approval-panel"
+type AuditedScope="#login"|"#person-mobile-form"|"#store-approval-panel"|"#challenge"|"#mfa-enrollment"|"#invitation-section"
 
 export async function assertWcag22AxeInChrome(
   browser:B06Chrome, scope:AuditedScope, label:string

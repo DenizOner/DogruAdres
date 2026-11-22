@@ -263,7 +263,7 @@ export default function VerifyEmailPage() {
         <Link href="/" className="flex items-center gap-2 group">
           {/* Canonical DoğruAdres Mark: Pin + Checkmark in #0e66c2 */}
           <div className="w-10 h-10 rounded-xl bg-[#0e66c2] flex items-center justify-center text-white shadow-sm shadow-blue-500/20 group-hover:bg-[#0b57a4] transition-colors">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"/>
               <polyline points="9 10 11.5 12.5 15.5 8"/>
             </svg>
@@ -302,8 +302,8 @@ export default function VerifyEmailPage() {
         <div className="p-8 sm:p-10">
           {/* State 1: Loading Initial Status */}
           {state === "loading" && (
-            <div className="flex flex-col items-center justify-center py-10 text-center">
-              <div className="w-12 h-12 border-4 border-[#0e66c2]/20 border-t-[#0e66c2] rounded-full animate-spin mb-4" />
+            <div role="status" aria-live="polite" className="flex flex-col items-center justify-center py-10 text-center">
+              <div aria-hidden="true" className="w-12 h-12 border-4 border-[#0e66c2]/20 border-t-[#0e66c2] rounded-full animate-spin mb-4" />
               <p className="text-sm font-medium text-slate-600 dark:text-slate-400">
                 {currentLocale === "tr" ? "Bağlantı kontrol ediliyor..." : currentLocale === "ar" ? "جارٍ التحقق من الرابط..." : "Checking verification link..."}
               </p>
@@ -312,9 +312,9 @@ export default function VerifyEmailPage() {
 
           {/* State 2 & 3: Pending / Submitting (Explicit Confirmation) */}
           {(state === "pending" || state === "submitting") && (
-            <div className="space-y-6">
+            <div role="status" aria-live="polite" className="space-y-6">
               <div className="text-center">
-                <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-50 dark:bg-blue-950/40 text-[#0e66c2] flex items-center justify-center">
+                <div aria-hidden="true" className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-50 dark:bg-blue-950/40 text-[#0e66c2] flex items-center justify-center">
                   <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect width="20" height="16" x="2" y="4" rx="2"/>
                     <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
@@ -331,7 +331,7 @@ export default function VerifyEmailPage() {
               {/* Bot Protection Alert */}
               <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200/80 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 space-y-1">
                 <p className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[#0e66c2]">
+                  <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[#0e66c2]">
                     <circle cx="12" cy="12" r="10"/>
                     <line x1="12" y1="16" x2="12" y2="12"/>
                     <line x1="12" y1="8" x2="12.01" y2="8"/>
@@ -363,8 +363,8 @@ export default function VerifyEmailPage() {
 
           {/* State 4: Confirmed (Success) */}
           {state === "confirmed" && (
-            <div className="text-center space-y-6">
-              <div className="w-16 h-16 mx-auto rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+            <div role="status" aria-live="polite" className="text-center space-y-6">
+              <div aria-hidden="true" className="w-16 h-16 mx-auto rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
                   <polyline points="22 4 12 14.01 9 11.01"/>
@@ -391,8 +391,8 @@ export default function VerifyEmailPage() {
 
           {/* State 5: Expired (410) */}
           {state === "expired" && (
-            <div className="text-center space-y-6">
-              <div className="w-16 h-16 mx-auto rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center">
+            <div role="alert" className="text-center space-y-6">
+              <div aria-hidden="true" className="w-16 h-16 mx-auto rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10"/>
                   <polyline points="12 6 12 12 16 14"/>
@@ -418,8 +418,8 @@ export default function VerifyEmailPage() {
 
           {/* State 6: Consumed (Already Verified) */}
           {state === "consumed" && (
-            <div className="text-center space-y-6">
-              <div className="w-16 h-16 mx-auto rounded-full bg-blue-50 dark:bg-blue-950/40 text-[#0e66c2] flex items-center justify-center">
+            <div role="status" aria-live="polite" className="text-center space-y-6">
+              <div aria-hidden="true" className="w-16 h-16 mx-auto rounded-full bg-blue-50 dark:bg-blue-950/40 text-[#0e66c2] flex items-center justify-center">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
                   <circle cx="9" cy="7" r="4"/>
@@ -446,8 +446,8 @@ export default function VerifyEmailPage() {
 
           {/* State 7: Invalid / Error */}
           {(state === "invalid" || state === "unavailable") && (
-            <div className="text-center space-y-6">
-              <div className="w-16 h-16 mx-auto rounded-full bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center justify-center">
+            <div role="alert" className="text-center space-y-6">
+              <div aria-hidden="true" className="w-16 h-16 mx-auto rounded-full bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center justify-center">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10"/>
                   <line x1="15" y1="9" x2="9" y2="15"/>
