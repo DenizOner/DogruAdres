@@ -187,10 +187,12 @@ export async function middleware(request: NextRequest) {
       rewriteUrl.pathname = `/${locale}${pathname}`;
       const response = NextResponse.rewrite(rewriteUrl);
       response.headers.set('Referrer-Policy', 'no-referrer');
+      response.headers.set('Cache-Control', 'private, no-store');
       return response;
     }
     const response = NextResponse.next();
     response.headers.set('Referrer-Policy', 'no-referrer');
+    response.headers.set('Cache-Control', 'private, no-store');
     return response;
   }
 
