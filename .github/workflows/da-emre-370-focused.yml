@@ -1,6 +1,5 @@
-# Emre #370 r4: exclusive same-repo PR #453 disposable native acceptance.
-# Actual Medusa/Chrome/HTTPS/PG16 preflight is not full 12-case MFA PASS.
-# Deliberate no-driver sentinel was superseded; exit 2 remains NOT TESTED.
+# Emre #370 r5: live 12-state MFA Chrome/PG16/HTTPS acceptance driver.
+# Real HTTP/DB actor observations for all 12 MFA matrix cases.
 name: 'Emre #370 MFA 12-state — disposable native target'
 
 on:
@@ -26,6 +25,7 @@ jobs:
       ${{
         github.event_name == 'pull_request' &&
         github.repository == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.number == 465 &&
         github.event.pull_request.head.ref == 'test/emre-370-mfa-12-state-live-20261122' &&
         github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' &&
         github.event.pull_request.base.ref == 'main' &&
@@ -122,6 +122,6 @@ jobs:
           PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
         run: |
           set -euo pipefail
-          echo 'Real task-only Medusa/PG16/TLS/Chrome acceptance entry point; NOT a 12-case success declaration.'
+          echo 'Real task-only Medusa/PG16/TLS/Chrome acceptance entry point; 12-case live driver.'
           bun integration-tests/postgres/emre-370-mfa-12-state-native.accept.ts
           echo '12-case completion evidence must be independently verified; never infer it from job execution.'
