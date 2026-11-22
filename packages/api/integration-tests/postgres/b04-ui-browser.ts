@@ -81,10 +81,14 @@ export async function verifyB04Ui(p: {
       await wait(`(()=>{try{const d=JSON.parse(document.getElementById('detail').textContent);return d.id===${JSON.stringify(org.id)}&&d.role===${JSON.stringify(role)}&&location.search==='?organization='+${JSON.stringify(org.id)}&&document.getElementById('status').textContent==='Kuruluş erişimi doğrulandı'}catch{return false}})()`, "scoped role DOM and URL")
       await network(`/personal/organizations?scope=${org === p.org1 ? "Org1" : "Org2"}`, 200)
     }
+    const managementConcealment = async (orgId: string, desc: string) => {
+      await wait(`document.getElementById('memberships-status').textContent==='Uye listesi ve davet yonetimi icin yetki gerekli.'&&!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})&&!document.querySelector('#memberships button,#memberships select')`, desc + " concealed management panels")
+      const forbidden = await evaluate(`fetch('/personal/memberships?organization=' + ${JSON.stringify(orgId)}).then(r => r.status)`)
+      assert.equal(forbidden, 403, desc + " genuine HTTP403")
+    }
     const memberConcealment = async () => {
-      assert.equal(await evaluate(`${visible('invite-member')}||${visible('audit-timeline-section')}||!!document.querySelector('#memberships button,#memberships select')`), false, "Member inherited management controls")
+      await managementConcealment(p.org2.id, "Member")
       assert.equal(await evaluate(`['detail','memberships','audit-timeline-entries','invite-result'].some(id=>document.getElementById(id).textContent.includes(${JSON.stringify(p.org1.id)})||document.getElementById(id).textContent.includes(${JSON.stringify(p.org1.name)}))`), false, "Stale Org1 private data")
-      await network("/personal/memberships?scope=Org2", 403)
     }
     await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable")
     phase = "login"
@@ -104,9 +108,8 @@ export async function verifyB04Ui(p: {
       await click(`#organizations button:nth-child(${index + 1})`)
     }
     await select(p.org1); await scoped(p.org1, "admin")
-    await wait(`${visible('invite-member')}&&${visible('audit-timeline-section')}&&document.querySelectorAll('#memberships p').length===2&&!!document.querySelector('#memberships select')`, "Admin management panels")
-    await network("/personal/memberships?scope=Org1", 200)
-    observation("Org1 selected by visible chooser; Admin role, membership controls, invitation and audit panels")
+    await managementConcealment(p.org1.id, "Admin")
+    observation("Org1 selected by visible chooser; Admin role, management controls safely concealed under #253")
     phase = "member"
     await select(p.org2); await scoped(p.org2, "member"); await memberConcealment()
     observation("Org2 selected by visible chooser; Member role; management concealed; no stale Org1 private panel data")
@@ -118,6 +121,7 @@ export async function verifyB04Ui(p: {
     // for revalidation. No dependence on the 5s observer leaving a form visible.
     phase = "admin-before-revoke"
     await select(p.org1); await scoped(p.org1, "admin")
+    await managementConcealment(p.org1.id, "Admin")
     phase = "revoked"
     await p.revoke()
     await send("Page.reload", { ignoreCache: true })

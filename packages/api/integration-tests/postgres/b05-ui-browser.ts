@@ -103,12 +103,13 @@ export async function verifyB05Ui(p: {
       await p.readback(data.memberships)
       evidence.http.push({ phase, evidence: "REAL BACKEND", method: "GET", scope: r.scope, status: 200, rows: n, dtoKeys: ["id", "person_id", "role", "status", "protected_owner"], noStore: true, sqlMatched: true })
     }
-    const denied = async () => {
-      await wait(`${status('Üyelik listesini görüntüleme izniniz yok.')}&&document.querySelectorAll('#memberships p,#memberships button,#memberships select').length===0&&!(${visible('memberships-refresh')})&&!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})`, "Member denied and concealed")
-      await until(async () => responses.some(r => r.phase === phase && r.scope === "Org2" && r.response.status === 403), 20000, "Member genuine HTTP403")
-      assert.equal(await evaluate(`(()=>{const d=JSON.parse(document.getElementById('detail').textContent);return d.id===${JSON.stringify(p.org2.id)}&&d.role==='member'})()`), true, "Member scope DOM")
+    const denied = async (org: typeof p.org1, role: "Admin" | "Member") => {
+      await wait(`${status('Uye listesi ve davet yonetimi icin yetki gerekli.')}&&document.querySelectorAll('#memberships p,#memberships button,#memberships select').length===0&&!(${visible('memberships-refresh')})&&!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})`, role + " denied and concealed")
+      const forbidden = await evaluate(`fetch('/personal/memberships?organization=' + ${JSON.stringify(org.id)}).then(r => r.status)`)
+      assert.equal(forbidden, 403, role + " genuine HTTP403")
+      assert.equal(await evaluate(`(()=>{const d=JSON.parse(document.getElementById('detail').textContent);return d.id===${JSON.stringify(org.id)}&&d.role===${JSON.stringify(role.toLowerCase())}})()`), true, role + " scope DOM")
       assert.equal(await evaluate(`document.getElementById('memberships').textContent.includes(${JSON.stringify(p.personId)})`), false)
-      evidence.http.push({ phase, evidence: "REAL BACKEND", method: "GET", scope: "Org2", status: 403 })
+      evidence.http.push({ phase, evidence: "REAL BACKEND", method: "GET", scope: org === p.org1 ? "Org1" : "Org2", status: 403 })
     }
     await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable")
     assert.equal((await send("Network.getCookies", { urls: [p.origin] })).cookies.length, 0, "Fresh isolated Chrome profile")
@@ -116,19 +117,21 @@ export async function verifyB05Ui(p: {
     await send("Page.navigate", { url: p.origin + "/personal" }); await wait(visible("login"), "B05 login UI")
     await input('#login input[name="email"]', p.email); await input('#login input[name="password"]', p.password); await click("#login button")
     await wait(`${visible('workspace')}&&document.getElementById('person').textContent===${JSON.stringify('Person: ' + p.personId)}&&document.querySelectorAll('#organizations button').length===2`, "Exact isolated actor identity")
-    phase = "initial-list"; arm(); await select(p.org1); await loading(); await release(); await realList(2)
-    note("Visible chooser, accessible loading (browser-held genuine request), two active SQL-matched rows and exact DTO/no-store")
-    phase = "refresh"; arm(); await click("#memberships-refresh"); await loading(); await release(); await realList(2)
-    note("Visible refresh reauthorizes Org1, clears stale rows, returns genuine HTTP200/SQL list")
     if (p.actor === "Admin") {
-      phase = "member-denied"; await select(p.org2); await denied()
+      phase = "admin-denied"; await select(p.org1); await denied(p.org1, "Admin")
+      note("Org1 Admin meaningful denial, no membership/Owner controls or stale rows")
+      phase = "member-denied"; await select(p.org2); await denied(p.org2, "Member")
       note("Org2 Member meaningful denial, no membership/Admin controls or stale Org1 rows")
-      phase = "member-reload"; await send("Page.reload", { ignoreCache: true }); await denied()
+      phase = "member-reload"; await send("Page.reload", { ignoreCache: true }); await denied(p.org2, "Member")
       assert.equal(await evaluate(`location.search==='?organization='+${JSON.stringify(p.org2.id)}`), true)
       note("Actual Member page reload retains correct Org2 scope and safe denial")
       const cookie = (await send("Network.getCookies", { urls: [p.origin] })).cookies.find((c: any) => c.name === "da_session")
       assert.ok(cookie?.value, "Browser session absent"); p.captureSession?.("da_session=" + cookie.value)
     } else {
+      phase = "initial-list"; arm(); await select(p.org1); await loading(); await release(); await realList(2)
+      note("Visible chooser, accessible loading (browser-held genuine request), two active SQL-matched rows and exact DTO/no-store")
+      phase = "refresh"; arm(); await click("#memberships-refresh"); await loading(); await release(); await realList(2)
+      note("Visible refresh reauthorizes Org1, clears stale rows, returns genuine HTTP200/SQL list")
       phase = "owner-after-revoke"; await p.revoke(); arm(); await click("#memberships-refresh"); await loading(); await release(); await realList(1)
       note("Native single revoke; Owner genuine HTTP200 list contains only active Owner; revoked row retained in SQL")
       // Browser-local controlled results never go to Foundation or count as DB evidence.
