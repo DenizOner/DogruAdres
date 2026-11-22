@@ -492,6 +492,7 @@ export default async function({container}:any){
     marker("STEP DEMIR364 scenario: fc-appeal-wait")
     await owner.click("#store-platform-appeal-refresh")
     marker("STEP DEMIR364 scenario: fc-refresh-click")
+    await owner.wait("!document.getElementById('store-platform-appeal-panel').hidden")
     await owner.wait("document.getElementById('store-platform-appeal-reason').textContent.includes('"+reason+"')")
     marker("STEP DEMIR364 scenario: fc-reason-wait")
     assert.equal(await owner.eval("!document.querySelector('#store-platform-appeal-form button').disabled"),true)
