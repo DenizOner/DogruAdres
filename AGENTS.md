@@ -59,7 +59,8 @@ This repository implements DoğruAdres on the open-source Mercur marketplace sta
     2. All applicable real CI, security, unit, integration, and negative path checks have passed on the exact HEAD SHA.
     3. Zero unresolved blocking findings exist.
   - Merging directly into `main` or force-pushing is strictly forbidden.
-<!-- END DA-LOCAL-AGENT-SYSTEM-CURRENT -->
+  - **Autonomous merge (no redundant approval):** When all three conditions above are met, the Lead Agent performs the squash merge autonomously without asking the Product Owner for per-PR confirmation. The Product Owner has pre-authorized merge for any PR that satisfies the full gate.
+  - **Automatic branch deletion after merge:** Immediately after a successful squash merge, the Lead Agent deletes the remote feature branch (`git push origin --delete <branch>`) and the local branch (`git branch -d <branch>`), then switches to `main` and pulls. No confirmation needed. Exception: retain a branch only if another open PR explicitly targets it as its base.
 
 
 
