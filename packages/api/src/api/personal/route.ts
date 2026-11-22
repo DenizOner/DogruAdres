@@ -36,9 +36,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   #workspace{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;align-items:start}
   #workspace>h2{grid-column:1/-1;margin:1.5rem 0 0;font-size:1.4rem}
   #workspace>h2+p{grid-column:1/-1;margin:0;color:var(--muted)}
-  #workspace>p:first-child,#workspace>#organizations,#workspace>#memberships,#workspace>#bindings,#workspace>#mfa-info{grid-column:1/-1}
+  #workspace>p:first-child,#workspace>#organizations,#workspace>#memberships,#workspace>#bindings,#workspace>#mfa-info,#workspace>section{grid-column:1/-1}
   #workspace>:not(h2):not(h2+p){min-width:0}
-  #workspace>form,#workspace>div,#workspace>pre,#workspace>p,#workspace>button{margin:0;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
+  #workspace>form,#workspace>div,#workspace>pre,#workspace>p,#workspace>button,#workspace>section{margin:0;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
   form{display:grid;gap:.8rem}
   label{display:grid;gap:.3rem;font-size:.95rem;font-weight:600}
   input,select,button{font:inherit;max-width:100%;border-radius:.5rem}
@@ -55,6 +55,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   #verification-status{grid-column:1/-1;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
   #verification-status h2{font-size:1.2rem;margin:0 0 .5rem}
   #verification-status p{margin:.4rem 0;overflow-wrap:anywhere}
+  #company-launcher-panel{grid-column:1/-1;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
+  #company-launcher-list{list-style:none;padding:0;margin:1rem 0;display:grid;gap:.75rem}
+  #company-launcher-list>li{padding:.75rem 1rem;border:1px solid var(--line);border-radius:.6rem;background:#f9fafb;display:grid;gap:.5rem}
+  #company-launcher-list>li>div{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;justify-content:space-between}
+  #company-launcher-list>li button{min-height:2.25rem;padding:.35rem .7rem;font-size:.875rem}
+  #organization-document-section{margin-top:1rem;padding:1rem;border:1px solid var(--line);border-radius:.6rem;background:#fff}
+  #organization-document-dropzone{padding:1rem;border:2px dashed #9aa9bd;border-radius:.5rem;background:#f8fafc;text-align:center}
+  #organization-document-dropzone:focus-within{border-color:var(--focus-ring)}
   fieldset{border:1px solid var(--line);border-radius:.6rem;padding:1rem} fieldset label{display:flex;align-items:center;gap:.65rem;margin:.5rem 0} input[type=radio],input[type=checkbox]{width:auto;min-height:auto}
   .da-invitation-section{margin-bottom:1.5rem;padding:1.25rem;border:1px solid var(--inv-border);border-radius:.75rem;background:var(--inv-bg)}
   .da-invitation-section h2{margin-top:0;color:var(--inv-heading)}
@@ -191,7 +199,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     </form>
     <p id="smtp-test-result" role="status" aria-live="polite"></p>
   </section>
-  <section id="organization-draft-panel" style="grid-column:1/-1">
+  <section id="organization-draft-panel">
     <h2 id="organization-draft-title" tabindex="-1">Yeni Şirket Oluştur — özel başvuru taslağı</h2>
     <p>Gerçek kişi ticari işletmesi ve tüzel şirket aynı başvuru yolunu kullanır. Bu aşama yalnız taslaktır: vergi levhası henüz yüklenmez, başvuru gönderilmez ve işletme/Owner/alışveriş yetkisi oluşmaz.</p>
     <form id="organization-draft-form">
@@ -226,10 +234,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <label>Vergi Kimlik Numarası (VKN 10 hane / Şahıs işletmesi için TCKN 11 hane)<input name="tax_identifier" pattern="[0-9]{10,11}" maxlength="11" minlength="10" autocomplete="off" placeholder="10 veya 11 haneli vergi kimliği (başvuru gönderimi için zorunlu)"></label>
       <button type="submit">Taslağı kaydet</button>
     </form>
-    <div id="organization-document-section" hidden style="margin-top:1em;padding:1em;border:1px solid #ccc">
+    <div id="organization-document-section" hidden>
       <h3>Vergi levhası (başvuru belgesi)</h3>
       <p>PDF, JPEG veya PNG biçiminde, en fazla 10 MiB. İlk yüklemede virüs taraması ve güvenli önizleme hazırlanır; kontrol başarısızsa belge kabul edilmez. Dosya özel alanda saklanır; başvuru gönderilmeden işletme yetkisi verilmez.</p>
-      <div id="organization-document-dropzone" role="group" aria-label="Vergi levhası dosyası bırakma alanı" style="padding:1em;border:1px dashed #777">
+      <div id="organization-document-dropzone" role="group" aria-label="Vergi levhası dosyası bırakma alanı">
         <p>PDF, JPEG veya PNG dosyasını buraya sürükleyip bırakın ya da dosya seçicisini kullanın.</p>
         <label>Belge dosyası seçin
           <input type="file" id="organization-document-file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
@@ -247,7 +255,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <div id="organization-draft-list"></div>
     <button id="organization-draft-more" type="button" hidden>Daha eski taslakları göster</button>
   </section>
-  <section id="organization-review-panel" hidden style="grid-column:1/-1">
+  <section id="organization-review-panel" hidden>
     <h2>İncelenecek işletme başvuruları</h2>
     <p>Yalnız açık platform organization.review görevi olan yetkili personel için gönderilmiş başvurular listelenir. Bu liste otomatik kuruluş veya mağaza yetkisi açmaz.</p>
     <p id="organization-review-status" role="status" aria-live="polite"></p>
@@ -262,7 +270,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p id="platform-closing-email-link-status" role="status" aria-live="polite"></p>
   </section>
   <h2 id="organizations-title" tabindex="-1">Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
-  <section id="company-launcher-panel" hidden style="grid-column:1/-1" aria-labelledby="company-launcher-title">
+  <section id="company-launcher-panel" hidden aria-labelledby="company-launcher-title">
     <h2 id="company-launcher-title">Şirket çalışma alanı başlatıcısı</h2>
     <p>Yalnız mevcut, seçili kuruluşta yetkili olduğunuz işlevleri sıralayın ve katlayın. Bu tercih yeni yetki vermez.</p>
     <p id="company-launcher-status" role="status" aria-live="polite"></p>
@@ -270,7 +278,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="company-launcher-reset" type="button">Standart düzeni geri yükle</button>
   </section>
 
-  <section id="platform-closing-panel" hidden style="grid-column:1/-1" aria-labelledby="platform-closing-title">
+  <section id="platform-closing-panel" hidden aria-labelledby="platform-closing-title">
     <h2 id="platform-closing-title">Platform mağaza kapatma süreci</h2>
     <p>Gerekçeli platform kararı yeni satışları derhal durdurur. Korunan Owner'lar gerekçeyi okuyabilir ve itiraz edebilir. E-posta bütün korunan Owner'lara gönderilir. En az bir doğrulanmış teslim veya dört denemeden sonra yöneticilere kalıcı uyarı ile 10+20 günlük itiraz süresi otomatik başlar. Owner onayı beklenmez. Kalıcı kapanış ve isim hakkı devri ayrı, henüz etkin değildir.</p>
     <p id="platform-closing-status" role="status" aria-live="polite"></p>
@@ -284,7 +292,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button type="button" id="platform-closing-refresh">Mağazaları yenile</button>
     <button type="button" id="platform-closing-more" hidden>Diğer mağazalar</button>
   </section>
-  <section id="platform-closing-review-panel" hidden style="grid-column:1/-1"
+  <section id="platform-closing-review-panel" hidden
     aria-labelledby="platform-closing-review-title">
     <h2 id="platform-closing-review-title">Bağımsız mağaza kapatma incelemesi</h2>
     <p>Yalnız açık platform inceleme görevi ve güncel güçlü girişle gerekçeli karar verilebilir.
@@ -294,7 +302,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button type="button" id="platform-closing-review-refresh">Dosyaları yenile</button>
     <button type="button" id="platform-closing-review-more" hidden>Diğer dosyalar</button>
   </section>
-  <section id="store-approval-panel" hidden style="grid-column:1/-1">
+  <section id="store-approval-panel" hidden>
     <h2>Platform mağaza onayları</h2>
     <p>Yalnız açık mağaza onay görevi ve güncel güçlü giriş ile bekleyen mağazalar onaylanabilir. Kuruluş ile mağaza bağı başvuruda kurulmuştur; ayrıca ilişki onayı yapılmaz.</p>
     <p id="store-approval-status" role="status" aria-live="polite"></p>
@@ -306,7 +314,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="store-approval-older" type="button" hidden>Önceki başvuruları göster</button>
     <button id="store-approval-newer" type="button" hidden>Yeni başvurulara dön</button>
   </section>
-  <section id="store-rename-review-panel" hidden style="grid-column:1/-1">
+  <section id="store-rename-review-panel" hidden>
     <h2>Platform mağaza ad/bağlantı değişiklik başvuruları</h2>
     <p>Yalnız mağaza onay görevi olan platform görevlisi inceleyebilir. Ret mağazayı değiştirmez. Onay, aynı mağazanın adını ve bağlantısını birlikte değiştirir; eski bağlantı yeni adrese yönlendirilmez. Belirsiz sonuçta aynı işlemi yeniden göndermeyin.</p>
     <p id="store-rename-review-status" role="status" aria-live="polite"></p>
@@ -315,7 +323,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="store-rename-review-older" type="button" hidden>Daha eski başvuruları göster</button>
     <button id="store-rename-review-newer" type="button" hidden>Yeni başvurulara dön</button>
   </section>
-  <section id="store-application-panel" hidden style="grid-column:1/-1">
+  <section id="store-application-panel" hidden>
     <h3>Kuruluşun mağaza başvuruları</h3>
     <p>Kuruluş Owner'ı yeni mağaza başvurusu oluşturur. Mağaza doğrudan bu kuruluşa bağlanır; faaliyete geçmesi için platform yöneticisinin ayrıca mağazayı onaylaması gerekir.</p>
     <p>Kaydedilmiş taslağı yalnız korunan şirket Owner yetkilisi, güncel güçlü kimlik doğrulamasıyla gönderebilir. Çalışan taslak izni başvuru gönderme hakkı vermez.</p>
@@ -338,7 +346,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="store-applications-refresh" type="button">Başvuruları ve taslakları yenile</button>
   </section>
 
-  <section id="store-draft-grants-panel" hidden style="grid-column:1/-1">
+  <section id="store-draft-grants-panel" hidden>
     <h3>Çalışanın mağaza başvuru taslağı izni</h3>
     <p>Yalnız korunan Owner, kendi şirketindeki etkin üyeye süresiz kişisel taslak izni verir veya geri alır. Bu izin mağaza başvurusu gönderme ya da mağaza açma hakkı vermez.</p>
     <p id="store-draft-grants-status" role="status" aria-live="polite"></p>
@@ -352,7 +360,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button type="button" id="store-draft-grants-older" hidden>Sonraki çalışanlar</button>
     <button type="button" id="store-draft-grants-refresh">İzinleri yenile</button>
   </section>
-  <section id="org-stores-panel" hidden aria-labelledby="org-stores-title" style="grid-column:1/-1">
+  <section id="org-stores-panel" hidden aria-labelledby="org-stores-title">
     <h3 id="org-stores-title">Seçili kuruluşun mağazaları</h3>
     <p>Yalnızca bu kuruluşta oluşturulmuş, Mercur tarafından ayrıca onaylanmış ve erişim yetkiniz bulunan faal mağazalar listelenir. Bu görünüm satın alma veya satış işlemi yetkisi vermez.</p>
     <p id="org-stores-status" role="status" aria-live="polite"></p>
