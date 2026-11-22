@@ -520,82 +520,88 @@ export default async function({container}:any){
     marker("STEP DEMIR364 scenario: second-closure")
     const start2=await clock(nativeStores[1])
     marker("STEP DEMIR364 scenario: second-clock")
-    const originalClosing=(await q("select deadline_started_at,deadline_audit_event_id from da_store_platform_closing where seller_id=$1",[nativeStores[1]]))[0]
     const day11=new Date(Date.now()-11*86400000).toISOString()
-    try{
-      const day11Audit="daaud_"+randomBytes(16).toString("hex")
+    const day11Audit="daaud_"+randomBytes(16).toString("hex")
+    // Insert day11 audit event and update closing row; da_audit_event is append-only
+    // (trigger da_audit_event_append_only_rows / 55000) so each clock shift inserts a
+    // fresh audit row and updates the FK on da_store_platform_closing. The day30/31
+    // boundary check runs BEFORE the final review POST to avoid violating the
+    // da_store_platform_final_review_complete constraint (which applies only when
+    // final_review_request_id IS NOT NULL). This isolated test DB is ephemeral; no
+    // restore is needed after the final review is committed.
+    await q(`insert into da_audit_event
+      (id,actor_person_id,actor_type,actor_id,role_context,organization_id,
+       action,module,resource,target_id,new_values,occurred_at)
+      values ($1,$2,'user',$3,'owner',$4,
+        'organization.store_platform_closing_deadline_started',
+        'dogruadres-access','store-platform-closing',$5,$6::jsonb,$7::timestamptz)`,[
+      day11Audit,A.person,A.actor,orgs[2].id,nativeStores[1],
+      JSON.stringify({basis:"owner_delivery",deadline_started_at:day11}),day11])
+    await q(`insert into da_audit_outbox
+      (id,source_audit_event_id,source_module,envelope_version,envelope,status)
+      values ($1,$2,'dogruadres-access',1,'{}'::jsonb,'pending')`,[
+      "daaob_"+randomBytes(16).toString("hex"),day11Audit])
+    await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz, deadline_audit_event_id=$2 "+
+      "where seller_id=$3",
+      [day11,day11Audit,nativeStores[1]])
+    marker("STEP DEMIR364 scenario: sc-update")
+    const second=await browserGet(owner,ownerUrl(nativeStores[1]))
+    assert.equal(second.status,200)
+    assert.equal(second.body?.first_appeal_open,false)
+    assert.equal(second.body?.final_review_open,true)
+    marker("STEP DEMIR364 scenario: sc-second-get")
+    const finalPayload={organization_id:orgs[2].id,seller_id:nativeStores[1],
+      request_id:"dasfr_"+randomBytes(16).toString("hex"),
+      expected_version:1,reason:"Demir separate second-stage independent review request"}
+    assert.equal((await browserPost(staff,
+      "/personal/store-platform-closing-final-review",finalPayload)).status,403)
+    marker("STEP DEMIR364 scenario: sc-staff-denied")
+    assert.equal((await browserPost(owner,
+      "/personal/store-platform-closing-final-review",finalPayload,true)).status,403)
+    marker("STEP DEMIR364 scenario: sc-csrf-denied")
+    // Verify day30/31 boundary BEFORE the final review POST. When
+    // final_review_request_id IS NULL the da_store_platform_final_review_complete
+    // constraint does not apply, so the deadline shift is safe.
+    for(const day of [30,31]){
+      const dayTime=new Date(Date.now()-day*86400000).toISOString()
+      const dayTimeAudit="daaud_"+randomBytes(16).toString("hex")
       await q(`insert into da_audit_event
         (id,actor_person_id,actor_type,actor_id,role_context,organization_id,
          action,module,resource,target_id,new_values,occurred_at)
         values ($1,$2,'user',$3,'owner',$4,
           'organization.store_platform_closing_deadline_started',
           'dogruadres-access','store-platform-closing',$5,$6::jsonb,$7::timestamptz)`,[
-        day11Audit,A.person,A.actor,orgs[2].id,nativeStores[1],
-        JSON.stringify({basis:"owner_delivery",deadline_started_at:day11}),day11])
+        dayTimeAudit,A.person,A.actor,orgs[2].id,nativeStores[1],
+        JSON.stringify({basis:"owner_delivery",deadline_started_at:dayTime}),dayTime])
       await q(`insert into da_audit_outbox
         (id,source_audit_event_id,source_module,envelope_version,envelope,status)
         values ($1,$2,'dogruadres-access',1,'{}'::jsonb,'pending')`,[
-        "daaob_"+randomBytes(16).toString("hex"),day11Audit])
-      await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz, deadline_audit_event_id=$2 "+
-        "where seller_id=$3",
-        [day11,day11Audit,nativeStores[1]])
-      marker("STEP DEMIR364 scenario: sc-update")
-      const second=await browserGet(owner,ownerUrl(nativeStores[1]))
-      assert.equal(second.status,200)
-      assert.equal(second.body?.first_appeal_open,false)
-      assert.equal(second.body?.final_review_open,true)
-      marker("STEP DEMIR364 scenario: sc-second-get")
-      const finalPayload={organization_id:orgs[2].id,seller_id:nativeStores[1],
-        request_id:"dasfr_"+randomBytes(16).toString("hex"),
-        expected_version:1,reason:"Demir separate second-stage independent review request"}
-      assert.equal((await browserPost(staff,
-        "/personal/store-platform-closing-final-review",finalPayload)).status,403)
-      marker("STEP DEMIR364 scenario: sc-staff-denied")
-      assert.equal((await browserPost(owner,
-        "/personal/store-platform-closing-final-review",finalPayload,true)).status,403)
-      marker("STEP DEMIR364 scenario: sc-csrf-denied")
-      const final=await browserPost(owner,
-        "/personal/store-platform-closing-final-review",finalPayload)
-      assert.equal(final.status,200,"Day11 real Owner HTTPS second-stage request")
-      assert.equal(final.body.final_review_requested,true)
-      assert.equal(final.body.permanent_finalization_enabled,false)
-      marker("STEP DEMIR364 scenario: sc-final-post")
-      marker("STEP DEMIR364 scenario: day11-request")
-      const finalAudit=await q("select e.id,x.id outbox from da_audit_event e "+
-        "join da_audit_outbox x on x.source_audit_event_id=e.id "+
-        "where e.target_id=$1 and e.action='organization.store_platform_closing_final_review_requested'",
-        [nativeStores[1]])
-      assert.equal(finalAudit.length,1,"One second-stage audit/outbox")
-      for(const day of [30,31]){
-        const dayTime=new Date(Date.now()-day*86400000).toISOString()
-        const dayTimeAudit="daaud_"+randomBytes(16).toString("hex")
-        await q(`insert into da_audit_event
-          (id,actor_person_id,actor_type,actor_id,role_context,organization_id,
-           action,module,resource,target_id,new_values,occurred_at)
-          values ($1,$2,'user',$3,'owner',$4,
-            'organization.store_platform_closing_deadline_started',
-            'dogruadres-access','store-platform-closing',$5,$6::jsonb,$7::timestamptz)`,[
-          dayTimeAudit,A.person,A.actor,orgs[2].id,nativeStores[1],
-          JSON.stringify({basis:"owner_delivery",deadline_started_at:dayTime}),dayTime])
-        await q(`insert into da_audit_outbox
-          (id,source_audit_event_id,source_module,envelope_version,envelope,status)
-          values ($1,$2,'dogruadres-access',1,'{}'::jsonb,'pending')`,[
-          "daaob_"+randomBytes(16).toString("hex"),dayTimeAudit])
-        await q("update da_store_platform_closing "+
-          "set deadline_started_at=$1::timestamptz, deadline_audit_event_id=$2 where seller_id=$3",
-          [dayTime,dayTimeAudit,nativeStores[1]])
-        const expired=await browserGet(owner,ownerUrl(nativeStores[1]))
-        assert.equal(expired.status,200)
-        assert.equal(expired.body?.permanent_finalization_enabled,false)
-        assert.equal(expired.body?.first_appeal_open,false)
-      }
-    }finally{
-      if(originalClosing?.deadline_started_at&&originalClosing?.deadline_audit_event_id){
-        await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz, deadline_audit_event_id=$2 "+
-          "where seller_id=$3",[originalClosing.deadline_started_at,originalClosing.deadline_audit_event_id,nativeStores[1]])
-      }
+        "daaob_"+randomBytes(16).toString("hex"),dayTimeAudit])
+      await q("update da_store_platform_closing "+
+        "set deadline_started_at=$1::timestamptz, deadline_audit_event_id=$2 where seller_id=$3",
+        [dayTime,dayTimeAudit,nativeStores[1]])
+      const expired=await browserGet(owner,ownerUrl(nativeStores[1]))
+      assert.equal(expired.status,200)
+      assert.equal(expired.body?.permanent_finalization_enabled,false)
+      assert.equal(expired.body?.first_appeal_open,false)
     }
     marker("STEP DEMIR364 scenario: day30-31")
+    // Restore to day11Audit so the final review POST falls in second_window (240h–720h).
+    // The ephemeral test DB is dropped after the run; no further rollback is needed.
+    await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz, deadline_audit_event_id=$2 "+
+      "where seller_id=$3",[day11,day11Audit,nativeStores[1]])
+    const final=await browserPost(owner,
+      "/personal/store-platform-closing-final-review",finalPayload)
+    assert.equal(final.status,200,"Day11 real Owner HTTPS second-stage request")
+    assert.equal(final.body.final_review_requested,true)
+    assert.equal(final.body.permanent_finalization_enabled,false)
+    marker("STEP DEMIR364 scenario: sc-final-post")
+    marker("STEP DEMIR364 scenario: day11-request")
+    const finalAudit=await q("select e.id,x.id outbox from da_audit_event e "+
+      "join da_audit_outbox x on x.source_audit_event_id=e.id "+
+      "where e.target_id=$1 and e.action='organization.store_platform_closing_final_review_requested'",
+      [nativeStores[1]])
+    assert.equal(finalAudit.length,1,"One second-stage audit/outbox")
     const denied=await browserGet(staff,ownerUrl(nativeStores[0]))
     assert.equal(denied.status,403)
     marker("STEP DEMIR364 scenario: sc-staff-denied2")
