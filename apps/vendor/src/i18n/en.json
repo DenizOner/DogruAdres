@@ -3,5 +3,23 @@
     "title": "Custom Fields",
     "description": "Manage your custom fields and configurations",
     "noFields": "No custom fields configured yet"
+  },
+  "vehicles": {
+    "title": "Customer Vehicles",
+    "description": "Customer vehicles portfolio serviced or supplied with parts by your business",
+    "addVehicle": "Add New Customer Vehicle",
+    "editVehicle": "Edit Customer Vehicle",
+    "deleteVehicle": "Delete Customer Vehicle",
+    "plate": "License Plate",
+    "vin": "VIN / Chassis No",
+    "make": "Make",
+    "model": "Model",
+    "modelYear": "Model Year",
+    "label": "Customer Note / Label",
+    "actions": "Actions",
+    "noVehicles": "No customer vehicles registered yet",
+    "deleteConfirm": "Are you sure you want to delete this customer vehicle?",
+    "deleteWarning": "This will remove the vehicle from active lists. Historical audit records are preserved.",
+    "roleRequired": "Only organization owners or administrators can delete vehicles."
   }
 }

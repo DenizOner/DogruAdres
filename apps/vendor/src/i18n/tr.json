@@ -1,0 +1,25 @@
+{
+  "customFields": {
+    "title": "Özel Alanlar",
+    "description": "Özel alanlarınızı ve yapılandırmalarınızı yönetin",
+    "noFields": "Henüz yapılandırılmış özel alan yok"
+  },
+  "vehicles": {
+    "title": "Müşteri Araçları",
+    "description": "İşletmenizin bakım yaptığı veya yedek parça sattığı müşteri araç portföyü",
+    "addVehicle": "Yeni Müşteri Aracı Ekle",
+    "editVehicle": "Müşteri Aracını Düzenle",
+    "deleteVehicle": "Müşteri Aracını Sil",
+    "plate": "Plaka",
+    "vin": "Şasi No (VIN)",
+    "make": "Marka",
+    "model": "Model",
+    "modelYear": "Model Yılı",
+    "label": "Müşteri Notu / Etiket",
+    "actions": "İşlemler",
+    "noVehicles": "Henüz kayıtlı müşteri aracı bulunmuyor",
+    "deleteConfirm": "Bu müşteri aracı kaydını silmek istediğinizden emin misiniz?",
+    "deleteWarning": "Bu işlem aracı aktif listeden kaldırır. Geçmiş denetim kayıtları korunur.",
+    "roleRequired": "Araç kaydını yalnızca işletme sahibi veya yöneticisi silebilir."
+  }
+}
