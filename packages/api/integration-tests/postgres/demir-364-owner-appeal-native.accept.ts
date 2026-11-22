@@ -64,7 +64,9 @@ function child(args:string[],env:NodeJS.ProcessEnv,stage:string,timeout=210000){
       "owner-link-accepted","owner-link-replay","first-clock",
       "fc-get","fc-front","fc-select","fc-pause-wait","fc-choose","fc-appeal-wait","fc-refresh-click","fc-reason-wait","fc-form-eval","fc-input","fc-form-click","fc-status-wait","fc-appealed-get",
       "first-appeal","second-closure",
-      "second-clock","day11-request","day30-31","privacy-clean"
+      "second-clock",
+      "sc-update","sc-second-get","sc-staff-denied","sc-csrf-denied","sc-final-post","sc-staff-denied2","sc-select-alpha",
+      "day11-request","day30-31","privacy-clean"
     ] as const
     const matched=[...text.matchAll(/STEP DEMIR364 scenario: ([a-z0-9-]+)/g)]
       .map(x=>x[1]).filter(x=>allowed.some(a=>a===x))
@@ -521,27 +523,32 @@ export default async function({container}:any){
     const day11=new Date(Date.now()-11*86400000).toISOString()
     try{
       await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz "+
-        "where seller_id=$2 and deadline_started_at=$3::timestamptz",
-        [day11,nativeStores[1],start2])
+        "where seller_id=$2",
+        [day11,nativeStores[1]])
       await q("update da_audit_event set new_values=jsonb_set(new_values,'{deadline_started_at}',to_jsonb($1::text)) "+
         "where target_id=$2 and action='organization.store_platform_closing_deadline_started'",
         [day11,nativeStores[1]])
+      marker("STEP DEMIR364 scenario: sc-update")
       const second=await browserGet(owner,ownerUrl(nativeStores[1]))
       assert.equal(second.status,200)
       assert.equal(second.body?.first_appeal_open,false)
       assert.equal(second.body?.final_review_open,true)
+      marker("STEP DEMIR364 scenario: sc-second-get")
       const finalPayload={organization_id:orgs[2].id,seller_id:nativeStores[1],
         request_id:"dasfr_"+randomBytes(16).toString("hex"),
         expected_version:1,reason:"Demir separate second-stage independent review request"}
       assert.equal((await browserPost(staff,
         "/personal/store-platform-closing-final-review",finalPayload)).status,403)
+      marker("STEP DEMIR364 scenario: sc-staff-denied")
       assert.equal((await browserPost(owner,
         "/personal/store-platform-closing-final-review",finalPayload,true)).status,403)
+      marker("STEP DEMIR364 scenario: sc-csrf-denied")
       const final=await browserPost(owner,
         "/personal/store-platform-closing-final-review",finalPayload)
       assert.equal(final.status,200,"Day11 real Owner HTTPS second-stage request")
       assert.equal(final.body.final_review_requested,true)
       assert.equal(final.body.permanent_finalization_enabled,false)
+      marker("STEP DEMIR364 scenario: sc-final-post")
       marker("STEP DEMIR364 scenario: day11-request")
       const finalAudit=await q("select e.id,x.id outbox from da_audit_event e "+
         "join da_audit_outbox x on x.source_audit_event_id=e.id "+
@@ -571,7 +578,9 @@ export default async function({container}:any){
     marker("STEP DEMIR364 scenario: day30-31")
     const denied=await browserGet(staff,ownerUrl(nativeStores[0]))
     assert.equal(denied.status,403)
+    marker("STEP DEMIR364 scenario: sc-staff-denied2")
     await owner.select(orgs[0].name,"owner")
+    marker("STEP DEMIR364 scenario: sc-select-alpha")
     await owner.wait("document.getElementById('store-platform-appeal-reason').textContent===''")
     assert.equal(await owner.eval("document.body.textContent.includes("+
       JSON.stringify(reason)+")"),false,
