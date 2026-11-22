@@ -3,6 +3,8 @@ import {
   changeMembershipBody,
   createInvitationBody,
   acceptInvitationBody,
+  createVehicleBody,
+  updateVehicleBody,
 } from "../validators"
 
 /**
@@ -166,9 +168,9 @@ describe("createInvitationBody", () => {
     expect(result.success).toBe(true)
   })
 
-  it("accepts role=admin", () => {
+  it("rejects role=admin (admin invitations retired)", () => {
     const result = createInvitationBody.safeParse({ email: "a@b.io", role: "admin" })
-    expect(result.success).toBe(true)
+    expect(result.success).toBe(false)
   })
 
   it("rejects role=owner", () => {
@@ -231,3 +233,50 @@ describe("acceptInvitationBody", () => {
   })
 })
 
+// ── createVehicleBody & updateVehicleBody ──────────────────────────────────────
+describe("createVehicleBody", () => {
+  it("accepts valid plate-only creation", () => {
+    const result = createVehicleBody.safeParse({ plate: "34 ABC 123" })
+    expect(result.success).toBe(true)
+  })
+
+  it("accepts valid vin-only creation", () => {
+    const result = createVehicleBody.safeParse({ vin: "1HGBH41JXMN109186" })
+    expect(result.success).toBe(true)
+  })
+
+  it("accepts full valid vehicle body", () => {
+    const result = createVehicleBody.safeParse({
+      plate: "34 ABC 123",
+      vin: "1HGBH41JXMN109186",
+      label: "Delivery Truck",
+      make: "Ford",
+      model: "Transit",
+      model_year: 2022,
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects when both plate and vin are absent", () => {
+    const result = createVehicleBody.safeParse({ label: "Delivery Truck" })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects invalid model_year outside range", () => {
+    expect(createVehicleBody.safeParse({ plate: "34 A", model_year: 1885 }).success).toBe(false)
+    expect(createVehicleBody.safeParse({ plate: "34 A", model_year: 2101 }).success).toBe(false)
+    expect(createVehicleBody.safeParse({ plate: "34 A", model_year: 2020.5 }).success).toBe(false)
+  })
+})
+
+describe("updateVehicleBody", () => {
+  it("accepts single-field update", () => {
+    const result = updateVehicleBody.safeParse({ label: "New Label" })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects empty body for update", () => {
+    const result = updateVehicleBody.safeParse({})
+    expect(result.success).toBe(false)
+  })
+})

@@ -9,10 +9,21 @@ import { DOGRUADRES_ACCESS_MODULE } from "../../modules/dogruadres-access"
 import { organizationActionAllowed } from "../../modules/dogruadres-access/role-action-policy"
 import { enabled, sessionToken } from "../personal/security"
 
+export type DogruAdresOrganizationAction =
+  | "organization.read"
+  | "membership.list"
+  | "membership.manage"
+  | "invitation.manage"
+  | "audit.timeline.read"
+  | "vehicle.read"
+  | "vehicle.create"
+  | "vehicle.update"
+  | "vehicle.delete"
+
 export async function requireOrganizationAccess(
   req: AuthenticatedMedusaRequest,
   organizationId: string,
-  action: "organization.read" | "membership.list" | "membership.manage" | "invitation.manage" | "audit.timeline.read"
+  action: DogruAdresOrganizationAction
 ) {
   const principal = {
     actorId: req.auth_context.actor_id,
@@ -64,6 +75,24 @@ export async function requireOrganizationAccess(
           organizationActionAllowed("owner",requestedAction,
             await service.currentProtectedOwner(personId,orgId),false)
       }
+      if (
+        requestedAction === "vehicle.read" ||
+        requestedAction === "vehicle.create" ||
+        requestedAction === "vehicle.update"
+      ) {
+        if (membership.role === "member" || membership.role === "admin") return true
+        if (membership.role === "owner") {
+          return membership.protected_owner === true
+        }
+        return false
+      }
+      if (requestedAction === "vehicle.delete") {
+        if (membership.role === "admin") return true
+        if (membership.role === "owner") {
+          return membership.protected_owner === true
+        }
+        return false
+      }
       return false
     },
   }
@@ -78,7 +107,13 @@ export async function requireOrganizationAccess(
   if (!decision.allowed) {
     throw new MedusaError(MedusaError.Types.FORBIDDEN, "Organization access denied")
   }
-  return { personId: decision.personId, organizationId: decision.organizationId, service }
+  const activeMembership = await service.getActiveMembership(decision.personId, decision.organizationId)
+  return {
+    personId: decision.personId,
+    organizationId: decision.organizationId,
+    role: activeMembership?.role,
+    service,
+  }
 }
 
 export async function requirePlatformAdministrator(req: AuthenticatedMedusaRequest) {
