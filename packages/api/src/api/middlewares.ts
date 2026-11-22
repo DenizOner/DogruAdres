@@ -6,6 +6,8 @@ import {
   changeMembershipBody,
   createInvitationBody,
   provisionOrganizationBody,
+  createVehicleBody,
+  updateVehicleBody,
 } from "./dogruadres/validators"
 
 export default defineMiddlewares({
@@ -56,6 +58,27 @@ export default defineMiddlewares({
     },
     {
       matcher: "/dogruadres/organizations/:id/invitations/:invitation_id",
+      methods: ["DELETE"],
+      middlewares: [authenticate(["user", "member", "customer"], ["session", "bearer"])],
+    },
+    {
+      matcher: "/dogruadres/organizations/:id/vehicles",
+      methods: ["POST"],
+      middlewares: [
+        authenticate(["user", "member", "customer"], ["session", "bearer"]),
+        validateAndTransformBody(createVehicleBody),
+      ],
+    },
+    {
+      matcher: "/dogruadres/organizations/:id/vehicles/:vehicle_id",
+      methods: ["PATCH"],
+      middlewares: [
+        authenticate(["user", "member", "customer"], ["session", "bearer"]),
+        validateAndTransformBody(updateVehicleBody),
+      ],
+    },
+    {
+      matcher: "/dogruadres/organizations/:id/vehicles/:vehicle_id",
       methods: ["DELETE"],
       middlewares: [authenticate(["user", "member", "customer"], ["session", "bearer"])],
     },
