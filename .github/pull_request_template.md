@@ -22,9 +22,9 @@
 
 ## İnceleme / merge kapısı — ortak GitHub hesabı
 
-**Gerçek kod-yazarı yürütücüsü/bağlamı:** <!-- ChatGPT görüşmesi / Antigravity Agent görevi / insan; bilinmiyorsa UNVERIFIED. GitHub kullanıcı adı bu bilgi değildir. -->
+**Gerçek kod-yazarı yürütücüsü/bağlamı:** <!-- Lider Ajan / Uzman Geliştirici Alt Ajanı / insan; bilinmiyorsa UNVERIFIED. GitHub kullanıcı adı bu bilgi değildir. -->
 
-**Bağımsız denetim raporu:** <!-- PR yorumuna REVIEW-PROVENANCE-v1 bağlantısı; rapor ayrı Agent/oturum/icracı, ham diff, tam HEAD/base, test kanıtı, bulgular ve PASS|CHANGES REQUIRED|BLOCKED içermeli. Henüz yoksa NOT REVIEWED. -->
+**Bağımsız denetim raporu:** <!-- PR yorumuna Bağımsız Denetçi Alt Ajanı (denetci-reviewer) tarafından sağlanan REVIEW-PROVENANCE-v1 bağlantısı; rapor ayrı Agent/oturum/icracı, ham diff, tam HEAD/base, test kanıtı, bulgular ve PASS|CHANGES REQUIRED|BLOCKED içermeli. Henüz yoksa NOT REVIEWED. -->
 
 - [ ] Kaynak değişikliğini yazan/düzelten icracıdan **fiilen ayrı** denetim oturumu/görevi ve raporun gerçek kökeni kaydedildi (ortak GitHub login kendi başına kanıt değildir).
 - [ ] Ayrı denetçi tam değişiklik/diff'i ve uygulanabilir güvenlik/karar sınırlarını **bizzat** inceleyip gerçek kanıtlı **PASS** verdi; eksik erişim veya kaynak için BLOCKED korundu.

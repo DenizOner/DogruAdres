@@ -1,16 +1,34 @@
 ---
 name: github-task-handoff
-description: Prepares narrow, reproducible GitHub Issue/PR and local Agent handoffs for DoğruAdres. Use when delegating implementation, synchronizing branches, or resuming a paused development task.
+description: Prepares narrow, reproducible task delegations and GitHub Issue/PR synchronizations for DoğruAdres. Use when delegating work to specialized Subagents, synchronizing branches, or resuming an isolated development task.
 ---
 
-# GitHub task handoff
+# Task Delegation and GitHub Synchronization
 
-Follow the binding repository `AGENTS.md` and canonical [#208](https://github.com/DenizOner/DogruAdres/issues/208), [#216](https://github.com/DenizOner/DogruAdres/issues/216) and the task Issue. This skill is a *procedure*, not a new policy or task authorization.
+Follow the binding repository `AGENTS.md`, canonical [#208](https://github.com/DenizOner/DogruAdres/issues/208), [#216](https://github.com/DenizOner/DogruAdres/issues/216), and the associated task Issue. This skill is an *operational procedure*, not a new policy or task authorization.
 
-1. **Find the existing record.** Reuse the canonical Issue/PR and approved requirements. Do not create duplicate tasks, decisions, worktrees or databases just to issue a handoff.
-2. **Refresh the live target.** Identify `DenizOner/DogruAdres`, current PR and branch, full HEAD/base and live `main` SHA, real authoring Agent and permitted changed paths. Check current blockers and relevant CI.
-3. **Name the local context if local work is needed.** Include a verified absolute Windows directory, Git top level/common-dir, intended branch/upstream, remote, ownership, process/port/DB dependencies and the expected full remote SHA. If unknown, write `UNVERIFIED` and mandate a *read-only preflight*, not a guessed path.
-4. **Act directly first.** If the authorized executor already has access to the necessary tools, do the task rather than create another executor or handoff. Delegate only inaccessible local execution or a genuinely independent review/test. For unavoidable delegation, produce one bounded executable English instruction with real approved outcome, exact target, permissions, safety/negative tests, and stop-on-SHA-drift condition. GitHub Issue/report text for the owner is Turkish.
-5. **Close the loop.** Require actual changed-path and test results, final local and remote full SHA, PR URL and CI links, `LOCAL COMMITTED / REMOTE NOT SYNCED` if applicable, preserved data and residual blockers. Never claim a successful push from a local commit alone.
+In the **Lead Agent + Subagents** architecture, direct local execution on `d:\DogruAdres` is the standard operating model. The Lead Agent handles end-to-end orchestration and delegates bounded tasks to specialized Subagents (Worker, Reviewer, Researcher, QA).
 
-Safety: Never reset, clean, rebase or force-push a dirty/unknown worktree; never touch secrets, real DBs, Docker volumes, protected `main` or another Agent's active resources without their own authorization. A generated assignment is not authorization to merge or deploy.
+## Delegation & Synchronization Workflow
+
+1. **Locate Canonical Record:** Reuse the canonical GitHub Issue/PR and approved requirements. Do not create duplicate tasks, decisions, worktrees, or databases without demonstrated need.
+2. **Refresh Live Target:** Identify `DenizOner/DogruAdres`, current PR and feature branch, exact HEAD full SHA, target base ref, and permitted file paths. Check active blockers and relevant CI runs.
+3. **Subagent Task Contract:** When delegating to a Worker Subagent (e.g. for parallel work in an isolated worktree or branch), the delegation prompt MUST specify:
+   - Repository `DenizOner/DogruAdres` and canonical workspace path.
+   - **Exact authorized branch and target ref.**
+   - Approved user outcome, acceptance criteria, and negative paths.
+   - Authorized file scope (and strictly forbidden paths such as `packages/api/medusa-config.ts` or core modules when out of scope).
+   - Resource boundaries (isolated test port, task-owned DB name, no destructive volume removal).
+   - Stopping conditions (stop on SHA drift, test failure, or ambiguity).
+4. **Read-Only Target Preflight:** Before any file mutation, the executing subagent verifies:
+   - `git status --porcelain=v1` (clean tree or expected changes).
+   - Correct branch and remote tracking (`origin/<target-branch>`).
+   - Active processes, ports, and test DB isolation.
+   - Never overwrite dirty or untracked files without authorization.
+5. **Close the Loop & Sync:**
+   - Run focused local unit/contract/integration tests to verify the change.
+   - Commit logically scoped changes with descriptive commit messages.
+   - Non-force push commits to the authorized feature branch; verify with `git ls-remote`. Never push directly to `main` or force-push.
+   - Report back to the Lead Agent with: verified starting/ending SHAs, changed file list, test commands & results, PR link, and residual risks.
+
+Safety Guardrails: Never run destructive commands (`git reset --hard`, `git clean -fd`, `docker system prune`, volume drops) without explicit authorization ([#229](https://github.com/DenizOner/DogruAdres/issues/229)). A generated task delegation or passing local test is not authorization to merge or deploy.
