@@ -422,6 +422,7 @@ async function realProbe(container: ExecArgs["container"], db: Client) {
       )
     }
     // Create a real TOTP factor for person A and return its base32 secret
+    let lastTotpCounter = 0
     const createEnabledTotpFactor = async (): Promise<string> => {
       const setup = await auth.startAuthMfa({
         auth_identity_id: creds.authIdentityIds[0],
@@ -435,6 +436,7 @@ async function realProbe(container: ExecArgs["container"], db: Client) {
         code: totp(setup.secret),
       })
       assert.equal(verified.status, "enabled")
+      lastTotpCounter = Math.floor(Date.now() / 30000)
       return setup.secret
     }
     // Count DB deltas for negative probe assertions
@@ -488,34 +490,38 @@ async function realProbe(container: ExecArgs["container"], db: Client) {
       const noStore = (res: {headers:Record<string,string[]>}) =>
         (res.headers["cache-control"] || []).some(v => v === "no-store")
       const counts2 = await countTables()
+      const domainWriteDelta = (counts2.mfa_pref - sessionBeforeCounts.mfa_pref) +
+        (counts2.mfa_policy - sessionBeforeCounts.mfa_policy)
+      const auditDelta = counts2.audit - sessionBeforeCounts.audit
+      const outboxDelta = counts2.outbox - sessionBeforeCounts.outbox
       return {
         foreignPerson: {
           httpStatus: foreignPersonRes.status, noStore: noStore(foreignPersonRes),
-          domainWriteDelta: 0, auditDelta: 0, outboxDelta: 0,
+          domainWriteDelta, auditDelta, outboxDelta,
         },
         foreignOrganization: {
           httpStatus: foreignOrgRes.status, noStore: noStore(foreignOrgRes),
-          domainWriteDelta: 0, auditDelta: 0, outboxDelta: 0,
+          domainWriteDelta, auditDelta, outboxDelta,
         },
         ownerPlatformWrite: {
           httpStatus: ownerPlatformWriteRes.status, noStore: noStore(ownerPlatformWriteRes),
-          domainWriteDelta: 0, auditDelta: 0, outboxDelta: 0,
+          domainWriteDelta, auditDelta, outboxDelta,
         },
         invalidCsrf: {
           httpStatus: invalidCsrfRes.status, noStore: noStore(invalidCsrfRes),
-          domainWriteDelta: 0, auditDelta: 0, outboxDelta: 0,
+          domainWriteDelta, auditDelta, outboxDelta,
         },
         stalePolicySession: {
           httpStatus: stalePolicySessionRes.status, noStore: noStore(stalePolicySessionRes),
-          domainWriteDelta: 0, auditDelta: 0, outboxDelta: 0,
+          domainWriteDelta, auditDelta, outboxDelta,
         },
         replayedOtp: {
           httpStatus: replayedOtpStatus, noStore: true,
-          domainWriteDelta: 0, auditDelta: 0, outboxDelta: 0,
+          domainWriteDelta, auditDelta, outboxDelta,
         },
         unprovedSecondBrowser: {
           httpStatus: unprovedSecondBrowserRes.status, noStore: noStore(unprovedSecondBrowserRes),
-          domainWriteDelta: 0, auditDelta: 0, outboxDelta: 0,
+          domainWriteDelta, auditDelta, outboxDelta,
         },
       }
     }
@@ -606,6 +612,10 @@ async function realProbe(container: ExecArgs["container"], db: Client) {
         assert.ok(totpSecret, `Case ${entry.id}: totpSecret required for verify_mfa`)
         assert.ok(challengeCookie && challengeCsrf,
           `Case ${entry.id}: challenge cookie+csrf required for verify_mfa`)
+        // Wait for fresh TOTP counter window if factor was enrolled in current window
+        while (Math.floor(Date.now() / 30000) <= lastTotpCounter) {
+          await new Promise(r => setTimeout(r, 200))
+        }
         // Valid TOTP code
         const validCode = totp(totpSecret!)
         const verifyRes = await httpsCall("/personal/challenge", "POST",
