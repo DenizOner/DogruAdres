@@ -61,22 +61,25 @@ function child(args:string[],env:NodeJS.ProcessEnv,stage:string,timeout=210000){
       "staff-browser-started","staff-strong-session","staff-grant",
       "first-closure","staff-owner-denied","owner-privacy-read","foreign-org-denied",
       "mail-queued","mail-link-created","foreign-link-denied","csrf-link-denied",
-      "owner-link-accepted","owner-link-replay","first-clock","first-appeal","second-closure",
+      "owner-link-accepted","owner-link-replay","first-clock",
+      "fc-get","fc-front","fc-select","fc-pause-wait","fc-choose","fc-appeal-wait","fc-refresh-click","fc-reason-wait","fc-form-eval","fc-input","fc-form-click","fc-status-wait","fc-appealed-get",
+      "first-appeal","second-closure",
       "second-clock","day11-request","day30-31","privacy-clean"
     ] as const
     const matched=[...text.matchAll(/STEP DEMIR364 scenario: ([a-z0-9-]+)/g)]
       .map(x=>x[1]).filter(x=>allowed.some(a=>a===x))
     const stageAt=matched.at(-1)??"none"
-    const localFrames=[...text.matchAll(/demir-364-owner-appeal-native\.accept\.ts:(\d+):(\d+)/g)]
-      .map(x=>({line:Number(x[1]),col:Number(x[2])}))
-      .filter(x=>Number.isSafeInteger(x.line)&&x.line>=1&&x.line<=1500&&
+    const localFrames=[...text.matchAll(/(?:demir-364-owner-appeal-native\.accept\.ts|b06-ui-browser\.ts|native-verification-browser\.ts):(\d+)(?::(\d+))?/g)]
+      .map(x=>({line:Number(x[1]),col:Number(x[2]??1)}))
+      .filter(x=>Number.isSafeInteger(x.line)&&x.line>=1&&x.line<=2500&&
         Number.isSafeInteger(x.col)&&x.col>=1&&x.col<=300)
     const ownFrame=localFrames.at(-1)
     const safeLine=ownFrame?String(ownFrame.line)+":"+String(ownFrame.col):"unavailable"
+    const safeErr=(text.match(/([A-Za-z]+Error):/)?.[1])??"unknown"
     throw Error("NATIVE_STAGE_FAIL "+stage+" exit="+String(task.status??"null")+
       " signal="+String(task.signal??"none")+
       " code="+String((task.error as NodeJS.ErrnoException|undefined)?.code??"none")+
-      " checkpoint="+stageAt+" own_source_line="+safeLine)
+      " checkpoint="+stageAt+" err="+safeErr+" own_source_line="+safeLine)
   }
   if(stage==="prepare")assert.ok(task.stdout?.includes("PASS DEMIR364 prepare"))
   if(stage==="activation")assert.ok(task.stdout?.includes("PASS B06 disposable native activation"))
@@ -470,25 +473,38 @@ export default async function({container}:any){
       new Date(start1).getTime(),10*86400000)
     assert.equal(new Date(first.body.final_review_until).getTime()-
       new Date(start1).getTime(),30*86400000)
+    marker("STEP DEMIR364 scenario: fc-get")
     // Real Chrome Owner UI is source-rendered; do not substitute a mocked DOM.
     await owner.send("Page.bringToFront")
+    marker("STEP DEMIR364 scenario: fc-front")
     await owner.select(orgs[2].name,"owner")
+    marker("STEP DEMIR364 scenario: fc-select")
     await owner.wait("!document.getElementById('store-owner-pause-panel').hidden")
+    marker("STEP DEMIR364 scenario: fc-pause-wait")
     const chosen=await owner.callFunction("function(store){const e=document.querySelector("+
       "'#store-owner-pause-form select[name=seller_id]');if(!e)return false;"+
       "if(!Array.from(e.options).some(o=>o.value===store))return false;"+
       "e.value=store;e.dispatchEvent(new Event('change',{bubbles:true}));return e.value===store}",
       nativeStores[0])
     assert.equal(chosen,true,"Native approved store must be selectable in Owner UI")
+    marker("STEP DEMIR364 scenario: fc-choose")
     await owner.wait("!document.getElementById('store-platform-appeal-panel').hidden")
+    marker("STEP DEMIR364 scenario: fc-appeal-wait")
     await owner.click("#store-platform-appeal-refresh")
+    marker("STEP DEMIR364 scenario: fc-refresh-click")
     await owner.wait("document.getElementById('store-platform-appeal-reason').textContent.includes('"+reason+"')")
+    marker("STEP DEMIR364 scenario: fc-reason-wait")
     assert.equal(await owner.eval("!document.querySelector('#store-platform-appeal-form button').disabled"),true)
+    marker("STEP DEMIR364 scenario: fc-form-eval")
     await owner.input("#store-platform-appeal-form textarea[name=reason]",
       "Demir synthetic Owner dispute with current strong MFA")
+    marker("STEP DEMIR364 scenario: fc-input")
     await owner.click("#store-platform-appeal-form button")
+    marker("STEP DEMIR364 scenario: fc-form-click")
     await owner.wait("document.getElementById('store-platform-appeal-status').textContent.includes('İtiraz kaydedildi')")
+    marker("STEP DEMIR364 scenario: fc-status-wait")
     assert.equal((await browserGet(owner,ownerUrl(nativeStores[0]))).body?.state,"appealed")
+    marker("STEP DEMIR364 scenario: fc-appealed-get")
     marker("STEP DEMIR364 scenario: first-appeal")
     const firstAudit=await q("select e.id,x.id outbox from da_audit_event e "+
       "join da_audit_outbox x on x.source_audit_event_id=e.id "+
