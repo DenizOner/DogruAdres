@@ -106,7 +106,7 @@ export async function verifyB05Ui(p: {
     const denied = async (org: typeof p.org1, role: "Admin" | "Member") => {
       // Wait for panel concealment. Do not rely on the specific status text because a concurrent
       // selectOrg (request guard) may skip the text assignment. Panel concealment is the contract.
-      await wait(`document.getElementById('memberships-status').textContent!=='Üyelikler yükleniyor…'&&document.querySelectorAll('#memberships p,#memberships button,#memberships select').length===0&&!(${visible('memberships-refresh')})&&!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})`, role + " denied and concealed")
+      await wait(`document.querySelectorAll('#memberships p,#memberships button,#memberships select').length===0&&!(${visible('memberships-refresh')})&&!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})`, role + " denied and concealed")
       const forbidden = await evaluate(`fetch('/personal/memberships?organization=' + ${JSON.stringify(org.id)}).then(r => r.status)`)
       assert.equal(forbidden, 403, role + " genuine HTTP403")
       assert.equal(await evaluate(`(()=>{const d=JSON.parse(document.getElementById('detail').textContent);return d.id===${JSON.stringify(org.id)}&&d.role===${JSON.stringify(role.toLowerCase())}})()`), true, role + " scope DOM")

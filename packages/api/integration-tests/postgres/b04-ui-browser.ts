@@ -84,7 +84,7 @@ export async function verifyB04Ui(p: {
     const managementConcealment = async (orgId: string, desc: string) => {
       // Wait for panel concealment — do NOT rely on specific status text because a concurrent
       // selectOrg (request guard) may skip setting the text. Concealment is the product contract.
-      await wait(`!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})&&!document.querySelector('#memberships button,#memberships select')&&document.getElementById('memberships-status').textContent!=='Üyelikler yükleniyor…'`, desc + " management panels concealed")
+      await wait(`!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})&&!document.querySelector('#memberships button,#memberships select')`, desc + " management panels concealed")
       // Prove the backend enforces the policy with a direct HTTP 403 probe.
       const forbidden = await evaluate(`fetch('/personal/memberships?organization=' + ${JSON.stringify(orgId)}).then(r => r.status)`)
       assert.equal(forbidden, 403, desc + " genuine HTTP403")
