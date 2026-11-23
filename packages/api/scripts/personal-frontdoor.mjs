@@ -10,7 +10,7 @@ import {signVisitorRateSource,VISITOR_RATE_HEADER} from '../src/utils/visitor-ra
 export function allowedPublicRequest(method,path){
   const personal={
     '/personal':['GET'], '/personal/session':['GET','POST','DELETE'],
-    '/personal/challenge':['POST'], '/personal/register':['POST'], '/personal/organizations':['GET'],
+    '/personal/challenge':['POST'], '/personal/register':['POST'], '/personal/organizations':['GET'], '/personal/vehicles':['GET'],
     '/personal/organization-applications':['GET','POST'],
     '/personal/platform':['GET','POST'], '/personal/platform/smtp':['GET','POST'], '/personal/memberships':['GET','POST'],
     '/personal/invitations':['GET','POST'], '/personal/mfa':['GET','POST'], '/personal/mfa/enroll':['POST'], '/personal/mfa/manage':['POST'],
