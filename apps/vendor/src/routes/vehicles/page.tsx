@@ -498,7 +498,6 @@ export default function VehiclesPage() {
             <BuildingStorefront className="w-5 h-5 text-gray-500" aria-hidden="true" />
             <div>
               <span className="font-semibold text-gray-900">{activeOrg.name}</span>
-              <span className="text-xs text-gray-500 ml-2">({activeOrg.id})</span>
             </div>
           </div>
           <div className="flex items-center gap-2">
