@@ -1,4 +1,5 @@
 import type {MedusaRequest,MedusaResponse} from '@medusajs/framework/http'
+import {MedusaError} from '@medusajs/framework/utils'
 import {z} from '@medusajs/framework/zod'
 import {access,csrf,enabled,sessionToken} from '../../personal/security'
 import {IdentityAccessDenied} from '../../../modules/dogruadres-access/identity-session'
@@ -35,6 +36,14 @@ const protectedOwnerInput = z.object({
 
 const input = z.union([protectedOwnerInput, roleChangeInput, revokeInput])
 
+// Returns true when the error should map to 403 Access denied.
+// Covers both module-level IdentityAccessDenied and service-level
+// MedusaError.Types.FORBIDDEN (e.g. personalChangeMembershipRole).
+function isForbidden(error: unknown): boolean {
+  return error instanceof IdentityAccessDenied ||
+    (error instanceof MedusaError && error.type === MedusaError.Types.FORBIDDEN)
+}
+
 export const AUTHENTICATE = false
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
@@ -48,8 +57,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.json({ memberships: memberships.map(({ id, person_id, role, status, protected_owner }) =>
       ({ id, person_id, role, status, protected_owner })) })
   } catch (error) {
-    return res.status(error instanceof IdentityAccessDenied ? 403 : 503)
-      .json({ message: error instanceof IdentityAccessDenied ? 'Access denied' : 'Unavailable' })
+    return res.status(isForbidden(error) ? 403 : 503)
+      .json({ message: isForbidden(error) ? 'Access denied' : 'Unavailable' })
   }
 }
 
@@ -86,7 +95,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     )
     return res.json({ membership })
   } catch (error) {
-    return res.status(error instanceof IdentityAccessDenied ? 403 : 503)
-      .json({ message: error instanceof IdentityAccessDenied ? 'Access denied' : 'Unavailable' })
+    return res.status(isForbidden(error) ? 403 : 503)
+      .json({ message: isForbidden(error) ? 'Access denied' : 'Unavailable' })
   }
 }

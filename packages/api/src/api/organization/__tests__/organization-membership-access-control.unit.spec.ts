@@ -1,4 +1,5 @@
 import { access, csrf, enabled, sessionToken } from "../../personal/security"
+import { MedusaError } from "@medusajs/framework/utils"
 import { GET, POST } from "../memberships/route"
 
 jest.mock("../../personal/security", () => ({
@@ -150,6 +151,27 @@ describe("organization memberships route — HTTP contract (moved from /personal
       req.body = { organization_id: orgId, membership_id: memberId }
       await POST(req, res)
       expect(res.status).toHaveBeenCalledWith(403)
+    })
+
+    it("maps MedusaError FORBIDDEN from service to 403 Access denied — not 503", async () => {
+      // personalChangeMembershipRole throws MedusaError.Types.FORBIDDEN when the
+      // caller is not an Owner with membership.manage permission. The route must
+      // return 403 {message:'Access denied'}, not 503, so non-disclosure is maintained.
+      mockService.personalChangeMembershipRole.mockRejectedValueOnce(
+        new MedusaError(MedusaError.Types.FORBIDDEN, "Access denied")
+      )
+      req.body = { organization_id: orgId, membership_id: memberId, role: "member" }
+      await POST(req, res)
+      expect(res.status).toHaveBeenCalledWith(403)
+      expect(res.json).toHaveBeenCalledWith({ message: "Access denied" })
+    })
+
+    it("maps unexpected service error to 503 Unavailable — not 403", async () => {
+      mockService.personalRevokeMembership.mockRejectedValueOnce(new Error("DB connection lost"))
+      req.body = { organization_id: orgId, membership_id: memberId }
+      await POST(req, res)
+      expect(res.status).toHaveBeenCalledWith(503)
+      expect(res.json).toHaveBeenCalledWith({ message: "Unavailable" })
     })
   })
 })
