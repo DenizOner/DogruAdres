@@ -39,7 +39,7 @@ describe("bearer URL privacy (executed page scripts, not backend/browser accepta
     // Legitimate in-page password/MFA transitions and unrelated URL edits do not reread/drop the secret.
     url.search = "?organization=other"
     await click()
-    expect(api).toHaveBeenCalledWith("invitations", { method: "POST", body: JSON.stringify({ action: "accept", token }) })
+    expect(api).toHaveBeenCalledWith("/organization/invitations", { method: "POST", body: JSON.stringify({ action: "accept", token }) })
     expect(runInContext("invitationToken", context)).toBeNull()
     await click()
     expect(api).toHaveBeenCalledTimes(1)
