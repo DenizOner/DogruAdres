@@ -1,4 +1,4 @@
-import { GET, POST } from "../company-launcher/route"
+import { GET, POST } from "../../organization/launcher/route"
 import { access, csrf, enabled, sessionToken } from "../security"
 import { CompanyLauncherConflict, CompanyLauncherInvalid } from "../../../modules/dogruadres-access/company-launcher"
 

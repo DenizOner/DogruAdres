@@ -1,5 +1,5 @@
 import { access, csrf, enabled, sessionToken } from "../security"
-import { GET, POST } from "../memberships/route"
+import { GET, POST } from "../../organization/memberships/route"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { createContext, runInContext } from "node:vm"

@@ -1,4 +1,4 @@
-import { GET, POST } from '../notifications/route'
+import { GET, POST } from '../../organization/notifications/route'
 import { access, csrf, enabled, sessionToken } from '../security'
 import { IdentityAccessDenied, IdentitySessions } from '../../../modules/dogruadres-access/identity-session'
 import { PersonalNotifications } from '../../../modules/dogruadres-access/personal-notifications'

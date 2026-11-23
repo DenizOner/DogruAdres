@@ -56,7 +56,7 @@ export async function verifyB22CoownerNativeMemberReadback(input:{
   const readBell=async(actor:B06Chrome,selectedOrg="")=>
     actor.callFunction("async function(org){"+
       "const suffix=org?'?organization='+encodeURIComponent(org):'';"+
-      "const r=await fetch('/personal/notifications'+suffix,{cache:'no-store'});"+
+      "const r=await fetch('/organization/notifications'+suffix,{cache:'no-store'});"+
       "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}}",
       selectedOrg)
   const [ownReceipt]=await q("select id,read_at from da_notification_receipt "+
@@ -81,7 +81,7 @@ export async function verifyB22CoownerNativeMemberReadback(input:{
   const noOrgRead=await browser.callFunction("async function(id){"+
     "const s=await fetch('/personal/session',{cache:'no-store'});"+
     "const session=await s.json();"+
-    "const r=await fetch('/personal/notifications',{method:'POST',"+
+    "const r=await fetch('/organization/notifications',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
       "body:JSON.stringify({id}),cache:'no-store'});"+
     "return {status:r.status,body:await r.json()}}",ownReceipt.id)
@@ -559,7 +559,7 @@ export async function verifyB22LateProtectedOwnerClosingNotice(input:{
     await browser.select(org.name,"owner")
     await browser.ready()
     const postBefore=browser.http.filter((item:any)=>
-      item.method==="POST"&&item.path==="/personal/memberships"&&
+      item.method==="POST"&&item.path==="/organization/memberships"&&
       item.status===200).length
     await browser.button("Korumalı Owner yap "+memberMembershipId)
     await until(async()=>{
@@ -570,7 +570,7 @@ export async function verifyB22LateProtectedOwnerClosingNotice(input:{
         rows[0].protected_owner===true&&rows[0].status==="active"
     },20000,"real Owner HTTPS promotion before late closing notice")
     await until(async()=>browser.http.filter((item:any)=>
-      item.method==="POST"&&item.path==="/personal/memberships"&&
+      item.method==="POST"&&item.path==="/organization/memberships"&&
       item.status===200).length>=postBefore+1,
     20000,"real protected Owner promotion POST 200")
     const promotion=await q("select e.id,e.actor_person_id,"+

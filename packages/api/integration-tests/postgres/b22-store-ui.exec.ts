@@ -433,7 +433,7 @@ async function verifyOwnerClosingBrowser(input:{
       where audit_event_id=$1 order by person_id`,[auditId])
     assert.deepEqual(recipients,expectedOwners,
       "Exactly one private closing notice for EACH active protected Owner")
-    const route="/personal/notifications?organization="+encodeURIComponent(organizations[0].id)
+    const route="/organization/notifications?organization="+encodeURIComponent(organizations[0].id)
     const readOwner=async(b:B06Chrome)=>b.callFunction(
       "async function(path){const r=await fetch(path,{cache:'no-store'});"+
       "return {status:r.status,body:await r.json()}}",route)
@@ -1756,7 +1756,7 @@ async function verifyMembershipNonDisclosure({
   const before=await snapshot()
   for(const target of targets){
     const response=await browser.eval(`(async()=>{
-      const r=await fetch('/personal/memberships',{method:'POST',
+      const r=await fetch('/organization/memberships',{method:'POST',
         headers:{'content-type':'application/json','x-csrf-token':${JSON.stringify(session.body.csrf_token)}},
         body:JSON.stringify({action:'role',organization_id:${JSON.stringify(organizationId)},
           membership_id:${JSON.stringify(target.id)},role:'member'})})
@@ -1804,7 +1804,7 @@ async function verifyOwnerMembershipManagePolicy({
       await browser.wait("document.visibilityState==='visible'")
       const ownerList=await browser.eval(`(async()=>{
         const org=${JSON.stringify(organizationId)};
-        return (await fetch('/personal/memberships?organization='+org)).status;
+        return (await fetch('/organization/memberships?organization='+org)).status;
       })()`)
       assert.equal(ownerList,200,
         "Legacy settings cannot narrow current protected Owner membership access")
@@ -1836,7 +1836,7 @@ async function verifyOwnerMembershipManagePolicy({
       const org=${JSON.stringify(organizationId)}
       const member=${JSON.stringify(targetMembershipId)}
       const session=await(await fetch('/personal/session')).json()
-      const response=await fetch('/personal/memberships',{method:'POST',
+      const response=await fetch('/organization/memberships',{method:'POST',
         headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
         body:JSON.stringify({action:'role',organization_id:org,membership_id:member,role:'member'})})
       return {status:response.status,
@@ -1883,7 +1883,7 @@ async function verifyOwnerAuditTimelinePolicy({
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     const ownerDefault=await browser.eval(`(async()=>{
-      const r=await fetch('/personal/audit-timeline?organization='+${JSON.stringify(organizationId)})
+      const r=await fetch('/organization/audit-timeline?organization='+${JSON.stringify(organizationId)})
       return r.status
     })()`)
     assert.equal(ownerDefault,200,"Default protected Owner can read scoped audit timeline")
@@ -1893,7 +1893,7 @@ async function verifyOwnerAuditTimelinePolicy({
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=
         "buyer.purchase,products.edit,invitation.manage,membership.manage,membership.list"
       const deniedOwner=await browser.eval(`(async()=>{
-        const r=await fetch('/personal/audit-timeline?organization='+${JSON.stringify(organizationId)})
+        const r=await fetch('/organization/audit-timeline?organization='+${JSON.stringify(organizationId)})
         const body=await r.json()
         return {status:r.status,privateItems:Object.hasOwn(body,'items'),message:body.message}
       })()`)
@@ -1902,7 +1902,7 @@ async function verifyOwnerAuditTimelinePolicy({
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       const adminRead=await reviewer.eval(`(async()=>{
-        const r=await fetch('/personal/audit-timeline?organization='+${JSON.stringify(organizationId)})
+        const r=await fetch('/organization/audit-timeline?organization='+${JSON.stringify(organizationId)})
         const body=await r.json()
         return {status:r.status,privateItems:Object.hasOwn(body,'items')}
       })()`)
@@ -1916,7 +1916,7 @@ async function verifyOwnerAuditTimelinePolicy({
       await browser.wait("document.visibilityState==='visible'")
     }
     const restoredOwner=await browser.eval(`(async()=>{
-      return (await fetch('/personal/audit-timeline?organization='+${JSON.stringify(organizationId)})).status
+      return (await fetch('/organization/audit-timeline?organization='+${JSON.stringify(organizationId)})).status
     })()`)
     assert.equal(restoredOwner,200,"Restored Owner role can again read audit timeline")
     assert.deepEqual(await q(`select id,role,status,protected_owner,revoked_at
@@ -3131,7 +3131,7 @@ async function verifyStaffReopensSuspendedStore(
     await owner.wait("document.getElementById('org-stores').textContent.includes("+
       JSON.stringify(before.name)+")")
     const notification=await owner.callFunction(
-      "async function(org){const r=await fetch('/personal/notifications?organization='+encodeURIComponent(org));return {status:r.status,body:await r.json()}}",
+      "async function(org){const r=await fetch('/organization/notifications?organization='+encodeURIComponent(org));return {status:r.status,body:await r.json()}}",
       organizationId)
     assert.equal(notification.status,200,"The current protected Owner may read private reactivation notice")
     assert.ok(notification.body.notifications.some((n:any)=>
@@ -4231,7 +4231,7 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
   assert.equal(match.seller_status,"terminated")
   assert.equal(match.rejection_reason,reason)
   const notice=await browser.callFunction("async function(org){"+
-    "const r=await fetch('/personal/notifications?organization='+encodeURIComponent(org));"+
+    "const r=await fetch('/organization/notifications?organization='+encodeURIComponent(org));"+
     "return {status:r.status,body:await r.json()}}",x.org)
   assert.equal(notice.status,200)
   assert.equal(notice.body.notifications.filter((n:any)=>
@@ -6411,7 +6411,7 @@ export default async function({container}:any){
       "Organization provision and Store approve grants must not authorize policy changes")
     // A platform reviewer with no membership in Alpha cannot read its private
     // notifications, even if they hold organization.provision/store.approve.
-    const noticePath="/personal/notifications?organization="+encodeURIComponent(organizations[0].id)
+    const noticePath="/organization/notifications?organization="+encodeURIComponent(organizations[0].id)
     assert.equal(await reviewer.callFunction(
       "async function(path){return (await fetch(path)).status}",noticePath),403,
       "Platform Staff grant alone must not reveal a company's private notices")
@@ -6798,7 +6798,7 @@ export default async function({container}:any){
       returning id`,[temporaryNotificationCoOwner.id,organizations[0].id,B.person])
     assert.equal(formerOwnerMember.length,1)
     const privateAfterRevoke=await reviewer.callFunction(
-      "async function(){const r=await fetch('/personal/notifications');"+
+      "async function(){const r=await fetch('/organization/notifications');"+
       "return {status:r.status,body:await r.json()}}")
     assert.equal(privateAfterRevoke.status,200)
     assert.equal(privateAfterRevoke.body.notifications.some((n:any)=>
@@ -6809,7 +6809,7 @@ export default async function({container}:any){
     assert.ok(staleCompanyNotice?.id)
     assert.equal(await reviewer.callFunction(
       "async function(id){const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/notifications',{method:'POST',headers:{"+
+      "const r=await fetch('/organization/notifications',{method:'POST',headers:{"+
       "'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify({id})});return r.status}",staleCompanyNotice.id),403,
       "Former Owner now ordinary Member cannot mark an old Owner-only notice read")
@@ -7233,7 +7233,7 @@ export default async function({container}:any){
           and e.role_context='member'`,[delegatedDraft.id]))[0].n,1,
         "Exactly one auditable delegated Member draft creation")
       const memberNotices=await browser.callFunction(
-        "async function(org){const r=await fetch('/personal/notifications?organization='+encodeURIComponent(org));"+
+        "async function(org){const r=await fetch('/organization/notifications?organization='+encodeURIComponent(org));"+
         "return {status:r.status,body:await r.json()}}",betaScope)
       assert.equal(memberNotices.status,200)
       assert.ok(memberNotices.body.notifications.some((n:any)=>
@@ -7331,7 +7331,7 @@ export default async function({container}:any){
         [delegatedDraft.id]),[{name:delegatedName,version:1}],
         "Revocation must retain unchanged Organization draft")
       const revokedNotice=await browser.callFunction(
-        "async function(org){const r=await fetch('/personal/notifications?organization='+encodeURIComponent(org));"+
+        "async function(org){const r=await fetch('/organization/notifications?organization='+encodeURIComponent(org));"+
         "return {status:r.status,body:await r.json()}}",betaScope)
       assert.equal(revokedNotice.status,200)
       assert.ok(revokedNotice.body.notifications.some((n:any)=>
@@ -7923,7 +7923,7 @@ export default async function({container}:any){
     assert.equal(firstRejoinGrant.body.status,"active")
     const ended=await browser.callFunction(
       "async function(org,id){const session=await(await fetch('/personal/session')).json();"+
-      "const response=await fetch('/personal/memberships',"+
+      "const response=await fetch('/organization/memberships',"+
       "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
       "body:JSON.stringify({organization_id:org,membership_id:id})});"+
       "return {status:response.status,body:await response.json()}}",
@@ -7963,7 +7963,7 @@ export default async function({container}:any){
       const safeState=await reviewer.eval("({queryPresent:!!location.search,documentHidden:document.hidden,loginHidden:document.getElementById('login').hidden,workspaceHidden:document.getElementById('workspace').hidden,bellHidden:document.getElementById('notification-bell').hidden})")
       const safeHttp=reviewer.http.filter((h:any)=>
         ['/personal','/personal/session','/personal/organizations',
-         '/personal/notifications','/personal/links'].includes(h.path))
+         '/organization/notifications','/personal/links'].includes(h.path))
         .slice(-12).map((h:any)=>({path:h.path,status:h.status}))
       throw Error("B22 member exit personal inbox UI not ready: "+
         JSON.stringify({safeState,safeHttp}))
@@ -7974,7 +7974,7 @@ export default async function({container}:any){
     assert.equal(exitedInboxText.includes(rejoinOrg.name),false,
       "Former Member's private bell must not reveal exited Organization name")
     const exitFeed=await reviewer.callFunction(
-      "async function(){const r=await fetch('/personal/notifications');return {status:r.status,body:await r.json()}}")
+      "async function(){const r=await fetch('/organization/notifications');return {status:r.status,body:await r.json()}}")
     assert.equal(exitFeed.status,200)
     const exitNotice=exitFeed.body.notifications.find((n:any)=>n.id===exitNoticeId)
     assert.ok(exitNotice,"Former Member must see personal exit notification")
@@ -7982,18 +7982,18 @@ export default async function({container}:any){
     assert.equal(exitNotice.context,null,
       "Former Organization identity must not cross exited membership boundary")
     assert.equal(await reviewer.callFunction(
-      "async function(org){return (await fetch('/personal/notifications?organization='+encodeURIComponent(org))).status}",
+      "async function(org){return (await fetch('/organization/notifications?organization='+encodeURIComponent(org))).status}",
       rejoinOrg.id),403,
       "Former Member must not recover scoped Organization notifications")
     await browser.send("Page.bringToFront")
     assert.equal(await browser.callFunction(
-      "async function(id){const s=await(await fetch('/personal/session')).json();const r=await fetch('/personal/notifications',"+
+      "async function(id){const s=await(await fetch('/personal/session')).json();const r=await fetch('/organization/notifications',"+
       "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify({id})});return r.status}",exitNoticeId),403,
       "Even a protected Owner must not read another Person's private receipt")
     await reviewer.send("Page.bringToFront")
     const exitRead=await reviewer.callFunction(
-      "async function(id){const s=await(await fetch('/personal/session')).json();const r=await fetch('/personal/notifications',"+
+      "async function(id){const s=await(await fetch('/personal/session')).json();const r=await fetch('/organization/notifications',"+
       "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify({id})});return r.status}",exitNoticeId)
     assert.equal(exitRead,200,"Recipient can mark ended-membership notice as read")
@@ -11264,7 +11264,7 @@ export default async function({container}:any){
     const adminAuditBefore=await q(`select id from da_audit_event where organization_id=$1 order by id`,[organizations[0].id])
     const attemptedAdmin=await browser.eval(`(async()=>{
       const session=await(await fetch('/personal/session')).json()
-      const response=await fetch('/personal/memberships',{method:'POST',
+      const response=await fetch('/organization/memberships',{method:'POST',
         headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
         body:JSON.stringify({action:'role',organization_id:${JSON.stringify(organizations[0].id)},
           membership_id:${JSON.stringify(alphaMember.id)},role:'admin'})})
@@ -11281,7 +11281,7 @@ export default async function({container}:any){
       organization_id=$1 and resource='invitation' order by id`,[organizations[0].id])
     const forbiddenInvite=await browser.eval(`(async()=>{
       const session=await(await fetch('/personal/session')).json()
-      const response=await fetch('/personal/invitations',{method:'POST',
+      const response=await fetch('/organization/invitations',{method:'POST',
         headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
         body:JSON.stringify({action:'create',organization_id:${JSON.stringify(organizations[0].id)},
           email:'retired-admin-invite@example.invalid',role:'admin'})})
@@ -11659,17 +11659,17 @@ export default async function({container}:any){
           return response.status
         }
         return {
-          memberships:(await fetch('/personal/memberships?organization='+org)).status,
-          invitations:(await fetch('/personal/invitations?organization='+org)).status,
-          audit:(await fetch('/personal/audit-timeline?organization='+org)).status,
+          memberships:(await fetch('/organization/memberships?organization='+org)).status,
+          invitations:(await fetch('/organization/invitations?organization='+org)).status,
+          audit:(await fetch('/organization/audit-timeline?organization='+org)).status,
           stores:(await fetch('/personal/organization-stores?organization='+org)).status,
-          createInvite:await post('/personal/invitations',{action:'create',
+          createInvite:await post('/organization/invitations',{action:'create',
             organization_id:org,email:'unprotected-owner@example.invalid',role:'member'}),
-          revokeMember:await post('/personal/memberships',{action:'revoke',
+          revokeMember:await post('/organization/memberships',{action:'revoke',
             organization_id:org,membership_id:membership}),
-          changeRole:await post('/personal/memberships',{action:'role',
+          changeRole:await post('/organization/memberships',{action:'role',
             organization_id:org,membership_id:membership,role:'member'}),
-          revokeInvite:await post('/personal/invitations',{action:'revoke',
+          revokeInvite:await post('/organization/invitations',{action:'revoke',
             organization_id:org,invitation_id:invitation})
         }
       })()`)
@@ -11740,7 +11740,7 @@ export default async function({container}:any){
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
       const ownerInvitationList=await browser.eval(`(async()=>{
-        return (await fetch('/personal/invitations?organization='+${JSON.stringify(organizations[0].id)})).status;
+        return (await fetch('/organization/invitations?organization='+${JSON.stringify(organizations[0].id)})).status;
       })()`)
       assert.equal(ownerInvitationList,200,
         "Legacy settings cannot remove protected Owner invitation access")
@@ -11759,7 +11759,7 @@ export default async function({container}:any){
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=oldInvitationActions
     }
     const policyRestored=await browser.eval(`(async()=>{
-      return (await fetch('/personal/invitations?organization='+${JSON.stringify(organizations[0].id)})).status
+      return (await fetch('/organization/invitations?organization='+${JSON.stringify(organizations[0].id)})).status
     })()`)
     assert.equal(policyRestored,200,"Restored policy permits Owner invitation read")
     // Positive authorization for the *same* pending invitation. The real
@@ -11769,7 +11769,7 @@ export default async function({container}:any){
     await browser.wait("document.visibilityState==='visible'")
     const authorizedRevoke=await browser.eval(`(async()=>{
       const session=await(await fetch('/personal/session')).json()
-      const response=await fetch('/personal/invitations',{
+      const response=await fetch('/organization/invitations',{
         method:'POST',
         headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
         body:JSON.stringify(${JSON.stringify({
@@ -11813,8 +11813,8 @@ export default async function({container}:any){
     const protectedReads=await browser.eval(`(async()=>{
       const org=${JSON.stringify(organizations[0].id)}
       return {
-        memberships:(await fetch('/personal/memberships?organization='+org)).status,
-        invitations:(await fetch('/personal/invitations?organization='+org)).status
+        memberships:(await fetch('/organization/memberships?organization='+org)).status,
+        invitations:(await fetch('/organization/invitations?organization='+org)).status
       }
     })()`)
     assert.deepEqual(protectedReads,{memberships:200,invitations:200},
@@ -11835,7 +11835,7 @@ export default async function({container}:any){
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
       const protectedList=await browser.eval(`(async()=>{
-        const response=await fetch('/personal/memberships?organization='+${JSON.stringify(organizations[0].id)})
+        const response=await fetch('/organization/memberships?organization='+${JSON.stringify(organizations[0].id)})
         const body=await response.json()
         return {status:response.status,privateRows:Object.hasOwn(body,'memberships')}
       })()`)
@@ -11852,16 +11852,16 @@ export default async function({container}:any){
             body:JSON.stringify(payload)})
           return r.status
         }
-        const memberships=await fetch('/personal/memberships?organization='+org)
-        const invitations=await fetch('/personal/invitations?organization='+org)
+        const memberships=await fetch('/organization/memberships?organization='+org)
+        const invitations=await fetch('/organization/invitations?organization='+org)
         return {
           memberships:memberships.status,
           memberRows:Object.hasOwn(await memberships.json(),'memberships'),
           invitations:invitations.status,
           invitationRows:Object.hasOwn(await invitations.json(),'invitations'),
-          roleChange:await post('/personal/memberships',{
+          roleChange:await post('/organization/memberships',{
             action:'role',organization_id:org,membership_id:${JSON.stringify(alphaMember.id)},role:'member'}),
-          inviteCreate:await post('/personal/invitations',{
+          inviteCreate:await post('/organization/invitations',{
             action:'create',organization_id:org,email:'admin-role-only@example.invalid',role:'member'})
         }
       })()`)
@@ -11879,7 +11879,7 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 explicit permission: protected Owner reads 200; role-only Admin private reads, role edit and invitation create 403; no PG16 writes\n")
 
     const listPolicyRestored=await browser.eval(`(async()=>{
-      return (await fetch('/personal/memberships?organization='+${JSON.stringify(organizations[0].id)})).status
+      return (await fetch('/organization/memberships?organization='+${JSON.stringify(organizations[0].id)})).status
     })()`)
     assert.equal(listPolicyRestored,200,"Owner membership.list returns after role policy restoration")
     assert.deepEqual(await q(`select id,status,revoked_at from da_organization_invitation
@@ -12490,7 +12490,7 @@ export default async function({container}:any){
       }
       let ownerRevokeFinished=false
       const ownerRevokePending=reviewer.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/memberships',{method:'POST',"+
+        "const r=await fetch('/organization/memberships',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify("+JSON.stringify(ownerRevokeRequest)+")});"+
         "return {status:r.status,body:await r.json()}})()"
@@ -13991,7 +13991,7 @@ export default async function({container}:any){
       assert.equal(await customerReadPolicy(),200,
         "Explicit task plus real strong Customer session may read platform policy")
       assert.equal(await signupChrome.callFunction(
-        "async function(org){return (await fetch('/personal/audit-timeline?organization='+encodeURIComponent(org))).status}",
+        "async function(org){return (await fetch('/organization/audit-timeline?organization='+encodeURIComponent(org))).status}",
         organizations[0].id),403,
         "Unrelated Person cannot read company audit despite a platform Staff task")
       assert.deepEqual(await q(

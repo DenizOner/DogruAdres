@@ -1,4 +1,4 @@
-import { GET } from "../audit-timeline/route"
+import { GET } from "../../organization/audit-timeline/route"
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { encodeCursor, cursorKey } from "../../dogruadres/audit-timeline"
 

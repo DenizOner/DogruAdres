@@ -86,7 +86,7 @@ export default async function({container}:ExecArgs){
    c.phase=phase;await strong(c)
    const prev=(await q('select role,status,protected_owner from da_organization_membership where id=$1',[target.id]))[0],n=await count('da_audit_outbox')
    await c.button((role==='owner'?'Korumalı Owner yap ':'Owner rolünü Admin yap ')+target.id)
-   await until(async()=>c.http.some(x=>x.phase===phase&&x.method==='POST'&&x.path==='/personal/memberships'&&x.status===200)&&await count('da_audit_outbox')===n+1,20000,'B07 native membership mutation')
+   await until(async()=>c.http.some(x=>x.phase===phase&&x.method==='POST'&&x.path==='/organization/memberships'&&x.status===200)&&await count('da_audit_outbox')===n+1,20000,'B07 native membership mutation')
    const next=(await q('select role,status,protected_owner from da_organization_membership where id=$1',[target.id]))[0]
    assert.equal(next.role,role);assert.equal(next.status,'active');assert.equal(next.protected_owner,role==='owner')
    const events=await q("select e.id,e.actor_id,e.actor_person_id,e.organization_id,e.previous_values,e.new_values,(select count(*)::int from da_audit_outbox o where o.source_audit_event_id=e.id) canonical,(select count(*)::int from da_security_outbox o where o.audit_event_id=e.id) security from da_audit_event e where e.action='organization.membership_changed' and e.target_id=$1 order by e.created_at",[target.id])

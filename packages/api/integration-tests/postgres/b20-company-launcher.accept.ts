@@ -6,13 +6,13 @@ type Db=(sql:string,params?:unknown[])=>Promise<any[]>
 type Reply={status:number;body:any}
 const get=async(browser:B06Chrome,org:string):Promise<Reply>=>
   browser.callFunction(
-    "async function(org){const r=await fetch('/personal/company-launcher?organization='+"+
+    "async function(org){const r=await fetch('/organization/launcher?organization='+"+
     "encodeURIComponent(org),{cache:'no-store'});return {status:r.status,body:await r.json()}}",org)
 const post=async(browser:B06Chrome,data:unknown,badCsrf=false):Promise<Reply>=>
   browser.callFunction(
     "async function(payload){const arg=JSON.parse(payload);"+
     "const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/company-launcher',{method:'POST',"+
+    "const r=await fetch('/organization/launcher',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':arg.bad?'not-csrf':s.csrf_token},"+
     "body:JSON.stringify(arg.data)});return {status:r.status,body:await r.json()}}",
     JSON.stringify({data,bad:badCsrf}))
@@ -84,7 +84,7 @@ export async function verifyB20CompanyLauncher(input:{
       collapsed_ids:[],expected_version:0
     })).status,400,"Legacy Vendor navigation cannot become a company app")
     const anonymous=await owner.callFunction(
-      "async function(org){const r=await fetch('/personal/company-launcher?organization='+"+
+      "async function(org){const r=await fetch('/organization/launcher?organization='+"+
       "encodeURIComponent(org),{credentials:'omit',cache:'no-store'});return r.status}",
       organizationId)
     assert.equal(anonymous,403,"No-cookie reader denied")
