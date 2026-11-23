@@ -1502,7 +1502,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     try {
       const q = new URLSearchParams({ organization: org, limit: '25' });
       if (cursor) q.set('cursor', cursor);
-      const data = await api('audit-timeline?' + q.toString());
+      const data = await api('/organization/audit-timeline?' + q.toString());
       if (reqId !== timelineRequest || timelineOrg !== org || currentOrg !== org) return;
       if (!append && (!data.items || data.items.length === 0)) {
         timelineCursor = null;
@@ -1631,7 +1631,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     root.replaceChildren();
     el('pending-invitations-status').textContent='Davetler yükleniyor…';
     try{
-      const data=await api('invitations?organization='+encodeURIComponent(org));
+      const data=await api('/organization/invitations?organization='+encodeURIComponent(org));
       if(request!==organizationRequest||currentOrg!==org)return;
       if(!Array.isArray(data.invitations))throw new Error('Invalid invitation response');
       for(const invite of data.invitations){
@@ -1644,7 +1644,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           if(request!==organizationRequest||currentOrg!==org)return;
           button.disabled=true;
           try{
-            const outcome=await api('invitations',{method:'POST',body:JSON.stringify({
+            const outcome=await api('/organization/invitations',{method:'POST',body:JSON.stringify({
               action:'revoke',organization_id:org,invitation_id:invite.id
             })});
             if(request!==organizationRequest||currentOrg!==org)return;
@@ -1711,7 +1711,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('company-launcher-list').replaceChildren();
     if(!person||!org||document.hidden)return;
     try{
-      const data=await api('company-launcher?organization='+encodeURIComponent(org));
+      const data=await api('/organization/launcher?organization='+encodeURIComponent(org));
       if(seq!==companyLauncherRequest||orgRequest!==organizationRequest||
          epoch!==viewEpoch||person!==currentPersonId||currentOrg!==org||
          document.hidden||el('workspace').hidden)return;
@@ -1734,7 +1734,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     companyLauncherBusy=true;
     el('company-launcher-reset').disabled=true;
     try{
-      const saved=await api('company-launcher',{method:'POST',body:JSON.stringify({
+      const saved=await api('/organization/launcher',{method:'POST',body:JSON.stringify({
         organization:org,app_ids:apps,collapsed_ids:collapsed,
         expected_version:current.version
       })});
@@ -4670,7 +4670,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   async function memberships(org,request){
     if(request!==organizationRequest||currentOrg!==org)return;el('memberships').replaceChildren();
     el('memberships').ariaBusy='true';el('memberships-status').textContent='Üyelikler yükleniyor…';el('memberships-refresh').disabled=true;
-    try{const data=await api('memberships?organization='+encodeURIComponent(org));if(request!==organizationRequest||currentOrg!==org)return;
+    try{const data=await api('/organization/memberships?organization='+encodeURIComponent(org));if(request!==organizationRequest||currentOrg!==org)return;
       if(!Array.isArray(data.memberships))throw new Error('Invalid membership response');
       currentMemberships=data.memberships.map(m=>({id:m.id,person_id:m.person_id,role:m.role,status:m.status,protected_owner:m.protected_owner===true?true:m.protected_owner===false?false:null}));
       const canManageOwners=data.memberships.some(m=>m.person_id===currentPersonId&&m.role==='owner'&&m.protected_owner===true&&m.status==='active');
@@ -4682,7 +4682,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             const rb=document.createElement('button');rb.textContent='Eski şirket Admin kaydını Üye yap '+m.id;
             rb.onclick=async()=>{
               if(request!==organizationRequest||currentOrg!==org)return;rb.disabled=true;
-              try{await api('memberships',{method:'POST',body:JSON.stringify({organization_id:org,membership_id:m.id,role:'member'})});if(request!==organizationRequest)return;await selectOrg(org);status('Eski Admin kaydı Üye olarak güncellendi')}
+              try{await api('/organization/memberships',{method:'POST',body:JSON.stringify({organization_id:org,membership_id:m.id,role:'member'})});if(request!==organizationRequest)return;await selectOrg(org);status('Eski Admin kaydı Üye olarak güncellendi')}
               catch(e){if(request!==organizationRequest)return;status(e.message);if(!e.uncertain)rb.disabled=false}
             };
             el('memberships').append(rb);
@@ -4691,7 +4691,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             const ob=document.createElement('button');ob.textContent='Korumalı Owner yap '+m.id;
             ob.onclick=async()=>{
               if(request!==organizationRequest||currentOrg!==org)return;ob.disabled=true;
-              try{await api('memberships',{method:'POST',body:JSON.stringify({action:'protected_owner',organization_id:org,membership_id:m.id,role:'owner'})});if(request!==organizationRequest)return;await selectOrg(org);status('Owner üyeliği güncellendi')}
+              try{await api('/organization/memberships',{method:'POST',body:JSON.stringify({action:'protected_owner',organization_id:org,membership_id:m.id,role:'owner'})});if(request!==organizationRequest)return;await selectOrg(org);status('Owner üyeliği güncellendi')}
               catch(e){if(request!==organizationRequest)return;status(e.message);if(!e.uncertain)ob.disabled=false}
             };
             el('memberships').append(ob);
@@ -4705,7 +4705,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           }else{
             const b=document.createElement('button');b.textContent='Üyeliği iptal et '+m.id;b.onclick=async()=>{
               if(request!==organizationRequest||currentOrg!==org)return;b.disabled=true;
-              try{await api('memberships',{method:'POST',body:JSON.stringify({organization_id:org,membership_id:m.id})});if(request!==organizationRequest)return;await selectOrg(org)}
+              try{await api('/organization/memberships',{method:'POST',body:JSON.stringify({organization_id:org,membership_id:m.id})});if(request!==organizationRequest)return;await selectOrg(org)}
               catch(e){if(request!==organizationRequest)return;status(e.message);if(!e.uncertain)b.disabled=false}
             };el('memberships').append(b);
           }}
@@ -5056,7 +5056,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       const inviteData=new FormData(e.target);
       const email=inviteData.get('email');
       const role=inviteData.get('role');
-      const res=await api('invitations',{method:'POST',body:JSON.stringify({action:'create',organization_id:orgId,email,role})});
+      const res=await api('/organization/invitations',{method:'POST',body:JSON.stringify({action:'create',organization_id:orgId,email,role})});
       if(res.delivery?.status==='sent'){
         el('invite-result').textContent='Davet oluşturuldu. E-posta gönderim için kabul edildi.';
         status('Davet e-postası gönderim için kabul edildi');
@@ -5080,7 +5080,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const btn=el('accept-invitation-btn');btn.disabled=true;
     el('invitation-result').textContent='Davet kabul ediliyor...';
     try{
-      await api('invitations',{method:'POST',body:JSON.stringify({action:'accept',token})});
+      await api('/organization/invitations',{method:'POST',body:JSON.stringify({action:'accept',token})});
       // Discard the consumed token from page memory before refreshing.
       invitationToken=null;
       await load();

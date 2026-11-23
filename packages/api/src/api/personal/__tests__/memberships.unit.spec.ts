@@ -302,7 +302,7 @@ describe("personal memberships route", () => {
       const done = h.select(id)
       h.state.pending.filter(p => p.path === `organizations?id=${id}`).at(-1)!.resolve({ organizations: [{ id, name: "Test Org", role }] })
       await settle()
-      return { done, read: h.state.pending.filter(p => p.path === `memberships?organization=${id}`).at(-1)! }
+      return { done, read: h.state.pending.filter(p => p.path === `/organization/memberships?organization=${id}`).at(-1)! }
     }
 
     it("only shows protected Owner controls to the active protected Owner and submits the explicit action", async () => {
@@ -322,7 +322,7 @@ describe("personal memberships route", () => {
       expect(promote).toBeDefined()
       const click = promote.onclick()
       await settle()
-      const post = h.state.pending.find(p => p.path === "memberships" && p.options?.method === "POST")
+      const post = h.state.pending.find(p => p.path === "/organization/memberships" && p.options?.method === "POST")
       expect(JSON.parse(post!.options!.body)).toEqual({
         action: "protected_owner", organization_id: orgId, membership_id: "mem_ordinary", role: "owner",
       })
@@ -337,7 +337,7 @@ describe("personal memberships route", () => {
         organizations:[{id:orgId,name:"Test Org",role:"admin"}],
       })
       await adminSelection
-      expect(denied.state.pending.filter(p=>p.path===`memberships?organization=${orgId}`)).toHaveLength(0)
+      expect(denied.state.pending.filter(p=>p.path===`/organization/memberships?organization=${orgId}`)).toHaveLength(0)
       expect(denied.el("memberships").children).toHaveLength(0)
       expect(denied.el("invite-member").hidden).toBe(true)
       expect(denied.el("audit-timeline-section").hidden).toBe(true)
@@ -382,7 +382,7 @@ describe("personal memberships route", () => {
       expect(h.el("memberships").ariaBusy).toBe("true")
       expect(h.state.pending.at(-1)!.path).toBe(`organizations?id=${orgId}`)
       h.state.pending.at(-1)!.resolve({ organizations: [{ id: orgId, role: "owner" }] }); await settle()
-      expect(h.state.pending.at(-1)!.path).toBe(`memberships?organization=${orgId}`)
+      expect(h.state.pending.at(-1)!.path).toBe(`/organization/memberships?organization=${orgId}`)
       h.state.pending.at(-1)!.resolve({ memberships: [] }); await done
       expect(h.el("memberships-status").textContent).toBe("Gösterilecek üyelik bulunmuyor.")
       expect(h.state.pending.every(p => !p.options?.method || p.options.method === "GET")).toBe(true)
@@ -453,7 +453,7 @@ describe("personal memberships route", () => {
         {id:"mem_ordinary",person_id:"p_ordinary",role:"member",status:"active",protected_owner:false},
         {id:"mem_legacy",person_id:"p_legacy",role:"admin",status:"active",protected_owner:false}
       ]
-      h.state.pending.find(p=>p.path===`memberships?organization=${orgId}`)!.resolve({memberships:members})
+      h.state.pending.find(p=>p.path===`/organization/memberships?organization=${orgId}`)!.resolve({memberships:members})
       await select
       await settle()
       const elements=h.el("memberships").children
@@ -462,7 +462,7 @@ describe("personal memberships route", () => {
       const button=elements.find((e:any)=>e.tag==="button"&&e.textContent==="Eski şirket Admin kaydını Üye yap mem_legacy")
       expect(button).toBeDefined()
       const change=button.onclick()
-      const post=h.state.pending.find(p=>p.path==="memberships"&&p.options?.method==="POST")
+      const post=h.state.pending.find(p=>p.path==="/organization/memberships"&&p.options?.method==="POST")
       expect(JSON.parse(post!.options.body)).toEqual({
         organization_id:orgId,membership_id:"mem_legacy",role:"member"
       })
@@ -471,7 +471,7 @@ describe("personal memberships route", () => {
       const orgRefresh=h.state.pending.filter(p=>p.path===`organizations?id=${orgId}`).at(-1)!
       orgRefresh.resolve({organizations:[{id:orgId,name:"Test Org",role:"owner"}]})
       await settle()
-      const memRefresh=h.state.pending.filter(p=>p.path===`memberships?organization=${orgId}`).at(-1)!
+      const memRefresh=h.state.pending.filter(p=>p.path===`/organization/memberships?organization=${orgId}`).at(-1)!
       memRefresh.resolve({memberships:members.map(m=>m.id==="mem_legacy"?{...m,role:"member"}:m)})
       await change
       expect(h.state.status).toBe("Eski Admin kaydı Üye olarak güncellendi")

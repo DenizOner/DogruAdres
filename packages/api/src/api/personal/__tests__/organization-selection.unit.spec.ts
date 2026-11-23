@@ -29,9 +29,9 @@ describe('Organization selection response ordering (UI-only)',()=>{
   it('keeps the latest selection when an older read resolves last',async()=>{
     const h=harness(),a=h.select('A'),b=h.select('B')
     h.pending[1].resolve(org('B'));await settle()
-    h.pending.find(p=>p.path==='memberships?organization=B')!.resolve({memberships:[]});await b
+    h.pending.find(p=>p.path==='/organization/memberships?organization=B')!.resolve({memberships:[]});await b
     h.pending[0].resolve(org('A'));await settle()
-    h.pending.find(p=>p.path==='memberships?organization=A')?.resolve({memberships:[]});await a
+    h.pending.find(p=>p.path==='/organization/memberships?organization=A')?.resolve({memberships:[]});await a
     expect(h.state.url).toBe('/personal?organization=B')
     expect(JSON.parse(h.el('detail').textContent).id).toBe('B')
   })
@@ -39,14 +39,14 @@ describe('Organization selection response ordering (UI-only)',()=>{
     const h=harness(),a=h.select('A'),b=h.select('foreign')
     h.pending[1].reject(new Error('Access denied'));await b
     h.pending[0].resolve(org('A'));await settle()
-    h.pending.find(p=>p.path==='memberships?organization=A')?.resolve({memberships:[]});await a
+    h.pending.find(p=>p.path==='/organization/memberships?organization=A')?.resolve({memberships:[]});await a
     expect(h.el('detail').textContent).toBe('')
     expect(h.state.url).toBe('/personal')
     expect(h.state.status).toBe('Access denied')
   })
   it('hides the previous invitation controls before a denied selection',async()=>{
     const h=harness(),a=h.select('A')
-    h.pending[0].resolve(org('A'));await settle();h.pending.find(p=>p.path==='memberships?organization=A')!.resolve({memberships:[]});await a
+    h.pending[0].resolve(org('A'));await settle();h.pending.find(p=>p.path==='/organization/memberships?organization=A')!.resolve({memberships:[]});await a
     expect(h.el('invite-member').hidden).toBe(false)
     h.el('invite-result').textContent='old recipient context'
     const b=h.select('foreign')
@@ -59,8 +59,8 @@ describe('Organization selection response ordering (UI-only)',()=>{
     const h=harness(),a=h.select('A')
     h.pending[0].resolve(org('A'));await settle()
     const b=h.select('B');h.pending.find(p=>p.path==='organizations?id=B')!.resolve(org('B'));await settle()
-    h.pending.find(p=>p.path==='memberships?organization=B')!.resolve({memberships:[]});await b
-    h.pending.find(p=>p.path==='memberships?organization=A')!.resolve({memberships:[{person_id:'old-person',role:'member',status:'active',id:'old-member'}]});await a
+    h.pending.find(p=>p.path==='/organization/memberships?organization=B')!.resolve({memberships:[]});await b
+    h.pending.find(p=>p.path==='/organization/memberships?organization=A')!.resolve({memberships:[{person_id:'old-person',role:'member',status:'active',id:'old-member'}]});await a
     expect(h.el('memberships').children).toHaveLength(0)
     expect(h.state.url).toBe('/personal?organization=B')
   })
@@ -70,7 +70,7 @@ describe('B22 selected Organization Store presentation (UI scheduling, not API a
   const finishSelection=async(h:ReturnType<typeof harness>,id:string,call:Promise<unknown>)=>{
     h.pending.find(p=>p.path==='organizations?id='+id)!.resolve(org(id))
     await settle()
-    h.pending.find(p=>p.path==='memberships?organization='+id)!.resolve({memberships:[]})
+    h.pending.find(p=>p.path==='/organization/memberships?organization='+id)!.resolve({memberships:[]})
     await call
   }
 

@@ -655,7 +655,7 @@ describe('private workspace lifetime (script regression only)',()=>{
     await answer(h,'/personal/organizations?id=A',{organizations:[{id:'A',role:'owner'}]})
     expect(h.el('memberships').ariaBusy).toBe('true')
     h.listeners.get('pagehide')!()
-    await answer(h,'/personal/memberships?organization=A',{memberships:[{id:'m',person_id:'old-private-person',role:'member',status:'active'}]})
+    await answer(h,'/organization/memberships?organization=A',{memberships:[{id:'m',person_id:'old-private-person',role:'member',status:'active'}]})
     await selection
     expect(h.el('memberships').children).toHaveLength(0);expect(h.el('memberships-status').textContent).toBe('')
     expect(h.el('memberships').ariaBusy).toBe('false');expect(h.el('memberships-refresh').hidden).toBe(true)
