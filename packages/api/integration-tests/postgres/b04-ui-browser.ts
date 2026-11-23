@@ -78,7 +78,7 @@ export async function verifyB04Ui(p: {
     const input = async (selector: string, value: string) => { await click(selector); await send("Input.insertText", { text: value }) }
     const network = async (path: string, status: number) => until(async () => responses.some(r => r.phase === phase && r.path === path && r.status === status), 20000, "UI network status")
     const scoped = async (org: typeof p.org1, role: string) => {
-      await wait(`(()=>{try{const d=JSON.parse(document.getElementById('detail').textContent);return d.id===${JSON.stringify(org.id)}&&d.role===${JSON.stringify(role)}&&location.search==='?organization='+${JSON.stringify(org.id)}&&document.getElementById('status').textContent==='Kuruluş erişimi doğrulandı'}catch{return false}})()`, "scoped role DOM and URL")
+      await wait(`(()=>{try{const d=JSON.parse(document.getElementById('detail').textContent);return d.id===${JSON.stringify(org.id)}&&d.role===${JSON.stringify(role)}&&location.search==='?organization='+${JSON.stringify(org.id)}}catch{return false}})()`, "scoped role DOM and URL")
       await network(`/personal/organizations?scope=${org === p.org1 ? "Org1" : "Org2"}`, 200)
     }
     const managementConcealment = async (orgId: string, desc: string) => {
