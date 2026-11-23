@@ -93,8 +93,7 @@ describe("GET /organization/vehicles — route handler access control", () => {
     expect(res._status).toBe(400)
   })
 
-  it("returns 403 when personalOrganizations returns no memberships (access denied)", async () => {
-    const mockAccess = {
+  it("returns 403 when personalOrganizations returns no memberships (access denied)", async () => {    const mockAccess = {
       personalOrganizations: jest.fn().mockResolvedValue({ organizations: [] }),
     }
     // The route calls access(req) which calls req.scope.resolve — mock at module level
@@ -107,6 +106,24 @@ describe("GET /organization/vehicles — route handler access control", () => {
     await GET(req, res)
     expect(res._status).toBe(403)
     expect(res._body).toMatchObject({ message: expect.stringContaining("Access denied") })
+  })
+
+  it("returns 403 when organization membership status is not active (Policy A active-status gate)", async () => {
+    // ADR-0007 Policy A: every request-time auth chain link must enforce active-status.
+    // A suspended/inactive organization member must NOT be able to read vehicle data.
+    const securityMod = require("../../personal/security")
+    jest.spyOn(securityMod, "sessionToken").mockReturnValue("tok_mock")
+    jest.spyOn(securityMod, "access").mockReturnValue({
+      personalOrganizations: jest.fn().mockResolvedValue({
+        organizations: [{ id: "daorg_01JBMX1234567890ABCDEFGH0", role: "owner", status: "suspended" }],
+      }),
+    })
+
+    const req = makeReq({ query: { organization: "daorg_01JBMX1234567890ABCDEFGH0" } })
+    const res = makeRes()
+    await GET(req, res)
+    expect(res._status).toBe(403)
+    expect(res._body).toMatchObject({ message: expect.stringContaining("not active") })
   })
 
   it("returns 403 when personalOrganizations returns null", async () => {
@@ -127,7 +144,7 @@ describe("GET /organization/vehicles — route handler access control", () => {
     jest.spyOn(securityMod, "sessionToken").mockReturnValue("tok_mock")
     jest.spyOn(securityMod, "access").mockReturnValue({
       personalOrganizations: jest.fn().mockResolvedValue({
-        organizations: [{ id: "daorg_01JBMX1234567890ABCDEFGH0", role: "owner" }],
+        organizations: [{ id: "daorg_01JBMX1234567890ABCDEFGH0", role: "owner", status: "active" }],
       }),
     })
 

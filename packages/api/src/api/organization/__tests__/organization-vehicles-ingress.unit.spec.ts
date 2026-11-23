@@ -90,12 +90,12 @@ describe("organization/vehicles — ingress access control", () => {
   })
 
   it("passes GET /personal/vehicles through ingress so the route handler can return 410 Gone", async () => {
-    // /personal/vehicles was removed from the ingress allow-list (#482).
-    // However, the route still exists and returns 410, so ingress must NOT block it
-    // with 401 — otherwise clients would receive 401 instead of the meaningful 410.
-    // Verify the ingress correctly passes the request to the route.
-    // NOTE: If this test fails (401 returned), update personal-frontdoor.mjs to pass
-    // the deprecated path through so the 410 is surfaced to clients.
+    // /personal/vehicles GET is deliberately kept in the nativeIngress allow-list (#482, security.ts:127).
+    // This allows the 410 Gone response from the route handler to reach clients rather than
+    // being replaced by a 401 from ingress. The path is intentionally left in the allow-list;
+    // it was removed only from personal-frontdoor.mjs (the public proxy layer), not from nativeIngress.
+    // This distinction is intentional: frontdoor blocks public access, but nativeIngress lets
+    // through so session-authenticated clients get the informative 410 instead of 401.
     const { next, res } = await probe("/personal/vehicles", "GET")
     // Either next is called (passes through) OR route handles 410 — both are acceptable.
     // The critical invariant: the client must NOT receive 401 from ingress for this path.
