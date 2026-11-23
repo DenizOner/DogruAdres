@@ -104,8 +104,20 @@ export async function verifyB05Ui(p: {
       evidence.http.push({ phase, evidence: "REAL BACKEND", method: "GET", scope: r.scope, status: 200, rows: n, dtoKeys: ["id", "person_id", "role", "status", "protected_owner"], noStore: true, sqlMatched: true })
     }
     const denied = async (org: typeof p.org1, role: "Admin" | "Member") => {
-      // Wait for scope DOM and panel concealment.
-      await wait(`(()=>{try{const d=JSON.parse(document.getElementById('detail').textContent);return d.id===${JSON.stringify(org.id)}&&d.role===${JSON.stringify(role.toLowerCase())}&&document.querySelectorAll('#memberships p,#memberships button,#memberships select').length===0&&!(${visible('memberships-refresh')})&&!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})}catch{return false}})()`, role + " scope DOM and concealed panels")
+      // Wait for scope DOM and panel concealment without dynamic evaluate interpolation.
+      await until(async () => {
+        const state = await evaluate(`(()=>{
+          try {
+            const d = JSON.parse(document.getElementById('detail')?.textContent || '{}');
+            const noControls = document.querySelectorAll('#memberships p,#memberships button,#memberships select').length === 0;
+            const refHidden = !document.getElementById('memberships-refresh')?.getClientRects().length;
+            const invHidden = !document.getElementById('invite-member')?.getClientRects().length;
+            const auditHidden = !document.getElementById('audit-timeline-section')?.getClientRects().length;
+            return { id: d.id, role: d.role, concealed: noControls && refHidden && invHidden && auditHidden };
+          } catch { return null; }
+        })()`)
+        return !!(state && state.id === org.id && state.role === role.toLowerCase() && state.concealed)
+      }, 20000, role + " scope DOM and concealed panels")
       const forbidden = await evaluate(`fetch('/personal/memberships?organization=' + ${JSON.stringify(org.id)}).then(r => r.status)`)
       assert.equal(forbidden, 403, role + " genuine HTTP403")
       assert.equal(await evaluate(`document.getElementById('memberships').textContent.includes(${JSON.stringify(p.personId)})`), false)

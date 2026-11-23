@@ -353,7 +353,7 @@ export default async function({ container }: ExecArgs) {
 
     report.checks = {
       adminAccessSuccess: true,
-      adminMembershipReadSuccess: true,
+      ...(ui ? { adminMembershipReadDenied: true } : { adminMembershipReadSuccess: true }),
       memberAccessSuccess: true,
       memberMembershipReadDenied: true,
       memberScopeSurvivedRefresh: true,
