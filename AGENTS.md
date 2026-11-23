@@ -75,22 +75,22 @@ This repository implements DoğruAdres on the open-source Mercur marketplace sta
     ```
     PR=<PR_NUMBER>
     # Check unresolved review threads via GraphQL (PR-READY-01)
-    UNRESOLVED=$(gh api graphql -f query='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){reviewThreads(first:100){nodes{isResolved}}}}}' -F owner=':owner' -F repo=':repo' -F pr=$PR --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length')
+    UNRESOLVED=$(gh api graphql --paginate -f query='query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){repository(owner:$owner,name:$repo){pullRequest(number:$pr){reviewThreads(first:100,after:$endCursor){pageInfo{hasNextPage endCursor}nodes{isResolved}}}}}' -F owner='{owner}' -F repo='{repo}' -F pr=$PR --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' | awk '{s+=$1} END {print s+0}')
     if [ "$UNRESOLVED" -eq 0 ]; then
       echo "PR-READY-01 (unresolved_threads): GREEN — zero unresolved review threads"
     else
       echo "PR-READY-01 (unresolved_threads): RED — $UNRESOLVED unresolved thread(s)"
     fi
 
-    # Check reviews, draft status, and mergeability (PR-READY-02, 04, 05)
+    # Check latest reviews, draft status, and mergeability (PR-READY-02, 04, 05)
     gh pr view $PR \
-      --json number,title,isDraft,mergeable,reviews \
+      --json number,title,isDraft,mergeable,latestReviews \
       --jq '
         {
           "PR-READY-02 (changes_requested)":
-            (if ([.reviews[] | select(.state == "CHANGES_REQUESTED")] | length) == 0
+            (if ([.latestReviews[]? | select(.state == "CHANGES_REQUESTED")] | length) == 0
              then "GREEN"
-             else "RED — CHANGES_REQUESTED by: \([.reviews[] | select(.state == "CHANGES_REQUESTED") | .author.login] | join(", "))" end),
+             else "RED — CHANGES_REQUESTED by: \([.latestReviews[] | select(.state == "CHANGES_REQUESTED") | .author.login] | join(", "))" end),
           "PR-READY-04 (not_draft)":
             (if .isDraft == false then "GREEN" else "RED — PR is DRAFT" end),
           "PR-READY-05 (mergeable)":
