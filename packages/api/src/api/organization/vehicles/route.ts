@@ -24,8 +24,12 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.status(403).json({ message: "Access denied" })
   }
   const activeOrg = orgDecision.organizations[0]
-  // Note: personalOrganizations() SQL already enforces o.status='active' AND m.status='active'
-  // as JOIN conditions — rows returned are guaranteed active. No redundant status field check needed.
+  // Active-status enforcement: personalOrganizations() SQL (identity-session.ts:244,247) enforces
+  //   o.status='active' AND m.status='active' as immutable WHERE conditions.
+  // Inactive org/member rows are excluded at the query level and never reach this handler.
+  // 'status' is NOT included in the SELECT list (identity-session.ts:236) — an application-layer
+  // field check would read 'undefined' and would incorrectly block all valid users.
+  // SQL contract reference: packages/api/src/modules/dogruadres-access/identity-session.ts:232-249
 
   const vehicleService = req.scope.resolve<VehicleModuleService>(DOGRUADRES_VEHICLE_MODULE)
   const vehicles = await vehicleService.listLiveVehicles(activeOrg.id)
