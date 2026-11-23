@@ -26,7 +26,7 @@ export async function verifyTwoIndependentStaffNameRightRace(input:{
   await owner.select(organizationName,"owner")
   const submitted=await owner.callFunction(
     "async function(body){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/store-applications',{method:'POST',"+
+    "const r=await fetch('/organization/store-applications',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body});return {status:r.status,body:await r.json()}}",
     JSON.stringify({organization_id:organizationId,application_id,name,

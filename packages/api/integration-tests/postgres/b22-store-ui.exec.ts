@@ -146,7 +146,7 @@ async function verifyStoreApplicationInitialReadRetry(input:{
     "window.__daApplicationRetryInjected=0;window.__daApplicationRetryReal=0;"+
     "window.fetch=(resource,options)=>{"+
     "const url=typeof resource==='string'?resource:resource?.url;"+
-    "if(typeof url==='string'&&url.startsWith('/personal/store-applications?')&&"+
+    "if(typeof url==='string'&&url.startsWith('/organization/store-applications?')&&"+
     "(!options?.method||options.method==='GET')){"+
     "const fault=window.__daApplicationRetryFault;"+
     "if(fault){window.__daApplicationRetryFault='';window.__daApplicationRetryInjected++;"+
@@ -224,7 +224,7 @@ async function verifyStoreDraftPhonePersonLockRace(input:{
     await browser.callFunction(
       "async function(org){"+
       "const s=await(await fetch('/personal/session')).json();"+
-      "const read=fetch('/personal/store-applications?organization_id='+encodeURIComponent(org),"+
+      "const read=fetch('/organization/store-applications?organization_id='+encodeURIComponent(org),"+
       "{signal:AbortSignal.timeout(45000)}).then(async r=>({status:r.status,body:await r.json()}));"+
       "const write=fetch('/personal/profile',{method:'POST',headers:{"+
       "'content-type':'application/json','x-csrf-token':s.csrf_token},"+
@@ -316,9 +316,9 @@ async function verifyStoreDraftClosingPersonLockRace(input:{
     await barrier.query("select id from da_person where id=$1 for update",[personId])
     await browser.callFunction(
       "async function(org,seller){"+
-      "const draft=fetch('/personal/store-applications?organization_id='+encodeURIComponent(org),"+
+      "const draft=fetch('/organization/store-applications?organization_id='+encodeURIComponent(org),"+
       "{cache:'no-store',signal:AbortSignal.timeout(45000)}).then(async r=>({status:r.status,body:await r.json()}));"+
-      "const closing=fetch('/personal/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}),"+
+      "const closing=fetch('/organization/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}),"+
       "{cache:'no-store',signal:AbortSignal.timeout(45000)}).then(async r=>({status:r.status,body:await r.json()}));"+
       "globalThis.__daDraftClosingRace=Promise.all([draft,closing]);return true}",
       organizationId,sellerId)
@@ -469,7 +469,7 @@ async function verifyOwnerClosingBrowser(input:{
   await browser.eval("window.confirm=window.__b22ClosingConfirm;delete window.__b22ClosingConfirm")
   await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('Kalan süre (yenilendiğinde):') && "+
     "document.getElementById('store-owner-closing-status').getAttribute('role')==='status'")
-  assert.ok(browser.http.some((x:any)=>x.path==="/personal/store-owner-closing"&&x.method==="POST"&&x.status===200))
+  assert.ok(browser.http.some((x:any)=>x.path==="/organization/store-owner-closing"&&x.method==="POST"&&x.status===200))
   const [closed]=await q(
     "select c.organization_id,c.state,c.version,c.request_id,c.started_at,c.due_at,"+
     "e.id as audit_event_id,e.action,e.actor_person_id,e.new_values->>'state' as proof_state,"+
@@ -485,7 +485,7 @@ async function verifyOwnerClosingBrowser(input:{
   // The countdown is based on the authoritative server timestamp, not the
   // browser's easily changed local clock.
   const clockView=await browser.callFunction(
-    "async function(org,seller){const r=await fetch('/personal/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}));return {status:r.status,body:await r.json()}}",
+    "async function(org,seller){const r=await fetch('/organization/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}));return {status:r.status,body:await r.json()}}",
     organizations[0].id,ownerStoreId)
   assert.equal(clockView.status,200)
   assert.equal(clockView.body.state,"closing")
@@ -499,7 +499,7 @@ async function verifyOwnerClosingBrowser(input:{
   },"The closing source's private Owner receipt is pending a real SMTP attempt")
   const readOwnClosing=async(b:B06Chrome,org:string,seller:string)=>
     b.callFunction("async function(org,seller){const r=await fetch("+
-      "'/personal/store-owner-closing?'+new URLSearchParams("+
+      "'/organization/store-owner-closing?'+new URLSearchParams("+
       "{organization_id:org,seller_id:seller}),{cache:'no-store'});"+
       "return {status:r.status,body:await r.json()}}",org,seller)
   const coInitial=await readOwnClosing(reviewer,organizations[0].id,ownerStoreId)
@@ -592,10 +592,10 @@ async function verifyOwnerClosingBrowser(input:{
   await browser.send("Page.bringToFront")
   await browser.wait("document.visibilityState==='visible'")
   const oldReadCount=browser.http.filter((x:any)=>
-    x.path==="/personal/store-owner-closing"&&x.method==="GET"&&x.status===200).length
+    x.path==="/organization/store-owner-closing"&&x.method==="GET"&&x.status===200).length
   await browser.click("#store-owner-closing-refresh")
   await until(async()=>browser.http.filter((x:any)=>
-    x.path==="/personal/store-owner-closing"&&x.method==="GET"&&x.status===200
+    x.path==="/organization/store-owner-closing"&&x.method==="GET"&&x.status===200
   ).length>oldReadCount,19000,"B22 Owner real SMTP post-result HTTPS GET")
   await browser.wait("document.getElementById('store-owner-closing-status')."+
     "textContent.includes('SMTP sunucusu e-postayı kabul etti; posta kutusuna teslim doğrulanmadı.') && "+
@@ -629,7 +629,7 @@ async function verifyOwnerClosingBrowser(input:{
     "const session=await(await fetch('/personal/session')).json();"+
     "const headers={'content-type':'application/json'};"+
     "if(sendToken==='true')headers['x-csrf-token']=session.csrf_token;"+
-    "const res=await fetch('/personal/store-owner-closing',{method:'POST',headers,"+
+    "const res=await fetch('/organization/store-owner-closing',{method:'POST',headers,"+
     "body:JSON.stringify(payload)});return {status:res.status,body:await res.json()}}",
     JSON.stringify(data),String(withCsrf))
   const same={organization_id:organizations[0].id,seller_id:ownerStoreId,
@@ -706,7 +706,7 @@ async function verifyOwnerClosingBrowser(input:{
     "{cache:'no-store'})).json();"+
     "const headers={'content-type':'application/json','x-csrf-token':s.csrf_token};"+
     "return Promise.all([a,b].map(async raw=>"+
-    "(await fetch('/personal/store-owner-closing',{method:'POST',headers,body:raw})).status))}",
+    "(await fetch('/organization/store-owner-closing',{method:'POST',headers,body:raw})).status))}",
     JSON.stringify(raceA),JSON.stringify(raceB))
   assert.deepEqual([...contested].sort((a:number,b:number)=>a-b),[200,409],
     "Two distinct same-version real HTTPS closing requests must serialize")
@@ -856,7 +856,7 @@ async function verifyOwnerClosingBrowser(input:{
     // Observe the real first-party HTTP response just BEFORE this same
     // audited closing's 30-day deadline, with an unchanged PG16 source.
     const preBoundary=await browser.callFunction(
-      "async function(org,seller){const r=await fetch('/personal/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}),{cache:'no-store'});return {status:r.status,body:await r.json()}}",
+      "async function(org,seller){const r=await fetch('/organization/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}),{cache:'no-store'});return {status:r.status,body:await r.json()}}",
       organizations[0].id,secondOwnerStoreId)
     const [preClock]=await q("select clock_timestamp() as now_at")
     assert.equal(preBoundary.status,200)
@@ -880,7 +880,7 @@ async function verifyOwnerClosingBrowser(input:{
       return time?.reached===true
     },30000,"real PostgreSQL Owner 30-day deadline crossing")
     const expired=await browser.callFunction(
-      "async function(org,seller){const r=await fetch('/personal/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}),{cache:'no-store'});return {status:r.status,body:await r.json()}}",
+      "async function(org,seller){const r=await fetch('/organization/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}),{cache:'no-store'});return {status:r.status,body:await r.json()}}",
       organizations[0].id,secondOwnerStoreId)
     assert.equal(expired.status,200)
     assert.equal(expired.body.state,"closing")
@@ -1082,9 +1082,9 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
         "const raw=args[0];"+
         "const method=String(args[1]?.method||raw?.method||'GET').toUpperCase();"+
         "const path=new URL(typeof raw==='string'?raw:raw?.url,location.href).pathname;"+
-        "if(path==='/personal/store-owner-pause'&&method==='GET')wire.getCount++;"+
+        "if(path==='/organization/store-owner-pause'&&method==='GET')wire.getCount++;"+
         "const actual=await wire.original.apply(window,args);"+
-        "if(wire.count===0&&path==='/personal/store-owner-pause'&&"+
+        "if(wire.count===0&&path==='/organization/store-owner-pause'&&"+
         "method==='POST'){wire.count++;wire.status=actual.status;"+
         "if(wire.holdPost){wire.postHeld=true;"+
         "await new Promise(resolve=>{wire.releasePost=resolve})}"+
@@ -1105,7 +1105,7 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       return result
     }
     const ownerPausePostCount=()=>browser.http.filter((item:any)=>
-      item.path==="/personal/store-owner-pause"&&item.method==="POST").length
+      item.path==="/organization/store-owner-pause"&&item.method==="POST").length
     await browser.eval("window.__b22PreviousConfirm=window.confirm;window.confirm=()=>true")
     assert.equal(await browser.eval("(()=>{const b=document.querySelector('#store-owner-pause-form button[value=pause]');b.focus();return document.activeElement===b})()"),true)
     const firstPosts=ownerPausePostCount()
@@ -1169,7 +1169,7 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       "!document.querySelector('#store-owner-pause-form button[value=resume]').disabled")
     assert.equal(ownerPausePostCount(),firstPosts+1,
       "Authoritative refresh must only GET, never repeat the write")
-    assert.ok(browser.http.some((x:any)=>x.path==="/personal/store-owner-pause"&&
+    assert.ok(browser.http.some((x:any)=>x.path==="/organization/store-owner-pause"&&
       x.method==="POST"&&x.status===200),"Owner pause must reach actual HTTPS server")
     const pausedRows=await q(
       "select p.paused,p.version,p.request_id,p.source_audit_event_id,"+
@@ -1207,7 +1207,7 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       "const s=await(await fetch('/personal/session')).json();"+
       "const headers={'content-type':'application/json'};"+
       "if(flag==='true')headers['x-csrf-token']=s.csrf_token;"+
-      "const r=await fetch('/personal/store-owner-pause',{method:'POST',headers,"+
+      "const r=await fetch('/organization/store-owner-pause',{method:'POST',headers,"+
       "body:JSON.stringify(payload)});return {status:r.status,body:await r.json()}}",
       JSON.stringify(data),String(includeCsrf))
     const pausePayload={organization_id:organizations[0].id,seller_id:ownerStoreId,
@@ -1315,7 +1315,7 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       "const session=await(await fetch('/personal/session',{cache:'no-store'})).json();"+
       "const headers={'content-type':'application/json','x-csrf-token':session.csrf_token};"+
       "return await Promise.all([a,b].map(async raw=>"+
-      "(await fetch('/personal/store-owner-pause',{method:'POST',headers,body:raw})).status))}",
+      "(await fetch('/organization/store-owner-pause',{method:'POST',headers,body:raw})).status))}",
       JSON.stringify(newPause1),JSON.stringify(newPause2))
     assert.deepEqual([...contested].sort((a:number,b:number)=>a-b),[200,409],
       "Two distinct same-version Owner pause requests cannot both commit")
@@ -1355,7 +1355,7 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
     const deniedMutation={...newPause1,expected_version:4,
       request_id:"dasp_"+randomBytes(16).toString("hex")}
     const postWithOriginalCsrf=async()=>browser.callFunction(
-      "async function(raw,token){const response=await fetch('/personal/store-owner-pause',{method:'POST',"+
+      "async function(raw,token){const response=await fetch('/organization/store-owner-pause',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':token},body:raw});return response.status}",
       JSON.stringify(deniedMutation),csrfRead)
     const oldStrong=sessionRows[0].last_strong_auth_at
@@ -2024,7 +2024,7 @@ async function verifyOwnerRenameTargetRefresh(
   q:(sql:string,params?:any[])=>Promise<any[]>
 ):Promise<void>{
   const authorized=await browser.callFunction(
-    "async function(org){const r=await fetch('/personal/organization-stores?organization='+"+
+    "async function(org){const r=await fetch('/organization/stores?organization='+"+
     "encodeURIComponent(org)+'&purpose=rename',{cache:'no-store'});"+
     "return {status:r.status,body:await r.json()}}",org)
   assert.equal(authorized.status,200)
@@ -2069,7 +2069,7 @@ async function verifyOwnerRenameTargetRefresh(
     "const state={count:0,release:()=>{if(unblock){unblock();unblock=null}},"+
     "restore:()=>{window.fetch=original}};window.__b22RenameHold=state;"+
     "window.fetch=(...args)=>{const path=String(args[0]);"+
-    "if(path.startsWith('/personal/organization-stores?')&&path.includes('purpose=rename')){"+
+    "if(path.startsWith('/organization/stores?')&&path.includes('purpose=rename')){"+
     "state.count++;const pending=original(...args);"+
     "if(state.count===1)return new Promise((resolve,reject)=>{unblock=()=>pending.then(resolve,reject)});"+
     "return pending;}return original(...args)}})()")
@@ -2098,7 +2098,7 @@ async function verifyOwnerRenameTargetRefresh(
   await browser.eval("(()=>{const original=window.fetch;let once=true;"+
     "window.fetch=async(...args)=>{const response=await original(...args);"+
     "const path=String(args[0]);"+
-    "if(!once||!path.startsWith('/personal/organization-stores?')||"+
+    "if(!once||!path.startsWith('/organization/stores?')||"+
     "!path.includes('purpose=rename'))return response;"+
     "once=false;window.fetch=original;"+
     "const data=await response.json();"+
@@ -2171,7 +2171,7 @@ async function verifyOwnerStoreRenameRequest(
   const post=async(actor:B06Chrome,payload:Record<string,unknown>,invalidCsrf=false)=>
     actor.callFunction("async function(json,bad){"+
       "const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/store-rename-requests',{method:'POST',"+
+      "const r=await fetch('/organization/store-rename-requests',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':bad?'bad':s.csrf_token},"+
       "body:json});return {status:r.status,body:await r.json()}}",
       JSON.stringify(payload),invalidCsrf?'true':'')
@@ -2192,7 +2192,7 @@ async function verifyOwnerStoreRenameRequest(
     const original=globalThis.fetch;let failOnce=true;
     globalThis.fetch=function(input,options){
       if(failOnce&&typeof input==='string'&&
-         input.startsWith('/personal/organization-stores?')){
+         input.startsWith('/organization/stores?')){
         failOnce=false;globalThis.fetch=original;
         return Promise.resolve(new Response(
           JSON.stringify({message:'Disposable browser-only Store list fault'}),
@@ -2273,13 +2273,13 @@ async function verifyOwnerStoreRenameRequest(
     where organization_id=$1 and target_id=$2
       and action='organization.store_rename_requested'`,[org,storeId]))[0].n,1)
   const privateRead=await reviewer.callFunction(
-    "async function(org,id){const r=await fetch('/personal/store-rename-requests?'+new URLSearchParams({"+
+    "async function(org,id){const r=await fetch('/organization/store-rename-requests?'+new URLSearchParams({"+
     "organization_id:org,seller_id:id}));return r.status}",org,storeId)
   assert.equal(privateRead,403,"Foreign Owner cannot see proposed private name")
   // Actual protected GET must lose access if native Seller status ceases to
   // authorize Store name management, even if Owner/Origin stays valid.
   const ownerHistory=async()=>browser.callFunction(
-    "async function(org,id){const r=await fetch('/personal/store-rename-requests?'+new URLSearchParams({"+
+    "async function(org,id){const r=await fetch('/organization/store-rename-requests?'+new URLSearchParams({"+
     "organization_id:org,seller_id:id}));return {status:r.status,body:await r.json()}}",
     org,storeId)
   assert.equal((await ownerHistory()).status,200,"Current approved Owner sees its private history")
@@ -2447,7 +2447,7 @@ async function verifyOwnerStoreRenameRequest(
   await browser.send("Page.bringToFront")
   await browser.wait("document.visibilityState==='visible'")
   const ownerOutcome=await browser.callFunction(
-    "async function(org,seller){const r=await fetch('/personal/store-rename-requests?'+new URLSearchParams({"+
+    "async function(org,seller){const r=await fetch('/organization/store-rename-requests?'+new URLSearchParams({"+
       "organization_id:org,seller_id:seller}));return {status:r.status,body:await r.json()}}",
     org,storeId)
   assert.equal(ownerOutcome.status,200)
@@ -2478,7 +2478,7 @@ async function verifyConcurrentOwnerStoreRenameRequests(
   const responses=await browser.eval(`(async()=>{
     const session=await(await fetch('/personal/session')).json()
     return Promise.all(${JSON.stringify(items)}.map(async item=>{
-      const r=await fetch('/personal/store-rename-requests',{
+      const r=await fetch('/organization/store-rename-requests',{
         method:'POST',headers:{'content-type':'application/json',
         'x-csrf-token':session.csrf_token},body:JSON.stringify(item)
       })
@@ -2592,7 +2592,7 @@ async function verifyPlatformStoreRenameApproval(
       [storeId])
     ownerRace=owner.callFunction(
       "async function(payload){const sess=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/store-rename-requests',{method:'POST',"+
+      "const r=await fetch('/organization/store-rename-requests',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':sess.csrf_token},"+
       "body:payload,signal:AbortSignal.timeout(30000)});return {status:r.status}}",
       JSON.stringify(competing)).then(value=>({value}),error=>({error:String(error)}))
@@ -2678,7 +2678,7 @@ async function verifyPlatformStoreRenameApproval(
     currency_code:"eur"}
   const submitReuse=()=>owner.eval(`(async()=>{
     const s=await(await fetch('/personal/session')).json()
-    const r=await fetch('/personal/store-applications',{
+    const r=await fetch('/organization/store-applications',{
       method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
       body:JSON.stringify(${JSON.stringify(reuse)})
     });return {status:r.status,body:await r.json()}
@@ -2729,7 +2729,7 @@ async function verifyPlatformStoreRenameApproval(
   await owner.send("Page.bringToFront")
   await owner.wait("document.visibilityState==='visible'")
   const history=await owner.callFunction(
-    "async function(org,seller){const r=await fetch('/personal/store-rename-requests?'+new URLSearchParams({organization_id:org,seller_id:seller}));return {status:r.status,body:await r.json()}}",
+    "async function(org,seller){const r=await fetch('/organization/store-rename-requests?'+new URLSearchParams({organization_id:org,seller_id:seller}));return {status:r.status,body:await r.json()}}",
     org,storeId)
   assert.equal(history.status,200)
   assert.equal(history.body.requests.find((x:any)=>x.id===request.id)?.status,"approved")
@@ -2810,7 +2810,7 @@ async function verifySuspendedStoreRenameBeforeReopen(
   }catch(error){
     // Log bounded status categories ONLY, never Store names, request bodies,
     // private Person details, cookies, error text or identifiers.
-    const http=owner.http.filter((x:any)=>x.path==="/personal/store-rename-requests")
+    const http=owner.http.filter((x:any)=>x.path==="/organization/store-rename-requests")
       .slice(-4).map((x:any)=>({method:x.method,status:x.status}))
     const ui=await owner.callFunction(
       "function(){const f=document.getElementById('store-rename-form');"+
@@ -3368,7 +3368,7 @@ async function verifyOwnerWithdrawPendingStoreRename(
   const post=async(actor:B06Chrome,payload:Record<string,unknown>,
     badCsrf=false)=>actor.eval(`(async()=>{
     const sess=await(await fetch('/personal/session')).json()
-    const r=await fetch('/personal/store-rename-requests',{
+    const r=await fetch('/organization/store-rename-requests',{
       method:'POST',headers:{'content-type':'application/json',
         'x-csrf-token':${badCsrf?"'wrong'":"sess.csrf_token"}},
       body:JSON.stringify(${JSON.stringify(payload)})
@@ -3733,7 +3733,7 @@ async function verifyOwnerSubmittedMemberDraft(
         "Array.from(p.querySelectorAll('button')).some(b=>b.textContent==='Bu taslağı resmî başvuruya gönder'))")
       const unauthorizedDraftSubmit=await browser.callFunction(
         "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "const r=await fetch('/organization/store-applications',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify({action:'submit_draft',organization_id:org,draft_id:id,"+
         "expected_version:1,application_id:'daapp_'+'b'.repeat(32)})});return r.status}",
@@ -3741,7 +3741,7 @@ async function verifyOwnerSubmittedMemberDraft(
       assert.equal(unauthorizedDraftSubmit,403,
         "Revoked Member cannot convert a retained company draft into Seller")
       const deniedSubmitCsrf=await reviewer.callFunction(
-        "async function(org,id){const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "async function(org,id){const r=await fetch('/organization/store-applications',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':'invalid'},"+
         "body:JSON.stringify({action:'submit_draft',organization_id:org,draft_id:id,"+
         "expected_version:1,application_id:'daapp_'+'c'.repeat(32)})});return r.status}",
@@ -3778,7 +3778,7 @@ async function verifyOwnerSubmittedMemberDraft(
       const ownerDraftPost=async(id:string,version:number)=>
         reviewer.callFunction("async function(org,draft,app,ver){"+
           "const s=await(await fetch('/personal/session')).json();"+
-          "const r=await fetch('/personal/store-applications',{method:'POST',"+
+          "const r=await fetch('/organization/store-applications',{method:'POST',"+
           "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
           "body:JSON.stringify({action:'submit_draft',organization_id:org,draft_id:draft,"+
           "expected_version:Number(ver),application_id:app})});"+
@@ -3847,7 +3847,7 @@ async function verifyTwoOwnersStoreDraftApplicationLockOrder(input:{
     promoted=true
     // Actual live membership authorization, not just a synthetic Owner label.
     const visible=await browser.callFunction(
-      "async function(org){const r=await fetch('/personal/store-applications?organization_id='+"+
+      "async function(org){const r=await fetch('/organization/store-applications?organization_id='+"+
       "encodeURIComponent(org),{cache:'no-store'});return {status:r.status,body:await r.json()}}",
       organizationId)
     assert.equal(visible.status,200,"Second independently signed-in Owner must be authorized")
@@ -3862,7 +3862,7 @@ async function verifyTwoOwnersStoreDraftApplicationLockOrder(input:{
     await browser.callFunction(
       "async function(org,draft,app){"+
       "const session=await(await fetch('/personal/session')).json();"+
-      "globalThis.__b22OwnerSameAppRace=fetch('/personal/store-applications',"+
+      "globalThis.__b22OwnerSameAppRace=fetch('/organization/store-applications',"+
       "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
       "body:JSON.stringify({action:'submit_draft',organization_id:org,draft_id:draft,"+
       "expected_version:1,application_id:app}),signal:AbortSignal.timeout(45000)})"+
@@ -3919,7 +3919,7 @@ async function verifyStoreDraftSubmissionNegativePaths(
   const post=async(payload:Record<string,unknown>)=>
     reviewer.callFunction("async function(json){"+
       "const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/store-applications',{method:'POST',"+
+      "const r=await fetch('/organization/store-applications',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:json});return {status:r.status,body:await r.json()}}",
       JSON.stringify(payload))
@@ -3967,7 +3967,7 @@ async function verifyStoreDraftSubmissionNegativePaths(
   const appTwo="daapp_"+randomBytes(16).toString("hex")
   const attempts=await reviewer.callFunction(
     "async function(left,right){const s=await(await fetch('/personal/session')).json();"+
-    "const send=async body=>{const r=await fetch('/personal/store-applications',"+
+    "const send=async body=>{const r=await fetch('/organization/store-applications',"+
     "{method:'POST',headers:{'content-type':'application/json',"+
     "'x-csrf-token':s.csrf_token},body});return {status:r.status,body:await r.json()}};"+
     "return Promise.all([send(left),send(right)])}",
@@ -4223,7 +4223,7 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
     "One private receipt for each active protected Owner, none for other Members")
   await browser.send("Page.bringToFront")
   const owner=await browser.callFunction("async function(org){"+
-    "const r=await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org));"+
+    "const r=await fetch('/organization/store-applications?organization_id='+encodeURIComponent(org));"+
     "return {status:r.status,body:await r.json()}}",x.org)
   assert.equal(owner.status,200)
   const match=owner.body.applications.find((a:any)=>a.id===app)
@@ -4261,7 +4261,7 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
     where id=$1 and revoked_at is null returning id`,[liveOwnership[0].id])).length,1)
   try{
     const historical=await browser.callFunction("async function(org){"+
-      "const r=await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org),{cache:'no-store'});"+
+      "const r=await fetch('/organization/store-applications?organization_id='+encodeURIComponent(org),{cache:'no-store'});"+
       "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}}",x.org)
     assert.equal(historical.status,200)
     assert.match(String(historical.cache),/no-store/)
@@ -4299,7 +4299,7 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
       returning id`,[liveOwnership[0].id])).length,1)
   }
   const reauthorized=await browser.callFunction("async function(org){"+
-    "const r=await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org),{cache:'no-store'});"+
+    "const r=await fetch('/organization/store-applications?organization_id='+encodeURIComponent(org),{cache:'no-store'});"+
     "return {status:r.status,body:await r.json()}}",x.org)
   assert.equal(reauthorized.status,200)
   const restored=reauthorized.body.applications.find((a:any)=>a.id===app)
@@ -4419,7 +4419,7 @@ async function verifyConcurrentCrossOrganizationStoreNames(
   const raceOutcomes=await browser.eval(`(async()=>{
     const session=await(await fetch('/personal/session')).json()
     return Promise.all(${JSON.stringify(raceApplications)}.map(async input=>{
-      const response=await fetch('/personal/store-applications',{
+      const response=await fetch('/organization/store-applications',{
         method:'POST',headers:{'content-type':'application/json',
           'x-csrf-token':session.csrf_token},
         body:JSON.stringify(input)
@@ -4487,7 +4487,7 @@ async function verifyInvisibleStoreNameRejection(
     const email="b22-invisible-"+index+"-"+stamp+"@example.invalid"
     const result=await browser.callFunction("async function(json){"+
       "const session=await(await fetch('/personal/session')).json();"+
-      "const response=await fetch('/personal/store-applications',{"+
+      "const response=await fetch('/organization/store-applications',{"+
       "method:'POST',headers:{'content-type':'application/json',"+
       "'x-csrf-token':session.csrf_token},body:json});"+
       "return response.status}",JSON.stringify({
@@ -4773,7 +4773,7 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
     const blockedWithoutMember=await browser.callFunction(
       "async function(json){const input=JSON.parse(json);"+
       "const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/store-applications',{method:'POST',"+
+      "const r=await fetch('/organization/store-applications',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify(input)});return r.status;}",
       JSON.stringify({organization_id:pairOrg,application_id:pairIds[0],
@@ -4807,7 +4807,7 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
       const result=await browser.callFunction(
         "async function(json){const input=JSON.parse(json);"+
         "const s=await (await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "const r=await fetch('/organization/store-applications',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify(input)});"+
         "return {status:r.status,body:await r.json()};}",
@@ -6046,7 +6046,7 @@ export default async function({container}:any){
           robots:r.headers.get("x-robots-tag"),vary:r.headers.get("vary")}
       })()`)
     }
-    const selected=(org:string)=>"/personal/organization-stores?organization="+encodeURIComponent(org)
+    const selected=(org:string)=>"/organization/stores?organization="+encodeURIComponent(org)
     // Native SellerMember is NOT a verified human association. Nothing visible.
     await browser.eval("window.__b22_ui_error='';window.addEventListener('error',event=>{window.__b22_ui_error=String(event.message).slice(0,90)});window.__b22_events=[];['pagehide','visibilitychange','popstate'].forEach(name=>window.addEventListener(name,()=>window.__b22_events.push({type:name,hidden:document.hidden})))")
     // A headless Chrome tab is not entitled to a visible workspace while
@@ -6114,7 +6114,7 @@ export default async function({container}:any){
     await browser.input("#store-draft-form input[name=email]",draftEmail)
     await browser.click("#store-draft-form button[type=submit]")
     await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
-    const draftUrl="/personal/store-applications?organization_id="+encodeURIComponent(organizations[0].id)
+    const draftUrl="/organization/store-applications?organization_id="+encodeURIComponent(organizations[0].id)
     const storedDrafts=await get(draftUrl)
     assert.equal(storedDrafts.status,200)
     assert.equal(storedDrafts.body.drafts.length,1)
@@ -6136,7 +6136,7 @@ export default async function({container}:any){
     assert.equal(editedDrafts.body.drafts[0].version,2)
     const saveDraft=async(payload:Record<string,unknown>,validCsrf=true)=>browser.eval(`(async()=>{
       const s=await (await fetch('/personal/session')).json()
-      const r=await fetch('/personal/store-applications',{method:'POST',
+      const r=await fetch('/organization/store-applications',{method:'POST',
         headers:{'content-type':'application/json','x-csrf-token':${validCsrf?"s.csrf_token":"'invalid'"}},
         body:JSON.stringify(${JSON.stringify(payload)})})
       return {status:r.status,body:await r.json()}
@@ -6150,7 +6150,7 @@ export default async function({container}:any){
     assert.equal((await saveDraft({...draftRequest,organization_id:organizations[2].id,
       expected_version:2})).status,403,
       "An unrelated Organization cannot read or alter another Store draft")
-    assert.equal((await get("/personal/store-applications?organization_id="+
+    assert.equal((await get("/organization/store-applications?organization_id="+
       encodeURIComponent(organizations[2].id))).status,403)
     assert.deepEqual(await q(`select version,name from da_store_application_draft where id=$1`,
       [storeDraftId]),[{version:2,name:draftEdited}],
@@ -6191,7 +6191,7 @@ export default async function({container}:any){
         ",rows="+state.length+",state="+state.map((row:any)=>row.status).join(",")+
         ",seller_written="+state.some((row:any)=>row.seller_created))
     }
-    const createdList=await get("/personal/store-applications?organization_id="+encodeURIComponent(organizations[0].id))
+    const createdList=await get("/organization/store-applications?organization_id="+encodeURIComponent(organizations[0].id))
     assert.equal(createdList.status,200)
     const ownApplications=createdList.body.applications
     assert.equal(ownApplications.length,1)
@@ -6214,7 +6214,7 @@ export default async function({container}:any){
     assert.equal(linked[0].action,"organization.store_application_created")
     const submit=async(payload:Record<string,string>)=>browser.eval(`(async()=>{
       const csrf=await (await fetch('/personal/session')).json()
-      const response=await fetch('/personal/store-applications',{
+      const response=await fetch('/organization/store-applications',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':csrf.csrf_token},
         body:JSON.stringify(${JSON.stringify(payload)})})
       return {status:response.status,body:await response.json()}
@@ -6550,7 +6550,7 @@ export default async function({container}:any){
       "window.__daDraftRaceHeld=false;"+
       "window.fetch=(resource,options)=>{"+
       "const url=typeof resource==='string'?resource:resource?.url;"+
-      "if(url==='/personal/store-applications'&&options?.method==='POST'&&"+
+      "if(url==='/organization/store-applications'&&options?.method==='POST'&&"+
       "!window.__daDraftRaceHeld){"+
       "window.__daDraftRaceHeld=true;"+
       "return original(resource,options).then(response=>new Promise(resolve=>{"+
@@ -6586,7 +6586,7 @@ export default async function({container}:any){
       "window.__daDraftMalformedPosts=0;"+
       "window.fetch=(resource,options)=>{"+
       "const url=typeof resource==='string'?resource:resource?.url;"+
-      "if(url==='/personal/store-applications'&&options?.method==='POST'){"+
+      "if(url==='/organization/store-applications'&&options?.method==='POST'){"+
       "window.__daDraftMalformedPosts++;"+
       "return original(resource,options).then(response=>"+
       "response.status===200?new Response('{',{status:200,"+
@@ -6634,7 +6634,7 @@ export default async function({container}:any){
       "window.__daDraftSemanticPosts=0;"+
       "window.fetch=(resource,options)=>{"+
       "const url=typeof resource==='string'?resource:resource?.url;"+
-      "if(url==='/personal/store-applications'&&options?.method==='POST'){"+
+      "if(url==='/organization/store-applications'&&options?.method==='POST'){"+
       "window.__daDraftSemanticPosts++;"+
       "return original(resource,options).then(async response=>{"+
       "if(response.status!==200)return response;"+
@@ -6678,7 +6678,7 @@ export default async function({container}:any){
     const deniedWhilePaused=await browser.callFunction(
       "async function(org,id){"+
       "const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/store-applications',{method:'POST',"+
+      "const r=await fetch('/organization/store-applications',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify({organization_id:org,application_id:id,name:'B22 blocked new Store',"+
       "email:'b22-blocked-new-store@example.invalid',currency_code:'try'})});"+
@@ -7066,7 +7066,7 @@ export default async function({container}:any){
       await browser.wait("document.visibilityState==='visible'")
       const blockedSubsequent=await browser.callFunction(
         "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/store-applications',{method:'POST',headers:{"+
+        "const r=await fetch('/organization/store-applications',{method:'POST',headers:{"+
         "'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify({organization_id:org,application_id:id,"+
         "name:'B22 concurrent pause post check',"+
@@ -7156,12 +7156,12 @@ export default async function({container}:any){
       await browser.wait("Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+
         JSON.stringify(organizations[1].name+" — member")+")")
       await browser.select(organizations[1].name,"member")
-      assert.equal(await browser.callFunction("async function(org){return (await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org))).status}",betaScope),403,
+      assert.equal(await browser.callFunction("async function(org){return (await fetch('/organization/store-applications?organization_id='+encodeURIComponent(org))).status}",betaScope),403,
         "An ungranted Member cannot read another private Organization draft")
       await reviewer.send("Page.bringToFront")
       await reviewer.select(organizations[1].name,"owner")
       const grantScope=await reviewer.callFunction(
-        "async function(org){const r=await fetch('/personal/store-draft-permissions?organization_id='+encodeURIComponent(org));"+
+        "async function(org){const r=await fetch('/organization/store-draft-permissions?organization_id='+encodeURIComponent(org));"+
         "const body=await r.json();return {status:r.status,memberCount:Array.isArray(body.members)?body.members.length:-1,"+
         "grantCount:Array.isArray(body.grants)?body.grants.length:-1}}",
         betaScope)
@@ -7170,12 +7170,12 @@ export default async function({container}:any){
       await reviewer.wait("!document.getElementById('store-draft-grants-panel').hidden")
       assert.equal(await reviewer.eval("document.querySelector('#store-draft-grants-form select[name=membership_id]').value"),
         betaAdminMembership.id)
-      assert.equal(await reviewer.callFunction("async function(org,id){const s=await(await fetch('/personal/session')).json();const r=await fetch('/personal/store-draft-permissions',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':'invalid'},body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",betaScope,betaAdminMembership.id),403,
+      assert.equal(await reviewer.callFunction("async function(org,id){const s=await(await fetch('/personal/session')).json();const r=await fetch('/organization/store-draft-permissions',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':'invalid'},body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",betaScope,betaAdminMembership.id),403,
         "A missing valid CSRF cannot issue draft permission")
       const beforeGrantUi=await reviewer.eval("({hidden:document.hidden,workspaceHidden:document.getElementById('workspace').hidden,formReady:typeof document.getElementById('store-draft-grants-form').onsubmit==='function',buttonDisabled:document.querySelector('#store-draft-grants-form button[value=grant]').disabled})")
       assert.deepEqual(beforeGrantUi,{hidden:false,workspaceHidden:false,formReady:true,buttonDisabled:false},
         "Visible Owner must have an enabled, wired draft grant control")
-      await reviewer.eval("(()=>{const prior=window.fetch.bind(window);window.__daGrantProbe={starts:0,done:0,status:null};window.__daGrantPriorFetch=window.fetch;window.fetch=(resource,options)=>{const url=typeof resource==='string'?resource:resource?.url;if(url==='/personal/store-draft-permissions'&&options?.method==='POST'){window.__daGrantProbe.starts++;return prior(resource,options).then(response=>{window.__daGrantProbe.done++;window.__daGrantProbe.status=response.status;return response})}return prior(resource,options)};return true})()")
+      await reviewer.eval("(()=>{const prior=window.fetch.bind(window);window.__daGrantProbe={starts:0,done:0,status:null};window.__daGrantPriorFetch=window.fetch;window.fetch=(resource,options)=>{const url=typeof resource==='string'?resource:resource?.url;if(url==='/organization/store-draft-permissions'&&options?.method==='POST'){window.__daGrantProbe.starts++;return prior(resource,options).then(response=>{window.__daGrantProbe.done++;window.__daGrantProbe.status=response.status;return response})}return prior(resource,options)};return true})()")
       await reviewer.click("#store-draft-grants-form button[value=grant]")
       const grantProbe=await reviewer.eval("({starts:window.__daGrantProbe.starts,done:window.__daGrantProbe.done,status:window.__daGrantProbe.status})")
       assert.equal(grantProbe.starts,1,
@@ -7197,11 +7197,11 @@ export default async function({container}:any){
       await browser.wait("!document.getElementById('store-draft-form').hidden")
       assert.equal(await browser.eval("document.getElementById('store-application-form').hidden"),true,
         "An authorized Member gets ONLY the draft form, never official submit")
-      assert.equal(await browser.callFunction("async function(org){return (await fetch('/personal/store-draft-permissions?organization_id='+encodeURIComponent(org))).status}",betaScope),403,
+      assert.equal(await browser.callFunction("async function(org){return (await fetch('/organization/store-draft-permissions?organization_id='+encodeURIComponent(org))).status}",betaScope),403,
         "A delegated Member cannot inspect Owner-only grant management")
       const memberAttempt=await browser.callFunction(
         "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
+        "const r=await fetch('/organization/store-draft-permissions',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",
         betaScope,betaAdminMembership.id)
@@ -7209,7 +7209,7 @@ export default async function({container}:any){
       const forgedStoreId="daapp_"+randomBytes(16).toString("hex")
       const forgedOfficial=await browser.callFunction(
         "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "const r=await fetch('/organization/store-applications',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify({organization_id:org,application_id:id,name:'Forged Member Store',"+
         "email:'member-forged@example.invalid',currency_code:'try'})});return r.status}",
@@ -7281,10 +7281,10 @@ export default async function({container}:any){
       await reviewer.wait("document.querySelector('#store-draft-grants-form button[value=grant]').disabled && "+
         "!document.querySelector('#store-draft-grants-form button[value=revoke]').disabled")
       const postCount=reviewer.http.filter((h:any)=>
-        h.path==="/personal/store-draft-permissions"&&h.method==="POST").length
+        h.path==="/organization/store-draft-permissions"&&h.method==="POST").length
       await reviewer.click("#store-draft-grants-form button[value=grant]")
       assert.equal(reviewer.http.filter((h:any)=>
-        h.path==="/personal/store-draft-permissions"&&h.method==="POST").length,
+        h.path==="/organization/store-draft-permissions"&&h.method==="POST").length,
         postCount,"Ambiguous new grant must not dispatch an HTTP request")
       assert.equal((await q(`select count(*)::int n
         from da_organization_store_draft_permission
@@ -7318,10 +7318,10 @@ export default async function({container}:any){
       await browser.send("Page.bringToFront")
       await browser.select(organizations[1].name,"member")
       assert.equal(await browser.callFunction(
-        "async function(org){return (await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org))).status}",betaScope),403)
+        "async function(org){return (await fetch('/organization/store-applications?organization_id='+encodeURIComponent(org))).status}",betaScope),403)
       const deniedAfterRevoke=await browser.callFunction(
         "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "const r=await fetch('/organization/store-applications',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify({action:'save_draft',organization_id:org,draft_id:id,expected_version:1,"+
         "name:'Unauthorized edit',email:'revoke@example.invalid',currency_code:'try'})});return r.status}",
@@ -7413,7 +7413,7 @@ export default async function({container}:any){
     await browser.select(largeMemberOrg.name,"owner")
     const pages=await browser.callFunction(
       "async function(org){let after='',out=[];for(let i=0;i<5;i++){"+
-      "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "const r=await fetch('/organization/store-draft-permissions?organization_id='+"+
       "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
       "const d=await r.json();out.push({status:r.status,count:d.members?.length,"+
       "grantCount:d.grants?.length,more:d.has_more,cursor:!!d.next_cursor,"+
@@ -7429,7 +7429,7 @@ export default async function({container}:any){
     // Unique name is NOT sufficient for a new grant when this older
     // Member has neither phone nor accepted company invitation email.
     const emptyLegacySelection=await browser.callFunction(
-      "async function(org,id){const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "async function(org,id){const r=await fetch('/organization/store-draft-permissions?organization_id='+"+
       "encodeURIComponent(org));const d=await r.json();"+
       "const member=d.members.find(m=>m.membership_id===id);"+
       "return {status:r.status,phone:member?.mobile_phone,email:member?.invitation_email,"+
@@ -7442,7 +7442,7 @@ export default async function({container}:any){
       "Unique name alone is not adequate proof of intended grant target")
     const missingContactPost=await browser.callFunction(
       "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
+      "const r=await fetch('/organization/store-draft-permissions',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",
       largeMemberOrg.id,legacyNoContact.id)
@@ -7462,7 +7462,7 @@ export default async function({container}:any){
       where id=$2 and organization_id=$3`,
       [legacyNoContact.person_id,legacyBadInvite.id,largeMemberOrg.id])
     const invalidAddressList=await browser.callFunction(
-      "async function(org,id){const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "async function(org,id){const r=await fetch('/organization/store-draft-permissions?organization_id='+"+
       "encodeURIComponent(org));const d=await r.json();"+
       "const member=d.members.find(m=>m.membership_id===id);"+
       "return {status:r.status,phone:member?.mobile_phone,email:member?.invitation_email}}",
@@ -7471,7 +7471,7 @@ export default async function({container}:any){
       "Malformed accepted invitation email must not be exposed as usable contact")
     const badEmailDirectPost=await browser.callFunction(
       "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
+      "const r=await fetch('/organization/store-draft-permissions',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify({action:'grant',organization_id:org,"+
       "membership_id:id})});return r.status}",
@@ -7512,7 +7512,7 @@ export default async function({container}:any){
     const corruptLabels=await browser.callFunction(
       "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
       "let after='',found=[];for(let i=0;i<5;i++){"+
-      "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "const r=await fetch('/organization/store-draft-permissions?organization_id='+"+
       "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
       "const data=await r.json();if(r.status!==200)throw Error('permissions GET denied');"+
       "for(const m of data.members){if(ids.includes(m.membership_id))"+
@@ -7526,7 +7526,7 @@ export default async function({container}:any){
       "Two malformed invites must be indistinguishable in both Owner GET and server label checks")
     const ambiguousContactPost=await browser.callFunction(
       "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
+      "const r=await fetch('/organization/store-draft-permissions',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",
       largeMemberOrg.id,nameTwins[0].id)
@@ -7548,11 +7548,11 @@ export default async function({container}:any){
     assert.equal(noContactOption.find((o:any)=>o.value===legacyNoContact.id)?.disabled,true,
       "Owner UI must also disable granting to a unique-name no-contact legacy employee")
     assert.equal(await reviewer.callFunction(
-      "async function(org){return (await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "async function(org){return (await fetch('/organization/store-draft-permissions?organization_id='+"+
       "encodeURIComponent(org))).status}",largeMemberOrg.id),403,
       "A different Person without this Organization may not list its Members")
     assert.equal(await browser.callFunction(
-      "async function(org){return (await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "async function(org){return (await fetch('/organization/store-draft-permissions?organization_id='+"+
       "encodeURIComponent(org)+'&after=../foreign')).status}",largeMemberOrg.id),400,
       "Forged pagination cursor must be rejected before a database read")
     const pageSizes=[30,30,30,11]
@@ -7574,12 +7574,12 @@ export default async function({container}:any){
         assert.equal(option?.disabled,true,
           "Cross-page identical Member name with no invitation must be disabled")
         const postBefore=browser.http.filter((h:any)=>
-          h.path==="/personal/store-draft-permissions"&&h.method==="POST").length
+          h.path==="/organization/store-draft-permissions"&&h.method==="POST").length
         await browser.eval("document.querySelector('#store-draft-grants-form select[name=membership_id]').value="+
           JSON.stringify(twin.id))
         await browser.click("#store-draft-grants-form button[value=grant]")
         assert.equal(browser.http.filter((h:any)=>
-          h.path==="/personal/store-draft-permissions"&&h.method==="POST").length,
+          h.path==="/organization/store-draft-permissions"&&h.method==="POST").length,
           postBefore,"Disabled name twin must not send any grant POST")
         assert.equal((await q(`select count(*)::int n
           from da_organization_store_draft_permission
@@ -7638,7 +7638,7 @@ export default async function({container}:any){
     await browser.eval("(()=>{const original=window.fetch.bind(window);"+
       "window.__b22GrantOriginalFetch=window.fetch;"+
       "window.fetch=(resource,options)=>{const path=typeof resource==='string'?resource:resource?.url;"+
-      "if(path==='/personal/store-draft-permissions'&&options?.method==='POST')"+
+      "if(path==='/organization/store-draft-permissions'&&options?.method==='POST')"+
       "return original(resource,options).then(r=>r.status===200?"+
       "new Response('{\\\"status\\\":',{status:200,headers:{'content-type':'application/json'}}):r);"+
       "return original(resource,options)};return true})()")
@@ -7700,7 +7700,7 @@ export default async function({container}:any){
     const grantBoth=await browser.callFunction(
       "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
       "const session=await(await fetch('/personal/session')).json();"+
-      "const statuses=[];for(const id of ids){const r=await fetch('/personal/store-draft-permissions',"+
+      "const statuses=[];for(const id of ids){const r=await fetch('/organization/store-draft-permissions',"+
       "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
       "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});"+
       "statuses.push(r.status)}return statuses}",largeMemberOrg.id,
@@ -7716,7 +7716,7 @@ export default async function({container}:any){
     const collisionPages=await browser.callFunction(
       "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
       "let after='',found=[],pages=[];for(let i=0;i<5;i++){"+
-      "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "const r=await fetch('/organization/store-draft-permissions?organization_id='+"+
       "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
       "const data=await r.json();pages.push(r.status);"+
       "for(const m of data.members){if(ids.includes(m.membership_id))"+
@@ -7756,7 +7756,7 @@ export default async function({container}:any){
         assert.ok(option.text.includes("birden fazla etkin izin"),
           "Owner must see why conflicting grants are not individually revocable")
         const before=browser.http.filter((h:any)=>
-          h.path==="/personal/store-draft-permissions"&&h.method==="POST").length
+          h.path==="/organization/store-draft-permissions"&&h.method==="POST").length
         await browser.eval("(()=>{const select=document.querySelector("+
           "'#store-draft-grants-form select[name=membership_id]');"+
           "select.value="+JSON.stringify(selected.id)+";"+
@@ -7766,7 +7766,7 @@ export default async function({container}:any){
           true,"User cannot submit ambiguous individual revoke")
         await browser.click("#store-draft-grants-form button[value=revoke]")
         assert.equal(browser.http.filter((h:any)=>
-          h.path==="/personal/store-draft-permissions"&&h.method==="POST").length,before,
+          h.path==="/organization/store-draft-permissions"&&h.method==="POST").length,before,
           "Disabled ambiguous revoke must send zero POST requests")
       }
       if(index<3){
@@ -7779,7 +7779,7 @@ export default async function({container}:any){
     const deniedAmbiguous=await browser.callFunction(
       "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
       "const session=await(await fetch('/personal/session')).json();"+
-      "const result=[];for(const id of ids){const r=await fetch('/personal/store-draft-permissions',"+
+      "const result=[];for(const id of ids){const r=await fetch('/organization/store-draft-permissions',"+
       "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
       "body:JSON.stringify({action:'revoke',organization_id:org,membership_id:id})});"+
       "result.push(r.status)}return result}",largeMemberOrg.id,
@@ -7820,7 +7820,7 @@ export default async function({container}:any){
     const restoredContacts=await browser.callFunction(
       "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
       "let after='',found=[],pages=[];for(let i=0;i<5;i++){"+
-      "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "const r=await fetch('/organization/store-draft-permissions?organization_id='+"+
       "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
       "const data=await r.json();pages.push(r.status);"+
       "for(const m of data.members){if(ids.includes(m.membership_id))"+
@@ -7913,7 +7913,7 @@ export default async function({container}:any){
     await browser.select(rejoinOrg.name,"owner")
     const grantRejoin=async(membershipId:string)=>browser.callFunction(
       "async function(org,id){const session=await(await fetch('/personal/session')).json();"+
-      "const response=await fetch('/personal/store-draft-permissions',"+
+      "const response=await fetch('/organization/store-draft-permissions',"+
       "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
       "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});"+
       "return {status:response.status,body:await response.json()}}",
@@ -8522,7 +8522,7 @@ export default async function({container}:any){
         "const action="+JSON.stringify(action)+";"+
         "const input="+JSON.stringify(input)+";"+
         "const method=action==='read'?'GET':'POST';"+
-        "const url='/personal/store-price-groups'+(method==='GET'?'?'+new URLSearchParams(input).toString():'');"+
+        "const url='/organization/store-price-groups'+(method==='GET'?'?'+new URLSearchParams(input).toString():'');"+
         "const res=await fetch(url,{method,headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "...(method==='POST'?{body:JSON.stringify({...input,action})}:{})});"+
         "return {status:res.status,body:await res.json()};})()")
@@ -8543,7 +8543,7 @@ export default async function({container}:any){
       "const p=new URLSearchParams({view:'list',"+
       "organization_id:"+JSON.stringify(orgId)+","+
       "seller_id:"+JSON.stringify(sellerId)+"});"+
-      "const r=await fetch('/personal/store-price-groups?'+p.toString());"+
+      "const r=await fetch('/organization/store-price-groups?'+p.toString());"+
       "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')};})()")
     const ownedGroupList=await nativeGroupList(browser,organizations[0].id,ownerStoreId)
     assert.equal(ownedGroupList.status,200)
@@ -8582,7 +8582,7 @@ export default async function({container}:any){
       "window.__daWriteRaceHeld=false;"+
       "window.fetch=(resource,options)=>{"+
         "const url=typeof resource==='string'?resource:resource?.url;"+
-        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+        "if(url==='/organization/store-price-groups'&&options?.method==='POST'&&"+
            "!window.__daWriteRaceHeld){"+
           "window.__daWriteRaceHeld=true;"+
           "return original(resource,options).then(response=>new Promise(resolve=>{"+
@@ -8687,7 +8687,7 @@ export default async function({container}:any){
       "window.__daGroupRaceHeld=false;"+
       "window.fetch=(resource,options)=>{"+
         "const url=typeof resource==='string'?resource:resource?.url;"+
-        "if(typeof url==='string'&&url.startsWith('/personal/store-price-groups?')&&"+
+        "if(typeof url==='string'&&url.startsWith('/organization/store-price-groups?')&&"+
            "url.includes('buyer_organization_id=')&&!window.__daGroupRaceHeld){"+
           "window.__daGroupRaceHeld=true;"+
           "return original(resource,options).then(response=>new Promise(resolve=>{"+
@@ -8755,7 +8755,7 @@ export default async function({container}:any){
       "window.__daF01Fetch=window.fetch;"+
       "window.fetch=(resource,options)=>{"+
         "const url=typeof resource==='string'?resource:resource?.url;"+
-        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+        "if(url==='/organization/store-price-groups'&&options?.method==='POST'&&"+
           "JSON.parse(options.body||'{}').action==='grant'&&!window.__daF01Held){"+
           "window.__daF01Held=true;"+
           "return original(resource,options).then(response=>new Promise(resolve=>{"+
@@ -8804,7 +8804,7 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Chrome: F-01 real idempotent native grant + PG16, delayed 200 after same-Store Buyer edit cannot claim success for new Buyer; exact original-scope read reconciles, no extra audit\n")
     assert.equal((await groupChange("grant",{...groupInput,seller_id:secondOwnerStoreId})).status,403)
     assert.equal((await groupChange("grant",groupInput,reviewer)).status,403)
-    const missingCsrf=await browser.eval("(async()=>{const r=await fetch('/personal/store-price-groups',{method:'POST',headers:{'content-type':'application/json'},body:"+JSON.stringify(JSON.stringify({...groupInput,action:"grant"}))+"});return r.status})()")
+    const missingCsrf=await browser.eval("(async()=>{const r=await fetch('/organization/store-price-groups',{method:'POST',headers:{'content-type':'application/json'},body:"+JSON.stringify(JSON.stringify({...groupInput,action:"grant"}))+"});return r.status})()")
     assert.equal(missingCsrf,403)
     // First real private reference price: only the independently authorized
     // Buyer Organization Beta was granted Seller Alpha's native CustomerGroup.
@@ -8958,7 +8958,7 @@ export default async function({container}:any){
       "window.__daRevokeSynthetic503=false;"+
       "window.fetch=(resource,options)=>{"+
         "const url=typeof resource==='string'?resource:resource?.url;"+
-        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+        "if(url==='/organization/store-price-groups'&&options?.method==='POST'&&"+
           "JSON.parse(options.body||'{}').action==='revoke'&&!window.__daRevokeSynthetic503){"+
           "return original(resource,options).then(async response=>{"+
             "const body=await response.clone().json();"+
@@ -9044,7 +9044,7 @@ export default async function({container}:any){
       "window.__daF02Posts=0;"+
       "window.fetch=(resource,options)=>{"+
         "const url=typeof resource==='string'?resource:resource?.url;"+
-        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+        "if(url==='/organization/store-price-groups'&&options?.method==='POST'&&"+
           "JSON.parse(options.body||'{}').action==='revoke'){"+
           "window.__daF02Posts++;"+
           "return original(resource,options).then(async response=>{"+
@@ -9172,12 +9172,12 @@ export default async function({container}:any){
       ".some(b=>b.dataset.followSellerId==="+JSON.stringify(followSeller)+
       " && !b.disabled && b.textContent.includes('takip et'))")
     const foreignFollowGet=await reviewer.eval("(async()=>{"+
-      "const r=await fetch('/personal/store-follows?organization_id="+
+      "const r=await fetch('/organization/store-follows?organization_id="+
       encodeURIComponent(followBuyer)+"&seller_id="+encodeURIComponent(followSeller)+"');"+
       "return {status:r.status,body:await r.json()};})()")
     assert.equal(foreignFollowGet.status,403,"Another Person cannot inspect a foreign Buyer follow")
     const wrongCsrfFollow=await browser.eval("(async()=>{"+
-      "const r=await fetch('/personal/store-follows',{method:'POST',"+
+      "const r=await fetch('/organization/store-follows',{method:'POST',"+
       "headers:{'content-type':'application/json'},"+
       "body:JSON.stringify({action:'follow',organization_id:"+JSON.stringify(followBuyer)+
       ",seller_id:"+JSON.stringify(followSeller)+",expected_version:0})});return r.status;})()")
@@ -9194,14 +9194,14 @@ export default async function({container}:any){
     assert.equal(followedRows[0].revoked_at,null)
     const replayFollow=await browser.eval("(async()=>{"+
       "const s=await (await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/store-follows',{method:'POST',"+
+      "const r=await fetch('/organization/store-follows',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify({action:'follow',organization_id:"+JSON.stringify(followBuyer)+
       ",seller_id:"+JSON.stringify(followSeller)+",expected_version:0})});return r.status;})()")
     assert.equal(replayFollow,409,"A stale follow cannot create a second audit or record")
     const foreignMutation=await reviewer.eval("(async()=>{"+
       "const s=await (await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/store-follows',{method:'POST',"+
+      "const r=await fetch('/organization/store-follows',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify({action:'unfollow',organization_id:"+JSON.stringify(followBuyer)+
       ",seller_id:"+JSON.stringify(followSeller)+",expected_version:1})});return r.status;})()")
@@ -9245,7 +9245,7 @@ export default async function({container}:any){
     // Owner UI to unfollow without a product or Seller catalog row.
     const betaFollowBuyer=organizations[1].id
     const betaFollowBefore=await reviewer.eval(`(async()=>{
-      const r=await fetch('/personal/store-follows?organization_id='+
+      const r=await fetch('/organization/store-follows?organization_id='+
         ${JSON.stringify(organizations[1].id)}+'&seller_id='+
         ${JSON.stringify(ownerStoreId)})
       return {status:r.status,body:await r.json()}
@@ -9256,7 +9256,7 @@ export default async function({container}:any){
     })
     const betaFollow=await reviewer.eval(`(async()=>{
       const session=await(await fetch('/personal/session')).json()
-      const r=await fetch('/personal/store-follows',{method:'POST',
+      const r=await fetch('/organization/store-follows',{method:'POST',
         headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
         body:JSON.stringify({action:'follow',
           organization_id:${JSON.stringify(organizations[1].id)},
@@ -9286,7 +9286,7 @@ export default async function({container}:any){
         ".some(b=>b.dataset.unfollowSellerId==="+JSON.stringify(ownerStoreId)+
         "&&!b.disabled)")
       const betaFollowList=await reviewer.eval(`(async()=>{
-        const r=await fetch('/personal/store-follows?organization_id='+
+        const r=await fetch('/organization/store-follows?organization_id='+
           ${JSON.stringify(organizations[1].id)})
         return {status:r.status,body:await r.json()}
       })()`)
@@ -9381,7 +9381,7 @@ export default async function({container}:any){
     // policy. Native Member/SellerMember alone is not the issuer grant.
     const changeStoreBlock=async(action:"block"|"unblock")=>browser.eval(`(async()=>{
       const s=await(await fetch('/personal/session')).json()
-      const r=await fetch('/personal/store-buyer-blocks',{
+      const r=await fetch('/organization/store-buyer-blocks',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
         body:JSON.stringify(${JSON.stringify({action,organization_id:organizations[0].id,
           seller_id:ownerStoreId,buyer_organization_id:organizations[0].id})})
@@ -9400,7 +9400,7 @@ export default async function({container}:any){
       organizations[0].id)
     await browser.click('#store-block-form button[value="block"]')
     await browser.wait("document.getElementById('store-block-status').textContent.includes('engellendi')")
-    assert.ok(browser.http.some((x:any)=>x.path==="/personal/store-buyer-blocks"&&
+    assert.ok(browser.http.some((x:any)=>x.path==="/organization/store-buyer-blocks"&&
       x.method==="POST"&&x.status===200),"Owner's visible policy form must POST 200")
     assert.equal((await changeStoreBlock("block")).status,200,
       "Replay must not write another active block")
@@ -9414,7 +9414,7 @@ export default async function({container}:any){
     // association to manage Alpha's Store, nor can SellerMember alone.
     const wrongOwner=await browser.eval(`(async()=>{
       const token=(await(await fetch('/personal/session')).json()).csrf_token
-      const r=await fetch('/personal/store-buyer-blocks',{
+      const r=await fetch('/organization/store-buyer-blocks',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':token},
         body:JSON.stringify(${JSON.stringify({action:"block",
           organization_id:organizations[1].id,seller_id:ownerStoreId,
@@ -9423,7 +9423,7 @@ export default async function({container}:any){
     })()`)
     assert.equal(wrongOwner,403)
     const noBlockCsrf=await browser.eval(`(async()=>{
-      const r=await fetch('/personal/store-buyer-blocks',{
+      const r=await fetch('/organization/store-buyer-blocks',{
         method:'POST',headers:{'content-type':'application/json'},
         body:JSON.stringify(${JSON.stringify({action:"unblock",
           organization_id:organizations[0].id,seller_id:ownerStoreId,
@@ -9462,7 +9462,7 @@ export default async function({container}:any){
     // must never be read as an Alpha global organization suspension.
     const changeSecondBlock=async(action:"block"|"unblock")=>browser.eval(`(async()=>{
       const session=await(await fetch('/personal/session')).json()
-      const response=await fetch('/personal/store-buyer-blocks',{
+      const response=await fetch('/organization/store-buyer-blocks',{
         method:'POST',headers:{'content-type':'application/json',
           'x-csrf-token':session.csrf_token},
         body:JSON.stringify(${JSON.stringify({
@@ -10059,7 +10059,7 @@ export default async function({container}:any){
     const betaSellerBlock=async(action:"block"|"unblock",
       sellerOrg:string,sellerId:string)=>browser.eval(`(async()=>{
         const session=await(await fetch('/personal/session')).json()
-        const response=await fetch('/personal/store-buyer-blocks',{
+        const response=await fetch('/organization/store-buyer-blocks',{
           method:'POST',headers:{'content-type':'application/json',
             'x-csrf-token':session.csrf_token},
           body:JSON.stringify(${JSON.stringify({
@@ -10074,7 +10074,7 @@ export default async function({container}:any){
       "Alpha Owner scope cannot issue Gamma Store's policy")
     const wrongBetaIssuer=await reviewer.eval(`(async()=>{
       const session=await(await fetch('/personal/session')).json()
-      return (await fetch('/personal/store-buyer-blocks',{
+      return (await fetch('/organization/store-buyer-blocks',{
         method:'POST',headers:{'content-type':'application/json',
           'x-csrf-token':session.csrf_token},
         body:JSON.stringify(${JSON.stringify({
@@ -11306,7 +11306,7 @@ export default async function({container}:any){
     for(const action of ["grant","revoke"]){
       const denied=await browser.eval(`(async()=>{
         const session=await(await fetch('/personal/session')).json()
-        const r=await fetch('/personal/store-product-permissions',{
+        const r=await fetch('/organization/store-product-permissions',{
           method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
           body:JSON.stringify(${JSON.stringify({action,organization_id:organizations[0].id,
             seller_id:ownerStoreId,membership_id:memberships[0].id})})
@@ -11330,14 +11330,14 @@ export default async function({container}:any){
       f.elements.namedItem('membership_id').value=${JSON.stringify(alphaMember.id)};
     })()`)
     const priorProductGrantPosts=browser.http.filter((x:any)=>
-      x.path==="/personal/store-product-permissions"&&x.method==="POST").length
+      x.path==="/organization/store-product-permissions"&&x.method==="POST").length
     await browser.click('#product-grants-form button[value="grant"]')
     await until(async()=>browser.http.filter((x:any)=>
-      x.path==="/personal/store-product-permissions"&&x.method==="POST"
+      x.path==="/organization/store-product-permissions"&&x.method==="POST"
     ).length>priorProductGrantPosts,19000,
       "B22 Chrome Owner products.edit POST reaches first-party HTTP")
     const productGrantPosts=browser.http.filter((x:any)=>
-      x.path==="/personal/store-product-permissions"&&x.method==="POST")
+      x.path==="/organization/store-product-permissions"&&x.method==="POST")
     assert.equal(productGrantPosts[productGrantPosts.length-1].status,200,
       "Actual Chrome Owner products.edit POST must be accepted")
     await until(async()=>{
@@ -11364,7 +11364,7 @@ export default async function({container}:any){
       seller_id:ownerStoreId,membership_id:alphaMember.id}
     const replayGrant=await browser.eval(`(async()=>{
       const s=await(await fetch('/personal/session')).json();
-      const response=await fetch('/personal/store-product-permissions',{
+      const response=await fetch('/organization/store-product-permissions',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
         body:JSON.stringify(${JSON.stringify(sameRequest)})
       });return {status:response.status,body:await response.json()}
@@ -11380,7 +11380,7 @@ export default async function({container}:any){
     await reviewer.wait("document.visibilityState==='visible'")
     const forbiddenGrant=await reviewer.eval(`(async()=>{
       const s=await(await fetch('/personal/session')).json();
-      const response=await fetch('/personal/store-product-permissions',{
+      const response=await fetch('/organization/store-product-permissions',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
         body:JSON.stringify(${JSON.stringify(sameRequest)})
       });return response.status
@@ -11412,7 +11412,7 @@ export default async function({container}:any){
     // are forbidden. Use the Owner's actual browser to revoke that one grant.
     const legacyRegrant=await browser.eval("(async()=>{"+
       "const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/store-product-permissions',{method:'POST',"+
+      "const r=await fetch('/organization/store-product-permissions',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify("+JSON.stringify(sameRequest)+")});"+
       "return {status:r.status,body:await r.json()}})()")
@@ -11464,7 +11464,7 @@ export default async function({container}:any){
         const result={session:sessionResponse.status}
         const targets=[
           ['Buyer','/personal/buyer-permissions',{organization_id:org,membership_id:member}],
-          ['Product','/personal/store-product-permissions',
+          ['Product','/organization/store-product-permissions',
             {organization_id:org,membership_id:member,seller_id:seller}]
         ]
         for(const action of ${JSON.stringify(operations)}){
@@ -11637,11 +11637,11 @@ export default async function({container}:any){
         "const member="+JSON.stringify(alphaMember.id)+";"+
         "const seller="+JSON.stringify(ownerStoreId)+";"+
         "return {buyerList:(await fetch('/personal/buyer-permissions?organization_id='+org)).status,"+
-        "productList:(await fetch('/personal/store-product-permissions?organization_id='+org)).status,"+
+        "productList:(await fetch('/organization/store-product-permissions?organization_id='+org)).status,"+
         "buyerGrant:await send('/personal/buyer-permissions',{action:'grant',organization_id:org,membership_id:member}),"+
         "buyerRevoke:await send('/personal/buyer-permissions',{action:'revoke',organization_id:org,membership_id:member}),"+
-        "productGrant:await send('/personal/store-product-permissions',{action:'grant',organization_id:org,seller_id:seller,membership_id:member}),"+
-        "productRevoke:await send('/personal/store-product-permissions',{action:'revoke',organization_id:org,seller_id:seller,membership_id:member})"+
+        "productGrant:await send('/organization/store-product-permissions',{action:'grant',organization_id:org,seller_id:seller,membership_id:member}),"+
+        "productRevoke:await send('/organization/store-product-permissions',{action:'revoke',organization_id:org,seller_id:seller,membership_id:member})"+
         "}})()"
       // Same active but deliberately UNPROTECTED Owner fixture: no native
       // role-only reader or management endpoint may accept its title.
@@ -11662,7 +11662,7 @@ export default async function({container}:any){
           memberships:(await fetch('/organization/memberships?organization='+org)).status,
           invitations:(await fetch('/organization/invitations?organization='+org)).status,
           audit:(await fetch('/organization/audit-timeline?organization='+org)).status,
-          stores:(await fetch('/personal/organization-stores?organization='+org)).status,
+          stores:(await fetch('/organization/stores?organization='+org)).status,
           createInvite:await post('/organization/invitations',{action:'create',
             organization_id:org,email:'unprotected-owner@example.invalid',role:'member'}),
           revokeMember:await post('/organization/memberships',{action:'revoke',
@@ -12103,7 +12103,7 @@ export default async function({container}:any){
         const intent={action,organization_id:organizations[0].id,
           seller_id:ownerStoreId,membership_id:alphaMember.id}
         return browser.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
-          "const r=await fetch('/personal/store-product-permissions',{method:'POST',"+
+          "const r=await fetch('/organization/store-product-permissions',{method:'POST',"+
           "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
           "body:JSON.stringify("+JSON.stringify(intent)+")});"+
           "return {status:r.status,body:await r.json()}})()")
@@ -12168,7 +12168,7 @@ export default async function({container}:any){
           const sr=await fetch('/personal/session')
           if(sr.status!==200)return sr.status
           const current=await sr.json()
-          const r=await fetch('/personal/store-member-connections',{
+          const r=await fetch('/organization/store-member-connections',{
             method:'POST',headers:{'content-type':'application/json',
               ...( ${JSON.stringify(withCsrf)} ? {'x-csrf-token':current.csrf_token} : {})},
             body:JSON.stringify(${JSON.stringify(input)})
@@ -12240,7 +12240,7 @@ export default async function({container}:any){
       assert.equal(confirmed.length,1,"Owner native membership requires canonical Foundation audit/outbox")
       const replayConnected=await browser.eval("(async()=>{"+
         "const s=await (await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/store-member-connections',{method:'POST',"+
+        "const r=await fetch('/organization/store-member-connections',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify("+JSON.stringify({
           organization_id:organizations[0].id,seller_id:ownerStoreId,membership_id:alphaMember.id
@@ -12436,7 +12436,7 @@ export default async function({container}:any){
       await ownerRaceBarrier.query("select pg_advisory_xact_lock(hashtext('b22-native-owner-create-pause'),hashtext($1))",[ownerRaceEmail])
       let ownerCreateFinished=false
       const ownerCreatePending=browser.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "const r=await fetch('/organization/store-applications',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify("+JSON.stringify(ownerRaceRequest)+")});"+
         "return {status:r.status,body:await r.json()}})()"
@@ -12555,7 +12555,7 @@ export default async function({container}:any){
       const deniedGammaId="daapp_"+randomBytes(16).toString("hex")
       const gammaSubmitDenied=await browser.callFunction(
         "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "const r=await fetch('/organization/store-applications',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify({organization_id:org,application_id:id,"+
         "name:'B22 Gamma post race denied',"+
@@ -13621,7 +13621,7 @@ export default async function({container}:any){
       let pendingGroupPost:Promise<{status:number;body:any}>|undefined
       try{
         pendingGroupPost=new Promise((resolve,reject)=>{
-          const request=tlsRequest(host+"/personal/store-price-groups",{
+          const request=tlsRequest(host+"/organization/store-price-groups",{
             method:"POST",ca:readFileSync(crt),headers:{
               Cookie:"da_session="+initialGroupCookie,
               Origin:host,"Content-Type":"application/json",

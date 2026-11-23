@@ -25,7 +25,7 @@ export async function verifyB22CoownerNativeMemberReadback(input:{
   // task-owned PG16 role fixture is NOT an Owner-promotion product API.
   const privateClosing=async(actor:B06Chrome,orgId:string)=>
     actor.callFunction("async function(org,seller){"+
-      "const r=await fetch('/personal/store-owner-closing?'+new URLSearchParams("+
+      "const r=await fetch('/organization/store-owner-closing?'+new URLSearchParams("+
       "{organization_id:org,seller_id:seller}),{cache:'no-store'});"+
       "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}}",
       orgId,ownerStoreId)
@@ -493,7 +493,7 @@ export async function verifyB22LateProtectedOwnerClosingNotice(input:{
   assert.equal(process.env.CI,"true")
   assert.equal(process.env.PG_MFA_TEST_SENTINEL,"mfa-pg16-disposable-ci-v1")
   assert.notEqual(personA,personB)
-  const path="/personal/store-owner-closing?"+
+  const path="/organization/store-owner-closing?"+
     new URLSearchParams({organization_id:organizationId,seller_id:sellerId})
   const get=(b:B06Chrome)=>b.callFunction(
     "async function(path){const r=await fetch(path,{cache:'no-store'});"+
@@ -502,7 +502,7 @@ export async function verifyB22LateProtectedOwnerClosingNotice(input:{
     browser.callFunction(
       "async function(args){const x=JSON.parse(args);"+
       "const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/store-owner-closing',"+
+      "const r=await fetch('/organization/store-owner-closing',"+
       "{method:'POST',headers:{'content-type':'application/json',"+
       "'x-csrf-token':s.csrf_token},body:JSON.stringify(x)});"+
       "return {status:r.status,body:await r.json()}}",

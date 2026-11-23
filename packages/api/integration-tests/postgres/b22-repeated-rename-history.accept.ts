@@ -33,7 +33,7 @@ export async function verifyRepeatedApprovedStoreRenameHistory(input:{
   const d={name:"B22 Return D "+suffix,handle:"b22-return-d-"+suffix}
   const ownerPost=async(payload:object)=>owner.callFunction(
     "async function(json){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/store-rename-requests',{method:'POST',"+
+    "const r=await fetch('/organization/store-rename-requests',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:json});return {status:r.status,body:await r.json()}}",
     JSON.stringify(payload))
@@ -245,7 +245,7 @@ export async function verifyRepeatedApprovedStoreRenameHistory(input:{
     assert.ok(approved.some((r:any)=>r.id===bToD))
     // New and old historical approvals must coexist; no history deletion.
     const view=await owner.callFunction(
-      "async function(org,seller){const r=await fetch('/personal/store-rename-requests?'+"+
+      "async function(org,seller){const r=await fetch('/organization/store-rename-requests?'+"+
       "new URLSearchParams({organization_id:org,seller_id:seller}));"+
       "return {status:r.status,body:await r.json()}}",organizationId,sellerId)
     assert.equal(view.status,200,"Only live protected Owner reads private rename history")

@@ -39,7 +39,7 @@ export async function verifyTwoStoreSameHandleApprovalRace(input:{
   }))
   const ownerPost=(body:object)=>owner.callFunction(
     "async function(payload){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/store-rename-requests',{method:'POST',"+
+    "const r=await fetch('/organization/store-rename-requests',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:payload});return {status:r.status}}",JSON.stringify(body))
   // Both Store requests originate from a real logged-in protected Owner in
