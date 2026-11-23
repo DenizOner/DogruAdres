@@ -21,7 +21,7 @@ export default async function({container}:any) {
   const app=await createPersonalHttpApp(container)
   let dropRead=false,readSubmissions=0,dropped=0
   const server=createServer({cert,key,minVersion:'TLSv1.2'},(req,res)=>{
-    if(req.url==='/personal/notifications'&&req.method==='POST'){
+    if(req.url==='/organization/notifications'&&req.method==='POST'){
       readSubmissions++
       if(dropRead){
         dropRead=false
@@ -84,7 +84,7 @@ export default async function({container}:any) {
       await browser.wait("!document.getElementById('workspace').hidden && document.getElementById('notification-count').textContent==='(0 okunmamış)'")
       let paused:string|undefined
       browser.onEvent=m=>{if(m.method==='Fetch.requestPaused')paused=m.params.requestId}
-      await browser.send('Fetch.enable',{patterns:[{urlPattern:origin+'/personal/notifications?*',requestStage:'Response'}]})
+      await browser.send('Fetch.enable',{patterns:[{urlPattern:origin+'/organization/notifications?*',requestStage:'Response'}]})
       await browser.click('#notification-bell');await until(async()=>paused,10000,'notification response pause')
       assert.equal(await browser.eval("document.getElementById('notification-status').textContent==='Bildirimler yükleniyor…' && document.getElementById('notification-list').getAttribute('aria-busy')==='true'"),true)
       await browser.screenshot(join(dir,'07-loading.png'))
@@ -111,8 +111,8 @@ export default async function({container}:any) {
     // First decisive native Medusa + real HTTPS + migrated PostgreSQL integration.
     if(process.env.B19_FULL!=='true'){
       const a=await login(fixtures.a)
-      assert.equal((await call('/personal/notifications','GET',a.cookie)).status,200)
-      assert.equal((await call('/personal/notifications','GET',a.cookie)).data.unread_count,0)
+      assert.equal((await call('/organization/notifications','GET',a.cookie)).status,200)
+      assert.equal((await call('/organization/notifications','GET',a.cookie)).data.unread_count,0)
       assert.equal((await call('/personal/session?action=lock','DELETE',a.cookie,a.csrf)).status,200)
       const rows=await q("select a.action,n.id,n.read_at from da_audit_event a join da_notification_receipt n on n.audit_event_id=a.id join da_security_outbox o on o.audit_event_id=a.id where n.person_id=$1",[fixtures.a.person])
       assert.equal(rows.length,1);assert.equal(rows[0].action,'session.locked');assert.equal(rows[0].read_at,null)
@@ -135,22 +135,22 @@ export default async function({container}:any) {
     const credentials=async(c:B19Chrome)=>{const value=await cookie(c),me=await call('/personal/session','GET',value);assert.equal(me.status,200);return {cookie:value,csrf:me.data.csrf_token}}
     await a.start();await browserLogin(a,fixtures.a)
     const old=await credentials(a)
-    const before=await call('/personal/notifications','GET',old.cookie);assert.ok(before.data.notifications.length>=1)
+    const before=await call('/organization/notifications','GET',old.cookie);assert.ok(before.data.notifications.length>=1)
     const initialId=(before.data.notifications.find((n:any)=>!n.read_at)||before.data.notifications[0]).id
     const readBaseline=(await q('select count(*)::int n from da_notification_receipt where read_at is not null'))[0].n
     await b.start();await browserLogin(b,fixtures.b)
     const other=await credentials(b)
     await b.click('#notification-bell');await b.wait("document.getElementById('notification-status').textContent==='Henüz bildirim yok.'")
     await b.screenshot(join(dir,'01-person-b-empty.png'))
-    passed('empty',{http:(await call('/personal/notifications','GET',other.cookie)).data,chrome:true})
+    passed('empty',{http:(await call('/organization/notifications','GET',other.cookie)).data,chrome:true})
     // Denials precede any new positive lock/read submission.
-    const cross=await call('/personal/notifications','POST',other.cookie,other.csrf,{id:initialId});assert.equal(cross.status,403)
-    const foreignGet=await call('/personal/notifications?organization='+fixtures.org,'GET',other.cookie);assert.equal(foreignGet.status,403)
-    const foreignPost=await call('/personal/notifications?organization='+fixtures.org,'POST',other.cookie,other.csrf,{id:initialId});assert.equal(foreignPost.status,403)
-    const badCsrf=await call('/personal/notifications','POST',old.cookie,'x'.repeat(43),{id:initialId});assert.equal(badCsrf.status,403)
-    const badOrigin=await call('/personal/notifications','POST',old.cookie,old.csrf,{id:initialId},'https://foreign.invalid');assert.equal(badOrigin.status,403)
-    assert.equal((await call('/personal/notifications?person_id='+fixtures.a.person,'GET',other.cookie)).status,400)
-    assert.equal((await call('/personal/notifications','GET')).status,401)
+    const cross=await call('/organization/notifications','POST',other.cookie,other.csrf,{id:initialId});assert.equal(cross.status,403)
+    const foreignGet=await call('/organization/notifications?organization='+fixtures.org,'GET',other.cookie);assert.equal(foreignGet.status,403)
+    const foreignPost=await call('/organization/notifications?organization='+fixtures.org,'POST',other.cookie,other.csrf,{id:initialId});assert.equal(foreignPost.status,403)
+    const badCsrf=await call('/organization/notifications','POST',old.cookie,'x'.repeat(43),{id:initialId});assert.equal(badCsrf.status,403)
+    const badOrigin=await call('/organization/notifications','POST',old.cookie,old.csrf,{id:initialId},'https://foreign.invalid');assert.equal(badOrigin.status,403)
+    assert.equal((await call('/organization/notifications?person_id='+fixtures.a.person,'GET',other.cookie)).status,400)
+    assert.equal((await call('/organization/notifications','GET')).status,401)
     assert.equal((await q('select count(*)::int n from da_notification_receipt where read_at is not null'))[0].n,readBaseline)
     const badLock=await call('/personal/session?action=lock','DELETE',old.cookie,'x'.repeat(43));assert.equal(badLock.status,403)
     assert.equal((await call('/personal/session?action=lock&all=true','DELETE',old.cookie,old.csrf)).status,400)
@@ -160,8 +160,8 @@ export default async function({container}:any) {
     await a.wait("document.getElementById('status').textContent.startsWith('Oturum kilitlendi.')")
     assert.equal(await a.eval("document.getElementById('notification-panel').hidden && document.getElementById('notification-list').children.length===0 && document.getElementById('notification-bell').hidden"),true)
     const locks=await q("select a.id,a.action,n.id as notification_id,n.read_at,o.id as outbox_id from da_audit_event a join da_notification_receipt n on n.audit_event_id=a.id join da_security_outbox o on o.audit_event_id=a.id where n.person_id=$1 order by n.created_at",[fixtures.a.person]);assert.equal(locks.length,before.data.notifications.length+1)
-    const revokedGet=await call('/personal/notifications','GET',old.cookie);assert.ok([401,403].includes(revokedGet.status))
-    const revokedPost=await call('/personal/notifications','POST',old.cookie,old.csrf,{id:initialId});assert.ok([401,403].includes(revokedPost.status))
+    const revokedGet=await call('/organization/notifications','GET',old.cookie);assert.ok([401,403].includes(revokedGet.status))
+    const revokedPost=await call('/organization/notifications','POST',old.cookie,old.csrf,{id:initialId});assert.ok([401,403].includes(revokedPost.status))
     passed('genuine-lock',{locks,oldGet:revokedGet.status,oldPost:revokedPost.status,concealed:true})
     await a.screenshot(join(dir,'02-locked.png'))
     const lastCounter=Math.floor(Date.now()/30000)
@@ -180,15 +180,15 @@ export default async function({container}:any) {
     await a.click('#notification-bell');await a.wait("document.getElementById('notification-list').children.length==="+locks.length)
     await a.screenshot(join(dir,'03-two-unread.png'))
     const visible=await a.eval("document.getElementById('notification-panel').innerText")
-    const list=await call('/personal/notifications','GET',current.cookie)
+    const list=await call('/organization/notifications','GET',current.cookie)
     const serialized=JSON.stringify(list.data)
     for(const secret of [fixtures.a.email,fixtures.a.person,fixtures.a.seed,fixtures.a.password,old.cookie.slice(11),...locks.map((x:any)=>x.id)])assert.ok(!serialized.includes(secret)&&!visible.includes(secret))
     assert.ok(!/actor_id|target_id|audit_event_id|code_provider|auth_identity/.test(serialized))
-    assert.equal((await call('/personal/notifications?organization='+fixtures.org,'GET',current.cookie)).status,200)
+    assert.equal((await call('/organization/notifications?organization='+fixtures.org,'GET',current.cookie)).status,200)
     passed('authorized-private-list',{response:list.data,keyboard:true,escapeFocus:true,noRawAuditOrSecrets:true})
     // Simulate a response lost AFTER the real committed POST, never retry automatically.
     const submissionsBefore=readSubmissions
-    await a.send('Fetch.enable',{patterns:[{urlPattern:origin+'/personal/notifications',requestStage:'Response'}]})
+    await a.send('Fetch.enable',{patterns:[{urlPattern:origin+'/organization/notifications',requestStage:'Response'}]})
     let fault:Promise<any>|undefined
     a.onEvent=m=>{if(m.method==='Fetch.requestPaused'){
       if(m.params.request.method==='POST'){
@@ -212,7 +212,7 @@ export default async function({container}:any) {
     assert.equal(await a.eval("document.querySelectorAll('#notification-list button').length"),0)
     const receipts=await q('select id,read_at from da_notification_receipt order by id');assert.ok(receipts.every(x=>x.read_at))
     // A repeated/concurrent authorized request preserves timestamps and audit cardinality.
-    const rereads=await Promise.all([call('/personal/notifications','POST',current.cookie,current.csrf,{id:initialId}),call('/personal/notifications','POST',current.cookie,current.csrf,{id:initialId})]);assert.ok(rereads.every(x=>x.status===200))
+    const rereads=await Promise.all([call('/organization/notifications','POST',current.cookie,current.csrf,{id:initialId}),call('/organization/notifications','POST',current.cookie,current.csrf,{id:initialId})]);assert.ok(rereads.every(x=>x.status===200))
     assert.deepEqual(await q('select id,read_at from da_notification_receipt order by id'),receipts)
     assert.equal((await q("select count(*)::int n from da_audit_event where action='notification.read'"))[0].n,receipts.length)
     await a.screenshot(join(dir,'05-read-after-reload.png'))

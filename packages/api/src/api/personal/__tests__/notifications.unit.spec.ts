@@ -1,4 +1,4 @@
-import { GET, POST } from '../notifications/route'
+import { GET, POST } from '../../organization/notifications/route'
 import { access, csrf, enabled, sessionToken } from '../security'
 import { IdentityAccessDenied, IdentitySessions } from '../../../modules/dogruadres-access/identity-session'
 import { PersonalNotifications } from '../../../modules/dogruadres-access/personal-notifications'
@@ -216,21 +216,21 @@ describe('notification context in shipped UI (VM scheduling, not browser/PG auth
   it('keeps personal GET unselected and uses selected company for both GET and POST',async()=>{
     const h=await harness()
     const person=h.run('notifications(0)') as Promise<void>
-    expect(h.calls[0].path).toBe('notifications?offset=0')
+    expect(h.calls[0].path).toBe('/organization/notifications?offset=0')
     h.calls[0].resolve(empty);await person
     h.run("currentOrg='daorg_X';organizationRequest++")
     const scoped=h.run('notifications(0)') as Promise<void>
-    expect(h.calls[1].path).toBe('notifications?organization=daorg_X&offset=0')
+    expect(h.calls[1].path).toBe('/organization/notifications?organization=daorg_X&offset=0')
     h.calls[1].resolve({...empty,notifications:[notice('X Store notice')],unread_count:1})
     await scoped
     expect(h.el('notification-list').children).toHaveLength(1)
     const button=h.el('notification-list').children[0].children[4]
     const mark=button.onclick() as Promise<void>
-    expect(h.calls[2].path).toBe('notifications?organization=daorg_X')
+    expect(h.calls[2].path).toBe('/organization/notifications?organization=daorg_X')
     expect(h.calls[2].options).toMatchObject({method:'POST'})
     h.calls[2].resolve({success:true})
     await new Promise<void>(resolve=>setImmediate(resolve))
-    expect(h.calls[3].path).toBe('notifications?organization=daorg_X&offset=0')
+    expect(h.calls[3].path).toBe('/organization/notifications?organization=daorg_X&offset=0')
     h.calls[3].resolve(empty);await mark
     expect(h.el('notification-list').children).toHaveLength(0)
   })
@@ -241,8 +241,8 @@ describe('notification context in shipped UI (VM scheduling, not browser/PG auth
     h.run("clearNotifications();currentOrg='daorg_Y';organizationRequest++")
     const y=h.run('notifications(0)') as Promise<void>
     expect(h.calls.map(c=>c.path)).toEqual([
-      'notifications?organization=daorg_X&offset=0',
-      'notifications?organization=daorg_Y&offset=0',
+      '/organization/notifications?organization=daorg_X&offset=0',
+      '/organization/notifications?organization=daorg_Y&offset=0',
     ])
     h.calls[1].resolve({...empty,notifications:[notice('Y only')],unread_count:1});await y
     h.calls[0].resolve({...empty,notifications:[notice('X private')],unread_count:1});await x

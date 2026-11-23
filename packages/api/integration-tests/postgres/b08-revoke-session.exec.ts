@@ -81,7 +81,7 @@ export default async function({container}:ExecArgs){
   assert.deepEqual(before,{role:'member',status:'active',protected_owner:false})
   const outboxBefore=await count('da_audit_outbox')
   await a.button('Üyeliği iptal et '+b2.id)
-  await until(async()=>a.http.some(x=>x.phase==='owner-visible-revoke'&&x.method==='POST'&&x.path==='/personal/memberships'&&x.status===200)&&await count('da_audit_outbox')===outboxBefore+1,20000,'B08 real owner revoke and SQL commit')
+  await until(async()=>a.http.some(x=>x.phase==='owner-visible-revoke'&&x.method==='POST'&&x.path==='/organization/memberships'&&x.status===200)&&await count('da_audit_outbox')===outboxBefore+1,20000,'B08 real owner revoke and SQL commit')
   const after=(await q('select role,status,protected_owner,revoked_at from da_organization_membership where id=$1',[b2.id]))[0]
   assert.equal(after.role,'member');assert.equal(after.status,'revoked');assert.equal(after.protected_owner,false);assert.ok(after.revoked_at)
   const evs=await q("select e.id,e.actor_id,e.actor_person_id,e.organization_id,e.previous_values,e.new_values,(select count(*)::int from da_audit_outbox o where o.source_audit_event_id=e.id) canonical,(select count(*)::int from da_security_outbox o where o.audit_event_id=e.id) security from da_audit_event e where e.action='organization.membership_changed' and e.target_id=$1",[b2.id])

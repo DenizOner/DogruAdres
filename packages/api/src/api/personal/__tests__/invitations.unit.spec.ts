@@ -1,4 +1,4 @@
-import { GET, POST } from "../invitations/route"
+import { GET, POST } from "../../organization/invitations/route"
 import { access, csrf, enabled, sessionToken } from "../security"
 import { createInvitationWorkflow } from "../../../workflows/dogruadres-access/create-invitation"
 import { acceptInvitationWorkflow } from "../../../workflows/dogruadres-access/accept-invitation"

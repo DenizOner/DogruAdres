@@ -164,7 +164,7 @@ export default async function({container}:ExecArgs){
     const before=(await q('select role,status from da_organization_membership where id=$1',[target.id]))[0]
     const n=await count('da_audit_outbox')
     await c.button('Üyeliği iptal et '+target.id)
-    await until(async()=>c.http.some(r=>r.phase===name&&r.method==='POST'&&r.path==='/personal/memberships'&&r.status===200)&&Number(await count('da_audit_outbox'))===n+1,20000,'B06 Owner revoke response/commit')
+    await until(async()=>c.http.some(r=>r.phase===name&&r.method==='POST'&&r.path==='/organization/memberships'&&r.status===200)&&Number(await count('da_audit_outbox'))===n+1,20000,'B06 Owner revoke response/commit')
     const after=(await q('select role,status,revoked_at from da_organization_membership where id=$1',[target.id]))[0]
     assert.ok(after.role===before.role&&after.status==='revoked'&&!!after.revoked_at,
       'Owner revoke must preserve role and persist revocation')

@@ -51,7 +51,7 @@ export async function verifyB05Ui(p: {
       }
       if (m.method === "Network.responseReceived") {
         const u = new URL(m.params.response.url), req = requests.get(m.params.requestId)
-        if (u.origin === p.origin && u.pathname === "/personal/memberships") {
+        if (u.origin === p.origin && u.pathname === "/organization/memberships") {
           responses.push({ ...req, id: m.params.requestId, scope: u.searchParams.get("organization") === p.org1.id ? "Org1" : "Org2", response: m.params.response })
         }
       }
@@ -119,14 +119,14 @@ export async function verifyB05Ui(p: {
         })()`)
         return !!(state && state.id === org.id && state.role === role.toLowerCase() && state.concealed)
       }, 20000, role + " scope DOM and concealed panels")
-      const forbidden = await evaluate(`fetch('/personal/memberships?organization=' + ${JSON.stringify(org.id)}).then(r => r.status)`)
+      const forbidden = await evaluate(`fetch('/organization/memberships?organization=' + ${JSON.stringify(org.id)}).then(r => r.status)`)
       assert.equal(forbidden, 403, role + " genuine HTTP403")
       assert.equal(await evaluate(`document.getElementById('memberships').textContent.includes(${JSON.stringify(p.personId)})`), false)
       evidence.http.push({ phase, evidence: "REAL BACKEND", method: "GET", scope: org === p.org1 ? "Org1" : "Org2", status: 403 })
     }
     await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable")
     assert.equal((await send("Network.getCookies", { urls: [p.origin] })).cookies.length, 0, "Fresh isolated Chrome profile")
-    await send("Fetch.enable", { patterns: [{ urlPattern: p.origin + "/personal/memberships*", requestStage: "Request" }] })
+    await send("Fetch.enable", { patterns: [{ urlPattern: p.origin + "/organization/memberships*", requestStage: "Request" }] })
     await send("Page.navigate", { url: p.origin + "/personal" }); await wait(visible("login"), "B05 login UI")
     await input('#login input[name="email"]', p.email); await input('#login input[name="password"]', p.password); await click("#login button")
     await wait(`${visible('workspace')}&&document.getElementById('person').textContent===${JSON.stringify('Person: ' + p.personId)}&&document.querySelectorAll('#organizations button').length===2`, "Exact isolated actor identity")

@@ -37,18 +37,25 @@ export function allowedPublicRequest(method,path){
     '/personal/order-groups':['GET'],
     '/personal/product-drafts':['GET','POST'],
     '/personal/links':['GET','POST'],
-    '/personal/audit-timeline':['GET'],
-    '/personal/notifications':['GET','POST'],
+    '/personal/audit-timeline':['GET'], // 410 Gone — moved to /organization/audit-timeline (#482)
+    '/personal/notifications':['GET','POST'], // 410 Gone — moved to /organization/notifications (#482)
     '/personal/launcher':['GET','POST'],
+    '/personal/company-launcher':['GET','POST'], // 410 Gone — moved to /organization/launcher (#482)
+    '/personal/memberships':['GET','POST'], // 410 Gone — moved to /organization/memberships (#482)
+    '/personal/invitations':['GET','POST'], // 410 Gone — moved to /organization/invitations (#482)
     // #482 Aşama 1: /personal/vehicles kept as 410 Gone passthrough so clients receive
     // the informative redirect hint rather than a 401 from the frontdoor.
     '/personal/vehicles':['GET'],
   }
   if(personal[path]?.includes(method))return true
-  // #482 Aşama 1: Organization-scoped routes (Phase 1 — vehicles only).
-  // Extended incrementally as each phase of the routing refactor lands.
+  // #482 Aşama 1–2: Organization-scoped routes; extended per phase of the routing refactor.
   const organization={
     '/organization/vehicles':['GET'],
+    '/organization/memberships':['GET','POST'],
+    '/organization/invitations':['GET','POST'],
+    '/organization/launcher':['GET','POST'],
+    '/organization/audit-timeline':['GET'],
+    '/organization/notifications':['GET','POST'],
   }
   if(organization[path]?.includes(method))return true
   // #217 closed B4B: no unscoped catalog or seller/offer/search relay.

@@ -196,7 +196,7 @@ export default async function({ container }: ExecArgs) {
     })
 
     // Permitted actions for Admin: Can read memberships in Org 1
-    const org1Memberships = await call("Person B read Org 1 memberships as Admin", `/personal/memberships?organization=${org1.id}`, { cookie })
+    const org1Memberships = await call("Person B read Org 1 memberships as Admin", `/organization/memberships?organization=${org1.id}`, { cookie })
     assert.equal(org1Memberships.status, 200)
     const org1MembershipsData = await org1Memberships.json() as any
     assert.ok(Array.isArray(org1MembershipsData.memberships))
@@ -216,7 +216,7 @@ export default async function({ container }: ExecArgs) {
     })
 
     // No Admin or Owner privilege in Org 2: Cannot read memberships in Org 2
-    const org2Memberships = await call("Person B read Org 2 memberships as Member denied", `/personal/memberships?organization=${org2.id}`, { cookie })
+    const org2Memberships = await call("Person B read Org 2 memberships as Member denied", `/organization/memberships?organization=${org2.id}`, { cookie })
     assert.equal(org2Memberships.status, 403)
     assert.equal((await org2Memberships.json() as any).message, "Access denied")
 
