@@ -104,12 +104,10 @@ export async function verifyB05Ui(p: {
       evidence.http.push({ phase, evidence: "REAL BACKEND", method: "GET", scope: r.scope, status: 200, rows: n, dtoKeys: ["id", "person_id", "role", "status", "protected_owner"], noStore: true, sqlMatched: true })
     }
     const denied = async (org: typeof p.org1, role: "Admin" | "Member") => {
-      // Wait for panel concealment. Do not rely on the specific status text because a concurrent
-      // selectOrg (request guard) may skip the text assignment. Panel concealment is the contract.
-      await wait(`document.querySelectorAll('#memberships p,#memberships button,#memberships select').length===0&&!(${visible('memberships-refresh')})&&!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})`, role + " denied and concealed")
+      // Wait for scope DOM and panel concealment.
+      await wait(`(()=>{try{const d=JSON.parse(document.getElementById('detail').textContent);return d.id===${JSON.stringify(org.id)}&&d.role===${JSON.stringify(role.toLowerCase())}&&document.querySelectorAll('#memberships p,#memberships button,#memberships select').length===0&&!(${visible('memberships-refresh')})&&!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})}catch{return false}})()`, role + " scope DOM and concealed panels")
       const forbidden = await evaluate(`fetch('/personal/memberships?organization=' + ${JSON.stringify(org.id)}).then(r => r.status)`)
       assert.equal(forbidden, 403, role + " genuine HTTP403")
-      assert.equal(await evaluate(`(()=>{const d=JSON.parse(document.getElementById('detail').textContent);return d.id===${JSON.stringify(org.id)}&&d.role===${JSON.stringify(role.toLowerCase())}})()`), true, role + " scope DOM")
       assert.equal(await evaluate(`document.getElementById('memberships').textContent.includes(${JSON.stringify(p.personId)})`), false)
       evidence.http.push({ phase, evidence: "REAL BACKEND", method: "GET", scope: org === p.org1 ? "Org1" : "Org2", status: 403 })
     }
