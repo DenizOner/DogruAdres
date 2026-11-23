@@ -10,7 +10,7 @@ import {signVisitorRateSource,VISITOR_RATE_HEADER} from '../src/utils/visitor-ra
 export function allowedPublicRequest(method,path){
   const personal={
     '/personal':['GET'], '/personal/session':['GET','POST','DELETE'],
-    '/personal/challenge':['POST'], '/personal/register':['POST'], '/personal/organizations':['GET'], '/personal/vehicles':['GET'],
+    '/personal/challenge':['POST'], '/personal/register':['POST'], '/personal/organizations':['GET'],
     '/personal/organization-applications':['GET','POST'],
     '/personal/platform':['GET','POST'], '/personal/platform/smtp':['GET','POST'], '/personal/memberships':['GET','POST'],
     '/personal/invitations':['GET','POST'], '/personal/mfa':['GET','POST'], '/personal/mfa/enroll':['POST'], '/personal/mfa/manage':['POST'],
@@ -40,8 +40,17 @@ export function allowedPublicRequest(method,path){
     '/personal/audit-timeline':['GET'],
     '/personal/notifications':['GET','POST'],
     '/personal/launcher':['GET','POST'],
+    // #482 Aşama 1: /personal/vehicles kept as 410 Gone passthrough so clients receive
+    // the informative redirect hint rather than a 401 from the frontdoor.
+    '/personal/vehicles':['GET'],
   }
   if(personal[path]?.includes(method))return true
+  // #482 Aşama 1: Organization-scoped routes (Phase 1 — vehicles only).
+  // Extended incrementally as each phase of the routing refactor lands.
+  const organization={
+    '/organization/vehicles':['GET'],
+  }
+  if(organization[path]?.includes(method))return true
   // #217 closed B4B: no unscoped catalog or seller/offer/search relay.
   // Region bootstrap supports the existing welcome/login locale middleware;
   // it contains no authenticated Buyer Organization pricing decision.

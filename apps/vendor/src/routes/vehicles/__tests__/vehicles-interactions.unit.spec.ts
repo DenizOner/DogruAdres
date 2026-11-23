@@ -116,8 +116,8 @@ describe("Vehicles UI - Interaction and Data Mapping Logic", () => {
     expect(results).toHaveLength(0)
   })
 
-  it("builds correct /personal/vehicles POST payload for vehicle creation", () => {
-    // The UI routes ALL vehicle mutations through /personal/vehicles (personal session auth)
+  it("builds correct /organization/vehicles POST payload for vehicle creation", () => {
+    // The UI routes ALL vehicle mutations through /organization/vehicles (organization-scoped session auth — #482)
     // NOT through /dogruadres/organizations/:id/vehicles (native JWT — blocked by nativeIngress)
     const form: VehicleFormValues = {
       plate: "34 XYZ 99",
@@ -152,7 +152,7 @@ describe("Vehicles UI - Interaction and Data Mapping Logic", () => {
     })
   })
 
-  it("builds correct /personal/vehicles POST payload for vehicle update with cleared fields", () => {
+  it("builds correct /organization/vehicles POST payload for vehicle update with cleared fields", () => {
     const form: VehicleFormValues = {
       plate: "34 ABC 123",
       vin: "", // cleared
@@ -198,7 +198,7 @@ describe("Vehicles UI - Interaction and Data Mapping Logic", () => {
     expect(payload.model_year).toBeNull()
   })
 
-  it("builds correct /personal/vehicles POST payload for vehicle delete", () => {
+  it("builds correct /organization/vehicles POST payload for vehicle delete", () => {
     const orgId = "daorg_01JBMX1234567890ABCDEFGH0"
     const vehicleId = "daveh_01JBMX1234567890ABCDEFGH1"
 
