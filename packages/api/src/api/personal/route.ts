@@ -583,7 +583,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   let csrf=''; const el=id=>document.getElementById(id); const status=t=>el('status').textContent=t;
   async function api(path,options={}){
     const epoch=viewEpoch;let r;
-    try{r=await fetch('/personal/'+path,{credentials:'same-origin',...options,
+    try{r=await fetch(path.startsWith('/')?path:'/personal/'+path,{credentials:'same-origin',...options,
       headers:{'Content-Type':'application/json','x-csrf-token':csrf,...options.headers}})}
     catch{const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');
       e.uncertain=true;throw e}
@@ -1358,7 +1358,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       org===currentOrg&&orgRequest===organizationRequest&&
       epoch===viewEpoch&&person===currentPersonId&&
       !document.hidden&&!el('workspace').hidden;
-    const notificationPath='notifications'+
+    const notificationPath='/organization/notifications'+
       (org?'?organization='+encodeURIComponent(org):'');
     el('notification-list').replaceChildren();el('notification-list').setAttribute('aria-busy','true');
     el('notification-status').textContent='Bildirimler yükleniyor…';el('notification-count').textContent='';
