@@ -117,15 +117,20 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/platform/store-renames" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/platform/store-name-transfers" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/platform/store-application-policy" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/audit-timeline" && req.method==="GET") ||
+      (path==="/personal/audit-timeline" && req.method==="GET") || // 410 Gone — moved to /organization/audit-timeline (#482)
       (path==="/personal/launcher" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/company-launcher" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/notifications" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/company-launcher" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/launcher (#482)
+      (path==="/personal/notifications" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/notifications (#482)
       (path==="/personal/links" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/memberships" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/invitations" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/memberships" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/memberships (#482)
+      (path==="/personal/invitations" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/invitations (#482)
       (path==="/personal/vehicles" && req.method==="GET") || // 410 Gone — moved to /organization/vehicles (#482)
       (path==="/organization/vehicles" && req.method==="GET") ||
+      (path==="/organization/memberships" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/invitations" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/launcher" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/audit-timeline" && req.method==="GET") ||
+      (path==="/organization/notifications" && ["GET","POST"].includes(req.method)) ||
       ((path==="/personal/platform" || path==="/personal/platform/smtp") && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/mfa" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/mfa/enroll" && req.method==="POST") ||
