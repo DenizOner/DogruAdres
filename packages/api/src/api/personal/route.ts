@@ -1,4 +1,4 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+﻿import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { randomBytes } from "node:crypto"
 import { enabled } from "./security"
 export const AUTHENTICATE = false
@@ -589,16 +589,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       e.uncertain=true;throw e}
     // Even HTTP 200 cannot prove a price-group POST's outcome if its body is
     // truncated, unreadable or not a JSON object. Do not claim rejection.
-    const groupWrite=path==='store-price-groups'&&options.method==='POST';
+    const groupWrite=path==='/organization/store-price-groups'&&options.method==='POST';
     const draftWrite=path==='organization-applications'&&options.method==='POST';
-    const followWrite=path==='store-follows'&&options.method==='POST';
+    const followWrite=path==='/organization/store-follows'&&options.method==='POST';
     const policyWrite=path==='platform/store-application-policy'&&options.method==='POST';
-    const storeApplicationWrite=path==='store-applications'&&options.method==='POST';
-    const renameWrite=path==='store-rename-requests'&&options.method==='POST';
-    const ownerPauseWrite=path==='store-owner-pause'&&options.method==='POST';
-    const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
+    const storeApplicationWrite=path==='/organization/store-applications'&&options.method==='POST';
+    const renameWrite=path==='/organization/store-rename-requests'&&options.method==='POST';
+    const ownerPauseWrite=path==='/organization/store-owner-pause'&&options.method==='POST';
+    const grantWrite=path==='/organization/store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
-    const closingWrite=['store-owner-closing','store-platform-closing','store-platform-closing-final-review','platform/store-closings','platform/store-closing-reviews','store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
+    const closingWrite=['/organization/store-owner-closing','/organization/store-platform-closing','/organization/store-platform-closing-final-review','platform/store-closings','platform/store-closing-reviews','/organization/store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
     const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite||ownerPauseWrite||(path==='/organization/launcher'&&options.method==='POST');
     let data;
     try{
@@ -663,7 +663,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     button.disabled=true;
     msg.textContent='Mağaza bildirimi güvenli biçimde doğrulanıyor…';
     try{
-      const result=await api('store-platform-closing-email-visit',{
+      const result=await api('/organization/store-platform-closing-email-visit',{
         method:'POST',
         body:JSON.stringify({token:platformMailLinkToken})
       });
@@ -2491,7 +2491,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-draft-form').hidden=true;
     list.replaceChildren();if(!keepOutcome)message.textContent='Başvurular kontrol ediliyor…';
     try{
-      const result=await api('store-applications?organization_id='+encodeURIComponent(org));
+      const result=await api('/organization/store-applications?organization_id='+encodeURIComponent(org));
       if(request!==organizationRequest||sequence!==applicationRequest||currentOrg!==org||document.hidden)return;
       if(typeof result.store_application_enabled!=='boolean'||
          !Array.isArray(result.drafts)||result.drafts.length>30||
@@ -2547,7 +2547,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               send.disabled=true;
               const appId='daapp_'+crypto.randomUUID().replace(/-/g,'');
               try{
-                const outcome=await api('store-applications',{method:'POST',body:JSON.stringify({
+                const outcome=await api('/organization/store-applications',{method:'POST',body:JSON.stringify({
                   action:'submit_draft',organization_id:org,draft_id:d.id,
                   expected_version:d.version,application_id:appId
                 })});
@@ -2637,7 +2637,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!storeDraftKey)storeDraftKey='dasdraft_'+crypto.randomUUID().replace(/-/g,'');
     const key=storeDraftKey,version=storeDraftVersion,editEpoch=storeDraftEditEpoch,fields=new FormData(form);
     try{
-      const result=await api('store-applications',{method:'POST',body:JSON.stringify({
+      const result=await api('/organization/store-applications',{method:'POST',body:JSON.stringify({
         action:'save_draft',organization_id:org,draft_id:key,expected_version:version,
         name:String(fields.get('name')||'').trim(),email:String(fields.get('email')||'').trim(),
         currency_code:String(fields.get('currency_code')||'').toLowerCase()
@@ -2676,7 +2676,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!applicationKey)applicationKey='daapp_'+crypto.randomUUID().replace(/-/g,'');
     const v=new FormData(form);
     try{
-      const data=await api('store-applications',{method:'POST',body:JSON.stringify({
+      const data=await api('/organization/store-applications',{method:'POST',body:JSON.stringify({
         organization_id:org,application_id:applicationKey,
         name:String(v.get('name')||'').trim(),email:String(v.get('email')||''),
         currency_code:String(v.get('currency_code')||'').toLowerCase()
@@ -2743,7 +2743,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     panel.hidden=true;
     if(!keepOutcome)message.textContent='Çalışan taslak izinleri kontrol ediliyor…';
     try{
-      const data=await api('store-draft-permissions?organization_id='+encodeURIComponent(org)+
+      const data=await api('/organization/store-draft-permissions?organization_id='+encodeURIComponent(org)+
         (storeDraftCursor?'&after='+encodeURIComponent(storeDraftCursor):''));
       if(seq!==storeDraftPermissionRequest||request!==organizationRequest||
          currentOrg!==org||document.hidden)return;
@@ -2877,7 +2877,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     storeDraftWritePending=true;
     updateStoreDraftActionButtons();
     try{
-      const result=await api('store-draft-permissions',{method:'POST',
+      const result=await api('/organization/store-draft-permissions',{method:'POST',
         body:JSON.stringify({action,organization_id:org,membership_id})});
       if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
       if(result.status!==(action==='grant'?'active':'revoked')||
@@ -2983,7 +2983,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!choice||!message)return;
     message.textContent='Bu mağazanın müşteri grupları kontrol ediliyor…';
     try{
-      const data=await api('store-price-groups?'+new URLSearchParams({
+      const data=await api('/organization/store-price-groups?'+new URLSearchParams({
         organization_id:org,seller_id,view:'list'
       }).toString());
       if(seq!==priceGroupListRequest||request!==organizationRequest||
@@ -3028,7 +3028,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!panel||!form||!form.elements)return;
     panel.hidden=true;msg.textContent='Mağaza izinleri kontrol ediliyor…';
     try{
-      const data=await api('organization-stores?organization='+encodeURIComponent(org));
+      const data=await api('/organization/stores?organization='+encodeURIComponent(org));
       if(seq!==storeBlockRequest||request!==organizationRequest||
          currentOrg!==org||document.hidden)return;
       if(data.organization_id!==org||!Array.isArray(data.stores)||
@@ -3082,7 +3082,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     for(const button of form.querySelectorAll('button'))button.disabled=true;
     msg.textContent='Mağaza politikası sunucuda doğrulanıyor…';
     try{
-      const result=await api('store-buyer-blocks',{method:'POST',body:JSON.stringify({
+      const result=await api('/organization/store-buyer-blocks',{method:'POST',body:JSON.stringify({
         action,organization_id:org,seller_id,buyer_organization_id
       })});
       if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
@@ -3143,8 +3143,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     try{
       const data={organization_id:org,seller_id,customer_group_id,buyer_organization_id};
       const result=action==='read'?
-        await api('store-price-groups?'+new URLSearchParams(data).toString()):
-        await api('store-price-groups',{method:'POST',body:JSON.stringify({...data,action})});
+        await api('/organization/store-price-groups?'+new URLSearchParams(data).toString()):
+        await api('/organization/store-price-groups',{method:'POST',body:JSON.stringify({...data,action})});
       if(seq!==priceGroupActionRequest||request!==organizationRequest||
          currentOrg!==org||document.hidden||el('workspace').hidden||
          form.elements.namedItem('seller_id')?.value!==seller_id)return;
@@ -3235,7 +3235,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const message=el('store-rename-status'),list=el('store-rename-history');
     message.textContent='Başvurular doğrulanıyor…';
     try{
-      const data=await api('store-rename-requests?'+new URLSearchParams({
+      const data=await api('/organization/store-rename-requests?'+new URLSearchParams({
         organization_id:org,seller_id:seller
       }).toString());
       if(seq!==renameRead||epoch!==viewEpoch||request!==organizationRequest||
@@ -3268,7 +3268,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             cancel.disabled=true;form.querySelector('button[type=submit]').disabled=true;
             message.textContent='Talep geri çekiliyor…';
             try{
-              const result=await api('store-rename-requests',{method:'POST',
+              const result=await api('/organization/store-rename-requests',{method:'POST',
                 body:JSON.stringify({action:'withdraw',request_id:x.id,
                   organization_id:org,seller_id:seller})});
               if(seq!==renameRead||epoch!==viewEpoch||request!==organizationRequest||
@@ -3337,7 +3337,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const id='dasrn_'+crypto.randomUUID().replace(/-/g,'');
     renamePending=true;const button=form.querySelector('button[type=submit]');button.disabled=true;
     try{
-      const result=await api('store-rename-requests',{method:'POST',body:JSON.stringify({
+      const result=await api('/organization/store-rename-requests',{method:'POST',body:JSON.stringify({
         request_id:id,organization_id:org,seller_id:seller,
         name:form.elements.namedItem('name').value,handle:form.elements.namedItem('handle').value,
         risk_acknowledged:true,risk_version:'store-rename-risks-v2'
@@ -3403,7 +3403,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     ownerPauseVersion=null;ownerPauseState=null;ownerPauseButtons();ownerClosingButtons();
     st.textContent='Güncel mağaza durumu doğrulanıyor…';
     try{
-      const data=await api('store-owner-pause?'+new URLSearchParams({
+      const data=await api('/organization/store-owner-pause?'+new URLSearchParams({
         organization_id:org,seller_id:seller
       }).toString());
       if(seq!==ownerPauseRead||epoch!==viewEpoch||
@@ -3470,7 +3470,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     st.textContent='İşlem yetki ve mağaza durumuyla birlikte kaydediliyor…';
     const id='dasp_'+crypto.randomUUID().replace(/-/g,'');
     try{
-      const result=await api('store-owner-pause',{method:'POST',body:JSON.stringify({
+      const result=await api('/organization/store-owner-pause',{method:'POST',body:JSON.stringify({
         action,organization_id:org,seller_id:seller,request_id:id,
         expected_version:expectedVersion
       })});
@@ -3546,7 +3546,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     ownerClosingButtons();ownerPauseButtons();
     st.textContent='Kapatma durumu doğrulanıyor…';
     try{
-      const data=await api('store-owner-closing?'+new URLSearchParams({
+      const data=await api('/organization/store-owner-closing?'+new URLSearchParams({
         organization_id:org,seller_id:seller
       }).toString());
       if(seq!==ownerClosingRead||epoch!==viewEpoch||request!==organizationRequest||
@@ -3664,7 +3664,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     st.textContent='Güncel yetki, sürüm ve süre doğrulanarak kayıt yapılıyor…';
     const id='dasc_'+crypto.randomUUID().replace(/-/g,'');
     try{
-      const result=await api('store-owner-closing',{method:'POST',body:JSON.stringify({
+      const result=await api('/organization/store-owner-closing',{method:'POST',body:JSON.stringify({
         action,organization_id:org,seller_id:seller,request_id:id,
         expected_version:state.version,
         ...(action==='start'?{consequences_acknowledged:true}:{})
@@ -3715,7 +3715,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     target.replaceChildren();message.textContent='Mağazalar kontrol ediliyor…';
     el('org-stores-refresh').hidden=false;
     try{
-      const data=await api('organization-stores?organization='+encodeURIComponent(org));
+      const data=await api('/organization/stores?organization='+encodeURIComponent(org));
       if(request!==organizationRequest||seq!==storeRequest||currentOrg!==org||document.hidden)return;
       if(data.organization_id!==org||!Array.isArray(data.stores)||
           data.stores.some(s=>typeof s?.id!=='string'||!/^sel_[A-Za-z0-9_-]+$/.test(s.id)||typeof s.name!=='string')||
@@ -3742,7 +3742,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           // stale private values after a different Organization is selected.
           await (async()=>{
             try{
-              const renameData=await api('organization-stores?organization='+
+              const renameData=await api('/organization/stores?organization='+
                 encodeURIComponent(org)+'&purpose=rename');
               if(request!==organizationRequest||seq!==storeRequest||
                  currentOrg!==org||document.hidden||!selectedStoreOwner)return;
@@ -3879,7 +3879,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     try{
       const q=new URLSearchParams({organization_id:org});
       if(after!==null)q.set('after',after);
-      const data=await api('store-follows?'+q.toString());
+      const data=await api('/organization/store-follows?'+q.toString());
       if(!current())return;
       if(data.organization_id!==org||!Array.isArray(data.stores)||
          data.stores.length>20||
@@ -3924,7 +3924,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           button.disabled=true;feedback.textContent='Takipten çıkılıyor…';
           let uncertain=false;
           try{
-            const result=await api('store-follows',{method:'POST',
+            const result=await api('/organization/store-follows',{method:'POST',
               body:JSON.stringify({action:'unfollow',organization_id:org,
                 seller_id:sellerId,expected_version:version})});
             if(!current())return;
@@ -4150,7 +4150,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         void (async()=>{
           try{
             const q=new URLSearchParams({organization_id:org,seller_id:sellerId});
-            const state=await api('store-follows?'+q.toString());
+            const state=await api('/organization/store-follows?'+q.toString());
             if(!current())return;
             if(state.organization_id!==org||state.seller_id!==sellerId||
                typeof state.following!=='boolean'||!Number.isSafeInteger(state.version)||
@@ -4168,7 +4168,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               button.disabled=true;feedback.textContent='Takip işlemi kaydediliyor…';
               let uncertain=false;
               try{
-                const result=await api('store-follows',{method:'POST',
+                const result=await api('/organization/store-follows',{method:'POST',
                   body:JSON.stringify({action,organization_id:org,
                     seller_id:sellerId,expected_version:oldVersion})});
                 if(!current())return;
@@ -4356,8 +4356,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       // cause a second membership GET that can race role-change refreshes.
       const members={memberships:currentMemberships.slice()};
       const [stores,grants]=await Promise.all([
-        api('organization-stores?organization='+encodeURIComponent(org)),
-        api('store-product-permissions?organization_id='+encodeURIComponent(org))
+        api('/organization/stores?organization='+encodeURIComponent(org)),
+        api('/organization/store-product-permissions?organization_id='+encodeURIComponent(org))
       ]);
       if(seq!==productPermissionRequest||request!==organizationRequest||currentOrg!==org||document.hidden)return;
       if(stores.organization_id!==org||!Array.isArray(stores.stores)||
@@ -4423,7 +4423,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             connect.disabled=true;
             statusEl.textContent='Mağaza çalışanı bağlantısı kontrol ediliyor…';
             try{
-              const result=await api('store-member-connections',{method:'POST',
+              const result=await api('/organization/store-member-connections',{method:'POST',
                 body:JSON.stringify({organization_id:org,seller_id:grant.seller_id,
                   membership_id:member.id})});
               if(seq!==productPermissionRequest||request!==organizationRequest||
@@ -4458,7 +4458,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             revoke.disabled=true;
             statusEl.textContent='Eski izin iptali kontrol ediliyor…';
             try{
-              const result=await api('store-product-permissions',{method:'POST',
+              const result=await api('/organization/store-product-permissions',{method:'POST',
                 body:JSON.stringify({action:'revoke',organization_id:org,
                   seller_id:grant.seller_id,membership_id:legacy.id})});
               if(seq!==productPermissionRequest||request!==organizationRequest||
@@ -4507,7 +4507,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const seller_id=form.elements.namedItem('seller_id').value;
     const membership_id=form.elements.namedItem('membership_id').value;
     try{
-      const outcome=await api('store-product-permissions',{method:'POST',body:JSON.stringify({
+      const outcome=await api('/organization/store-product-permissions',{method:'POST',body:JSON.stringify({
         action,organization_id:org,seller_id,membership_id
       })});
       if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
@@ -5466,7 +5466,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const panel=el('store-platform-appeal-panel'),msg=el('store-platform-appeal-status');
     panel.hidden=true;
     try{
-      const data=await api('store-platform-closing?'+new URLSearchParams({
+      const data=await api('/organization/store-platform-closing?'+new URLSearchParams({
         organization_id:org,seller_id:seller}).toString());
       if(seq!==platformOwnerRead||epoch!==viewEpoch||request!==organizationRequest||
          org!==currentOrg||seller!==choice.value||document.hidden)return;
@@ -5544,7 +5544,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const msg=el('store-platform-appeal-status');
     msg.textContent='İtiraz kaydediliyor…';
     try{
-      const result=await api('store-platform-closing',{method:'POST',body:JSON.stringify({
+      const result=await api('/organization/store-platform-closing',{method:'POST',body:JSON.stringify({
         organization_id:org,seller_id:seller,
         request_id:'dapa_'+crypto.randomUUID().replaceAll('-',''),
         expected_version:1,reason})});
@@ -5584,7 +5584,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     button.disabled=true;platformFinalReviewPending=true;
     msg.textContent='Üst inceleme başvurusu kaydediliyor…';
     try{
-      const result=await api('store-platform-closing-final-review',{
+      const result=await api('/organization/store-platform-closing-final-review',{
         method:'POST',body:JSON.stringify({
           organization_id:org,seller_id:seller,
           request_id:'dasfr_'+crypto.randomUUID().replaceAll('-',''),

@@ -1,7 +1,7 @@
-import {GET,POST} from "../store-owner-closing/route"
-import {access,csrf,enabled,sessionToken} from "../security"
+﻿import {GET,POST} from "../../organization/store-owner-closing/route"
+import {access,csrf,enabled,sessionToken} from "../../personal/security"
 
-jest.mock("../security",()=>({
+jest.mock("../../personal/security",()=>({
   access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
 }))
 

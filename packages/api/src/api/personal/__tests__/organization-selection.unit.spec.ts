@@ -77,12 +77,12 @@ describe('B22 selected Organization Store presentation (UI scheduling, not API a
   it('shows only the selected Organization response and ignores an earlier Organization response',async()=>{
     const h=harness()
     const a=h.select('A');await finishSelection(h,'A',a)
-    const pendingA=h.pending.find(p=>p.path==='organization-stores?organization=A')!
+    const pendingA=h.pending.find(p=>p.path==='/organization/stores?organization=A')!
     const b=h.select('B')
     expect(h.el('org-stores-panel').hidden).toBe(true)
     expect(h.el('org-stores').children).toHaveLength(0)
     await finishSelection(h,'B',b)
-    const pendingB=h.pending.find(p=>p.path==='organization-stores?organization=B')!
+    const pendingB=h.pending.find(p=>p.path==='/organization/stores?organization=B')!
     pendingB.resolve({organization_id:'B',stores:[{id:'sel_B',name:'B Mağazası'}]})
     await settle()
     pendingA.resolve({organization_id:'A',stores:[{id:'sel_A',name:'A Özel Mağazası'}]})
@@ -156,7 +156,7 @@ describe('B22 selected Organization Store presentation (UI scheduling, not API a
   it('clears the previous Store view immediately on a denied Organization switch',async()=>{
     const h=harness(),a=h.select('A')
     await finishSelection(h,'A',a)
-    h.pending.find(p=>p.path==='organization-stores?organization=A')!.resolve({organization_id:'A',stores:[{id:'sel_A',name:'Özel A'}]})
+    h.pending.find(p=>p.path==='/organization/stores?organization=A')!.resolve({organization_id:'A',stores:[{id:'sel_A',name:'Özel A'}]})
     await settle()
     expect(h.el('org-stores').children).toHaveLength(1)
     const failed=h.select('foreign')
@@ -169,7 +169,7 @@ describe('B22 selected Organization Store presentation (UI scheduling, not API a
 
   it('fails closed on malformed Store response and never renders private fields',async()=>{
     const h=harness(),a=h.select('A');await finishSelection(h,'A',a)
-    const pending=h.pending.find(p=>p.path==='organization-stores?organization=A')!
+    const pending=h.pending.find(p=>p.path==='/organization/stores?organization=A')!
     pending.resolve({organization_id:'A',stores:[{id:'sel_A',name:'A',privateEmail:'hidden@example.invalid'},{id:'sel_A',name:'duplicate'}]})
     await settle()
     expect(h.el('org-stores').children).toHaveLength(0)

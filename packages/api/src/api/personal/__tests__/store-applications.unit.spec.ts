@@ -1,8 +1,8 @@
-import {GET,POST} from "../store-applications/route"
+﻿import {GET,POST} from "../../organization/store-applications/route"
 import {GET as reviewStoreGET,POST as reviewStorePOST} from "../platform/stores/route"
-import {access,csrf,enabled,sessionToken} from "../security"
+import {access,csrf,enabled,sessionToken} from "../../personal/security"
 import {createSellerAccountWorkflow,terminateSellerWorkflow,approveSellerWorkflow,unsuspendSellerWorkflow} from "@mercurjs/core/workflows"
-jest.mock("../security",()=>({
+jest.mock("../../personal/security",()=>({
   access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
 }))
 jest.mock("@mercurjs/core/workflows",()=>({

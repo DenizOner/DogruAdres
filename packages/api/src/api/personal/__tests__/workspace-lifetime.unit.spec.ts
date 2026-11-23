@@ -165,7 +165,7 @@ describe('B22 Buyer catalogue Seller-window navigation (shipped browser JS)',()=
 describe('B22 Store follow malformed HTTP 200 (shipped UI + real api() wrapper)',()=>{
   const org='daorg_a',seller='sel_a'
   const catalogPath='/personal/catalog?organization_id='+org+'&page=0'
-  const followPath='/personal/store-follows'
+  const followPath='/organization/store-follows'
   const statePath=followPath+'?organization_id='+org+'&seller_id='+seller
   const catalog={organization_id:org,page:0,stores:[{
     id:seller,name:'Store A',products:[{offer_id:'offer_a',product_id:'prod_a',title:'Product A'}]
@@ -528,7 +528,7 @@ describe('B22 native Store price-group selector request lifetime',()=>{
       preventDefault(){},currentTarget:form,submitter:{value:action}
     })
     const grant=send('grant')
-    const post=h.pending.find(p=>p.path==='/personal/store-price-groups'&&
+    const post=h.pending.find(p=>p.path==='/organization/store-price-groups'&&
       p.options?.method==='POST')!
     expect(post).toBeDefined()
     post.resolve({ok:true,status:200,json:async()=>{throw new SyntaxError('truncated JSON')}})
@@ -550,7 +550,7 @@ describe('B22 native Store price-group selector request lifetime',()=>{
     await toA
     fields.customer_group_id.value='cusgroup_x'
     await send('grant')
-    expect(h.pending.filter(p=>p.path==='/personal/store-price-groups'&&
+    expect(h.pending.filter(p=>p.path==='/organization/store-price-groups'&&
       p.options?.method==='POST')).toHaveLength(1)
     const read=send('read')
     const readCall=h.pending.find(p=>p.path.includes('buyer_organization_id=daorg_y'))!
@@ -570,7 +570,7 @@ describe('B22 native Store price-group selector request lifetime',()=>{
     h.el('workspace').hidden=false
     runInContext("currentOrg='daorg_a';organizationRequest=1",h.context)
     const pending=form.onsubmit({preventDefault(){},currentTarget:form,submitter:{value:'grant'}})
-    const post=h.pending.find(p=>p.path==='/personal/store-price-groups'&&p.options?.method==='POST')!
+    const post=h.pending.find(p=>p.path==='/organization/store-price-groups'&&p.options?.method==='POST')!
     post.resolve({ok:true,status:200,json:async()=>({unexpected:true})})
     await pending
     expect(h.el('store-price-group-status').textContent).toContain('Sonuç belirsiz')
@@ -583,7 +583,7 @@ describe('B22 Store follow management outside catalogue visibility',()=>{
     h.el('workspace').hidden=false
     runInContext("currentOrg='daorg_a';organizationRequest=1",h.context)
     const first=runInContext("buyerFollowList('daorg_a',1)",h.context)
-    await answer(h,'/personal/store-follows?organization_id='+org,{
+    await answer(h,'/organization/store-follows?organization_id='+org,{
       organization_id:org,stores:[{seller_id:seller,version:7,
         name:'Önceki Mağaza',handle:'onceki-magaza'}],next_cursor:null
     });await first
@@ -596,22 +596,22 @@ describe('B22 Store follow management outside catalogue visibility',()=>{
     expect(button.textContent).not.toContain(seller)
     expect(button.textContent).toContain('Takipten çık')
     const mutation=button.onclick()
-    const writes=h.pending.filter(p=>p.path==='/personal/store-follows'&&
+    const writes=h.pending.filter(p=>p.path==='/organization/store-follows'&&
       p.options?.method==='POST')
     expect(writes).toHaveLength(1)
     expect(JSON.parse(writes[0].options.body)).toEqual({
       action:'unfollow',organization_id:org,seller_id:seller,expected_version:7
     })
-    await answer(h,'/personal/store-follows',{
+    await answer(h,'/organization/store-follows',{
       organization_id:org,seller_id:seller,following:false,version:8
     })
     await tick()
-    await answer(h,'/personal/store-follows?organization_id='+org,{
+    await answer(h,'/organization/store-follows?organization_id='+org,{
       organization_id:org,stores:[],next_cursor:null
     })
     await mutation
     expect(h.el('buyer-follow-items').children).toHaveLength(0)
-    expect(h.pending.filter(p=>p.path==='/personal/store-follows'&&
+    expect(h.pending.filter(p=>p.path==='/organization/store-follows'&&
       p.options?.method==='POST')).toHaveLength(1)
   })
   it('does not show an old Organization follow list after switching context',async()=>{
@@ -620,7 +620,7 @@ describe('B22 Store follow management outside catalogue visibility',()=>{
     runInContext("currentOrg='daorg_a';organizationRequest=1",h.context)
     const old=runInContext("buyerFollowList('daorg_a',1)",h.context)
     runInContext("currentOrg='daorg_b';organizationRequest++;clearBuyerFollowList()",h.context)
-    await answer(h,'/personal/store-follows?organization_id=daorg_a',{
+    await answer(h,'/organization/store-follows?organization_id=daorg_a',{
       organization_id:'daorg_a',stores:[{seller_id:'sel_private',version:1}],
       next_cursor:null
     });await old

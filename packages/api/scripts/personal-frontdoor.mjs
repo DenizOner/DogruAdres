@@ -56,6 +56,21 @@ export function allowedPublicRequest(method,path){
     '/organization/launcher':['GET','POST'],
     '/organization/audit-timeline':['GET'],
     '/organization/notifications':['GET','POST'],
+    // #482 Aşama 3: Store routes moved from /personal/ to /organization/
+    '/organization/store-applications':['GET','POST'],
+    '/organization/store-follows':['GET','POST'],
+    '/organization/store-buyer-blocks':['POST'],
+    '/organization/store-draft-permissions':['GET','POST'],
+    '/organization/store-owner-pause':['GET','POST'],
+    '/organization/store-owner-closing':['GET','POST'],
+    '/organization/store-platform-closing':['GET','POST'],
+    '/organization/store-platform-closing-email-visit':['POST'],
+    '/organization/store-platform-closing-final-review':['POST'],
+    '/organization/store-rename-requests':['GET','POST'],
+    '/organization/store-member-connections':['POST'],
+    '/organization/store-price-groups':['GET','POST'],
+    '/organization/store-product-permissions':['GET','POST'],
+    '/organization/stores':['GET'],
   }
   if(organization[path]?.includes(method))return true
   // #217 closed B4B: no unscoped catalog or seller/offer/search relay.
