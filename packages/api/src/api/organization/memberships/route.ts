@@ -1,6 +1,7 @@
 import type {MedusaRequest,MedusaResponse} from '@medusajs/framework/http'
 import {z} from '@medusajs/framework/zod'
 import {access,csrf,enabled,sessionToken} from '../../personal/security'
+import {IdentityAccessDenied} from '../../../modules/dogruadres-access/identity-session'
 
 // #482 Aşama 2: Moved from /personal/memberships → /organization/memberships
 // Auth chain: session cookie (da_session) → sessionToken() → personalMemberships()/
@@ -41,10 +42,15 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   if (!enabled()) return res.status(503).json({ message: 'Unavailable' })
   const id = org.safeParse(req.query.organization)
   if (!id.success || Object.keys(req.query).length !== 1) return res.status(400).json({ message: 'Invalid input' })
-  const memberships = await access(req).personalMemberships(sessionToken(req), id.data)
-  // ORM serialization may include implicit relations despite a select list.
-  return res.json({ memberships: memberships.map(({ id, person_id, role, status, protected_owner }) =>
-    ({ id, person_id, role, status, protected_owner })) })
+  try {
+    const memberships = await access(req).personalMemberships(sessionToken(req), id.data)
+    // ORM serialization may include implicit relations despite a select list.
+    return res.json({ memberships: memberships.map(({ id, person_id, role, status, protected_owner }) =>
+      ({ id, person_id, role, status, protected_owner })) })
+  } catch (error) {
+    return res.status(error instanceof IdentityAccessDenied ? 403 : 503)
+      .json({ message: error instanceof IdentityAccessDenied ? 'Access denied' : 'Unavailable' })
+  }
 }
 
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
@@ -54,28 +60,33 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   if (!parsed.success) return res.status(400).json({ message: 'Invalid input' })
   const service = access(req)
   const token = sessionToken(req)
-  if (parsed.data.action === 'protected_owner') {
-    const membership = await service.personalManageProtectedOwner(
+  try {
+    if (parsed.data.action === 'protected_owner') {
+      const membership = await service.personalManageProtectedOwner(
+        token,
+        parsed.data.organization_id,
+        parsed.data.membership_id,
+        parsed.data.role
+      )
+      return res.json({ membership })
+    }
+    if ('role' in parsed.data && parsed.data.role) {
+      const membership = await service.personalChangeMembershipRole(
+        token,
+        parsed.data.organization_id,
+        parsed.data.membership_id,
+        parsed.data.role
+      )
+      return res.json({ membership })
+    }
+    const membership = await service.personalRevokeMembership(
       token,
       parsed.data.organization_id,
-      parsed.data.membership_id,
-      parsed.data.role
+      parsed.data.membership_id
     )
     return res.json({ membership })
+  } catch (error) {
+    return res.status(error instanceof IdentityAccessDenied ? 403 : 503)
+      .json({ message: error instanceof IdentityAccessDenied ? 'Access denied' : 'Unavailable' })
   }
-  if ('role' in parsed.data && parsed.data.role) {
-    const membership = await service.personalChangeMembershipRole(
-      token,
-      parsed.data.organization_id,
-      parsed.data.membership_id,
-      parsed.data.role
-    )
-    return res.json({ membership })
-  }
-  const membership = await service.personalRevokeMembership(
-    token,
-    parsed.data.organization_id,
-    parsed.data.membership_id
-  )
-  return res.json({ membership })
 }
