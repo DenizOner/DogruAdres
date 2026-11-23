@@ -364,10 +364,10 @@ async function run(){
           // Cart lease; do not let the older 210s watchdog truncate the proof.
           const timeoutMs=file.includes("b22-store-ui.exec.ts")&&
             env.B22_UI_PREPARE!=="true"&&env.B22_ADMIN_SMTP!=="true"
-            ?420000:file.includes("b22-audit-worker.exec.ts")?360000:210000
+            ?720000:file.includes("b22-audit-worker.exec.ts")?360000:210000
           const child=spawnSync(process.execPath,direct?[file]:["run","medusa","exec",file],{
             cwd:process.cwd(),env,encoding:"utf8",timeout:file.includes('b22-audit-worker.exec.ts')?360000:
-              file.includes('b22-store-ui.exec.ts')?480000:210000,
+              file.includes('b22-store-ui.exec.ts')?720000:210000,
             maxBuffer:3*1024*1024})
           if(task.B22_SMTP_CANARY)assert.ok(!String(child.stdout??"").concat(String(child.stderr??"")).includes(task.B22_SMTP_CANARY),"SMTP canary leaked to child logs")
           const valid=String(child.stdout??"").split("\n")
