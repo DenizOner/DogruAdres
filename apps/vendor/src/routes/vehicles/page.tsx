@@ -55,6 +55,10 @@ export default function VehiclesPage() {
 
   const modalRef = useRef<HTMLDivElement>(null)
   const firstInputRef = useRef<HTMLInputElement>(null)
+  const cancelDeleteRef = useRef<HTMLButtonElement>(null)
+  const triggerButtonRef = useRef<HTMLElement | null>(null)
+  const activeOrgFetchRef = useRef<string>("")
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   // 1. Fetch user organizations
   const fetchOrganizations = useCallback(async () => {
@@ -99,16 +103,35 @@ export default function VehiclesPage() {
   }, [fetchOrganizations])
 
   // 2. Fetch customer vehicles for active organization
+  //    Uses AbortController to cancel in-flight requests on org switch (race guard)
   const fetchVehicles = useCallback(async (orgId: string) => {
+    // Cancel any previous in-flight fetch to prevent cross-org display
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+    activeOrgFetchRef.current = orgId
+
     setLoadingVehicles(true)
     setErrorMessage("")
+    setVehicles([]) // Clear immediately to prevent cross-org vehicle display
+
     try {
-      const res = await fetch(`/dogruadres/organizations/${orgId}/vehicles`, {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-        headers: { Accept: "application/json" },
-      })
+      const res = await fetch(
+        `/personal/vehicles?organization=${encodeURIComponent(orgId)}`,
+        {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        }
+      )
+
+      // Guard: ignore response if org has changed since this fetch was started
+      if (activeOrgFetchRef.current !== orgId) return
+
       if (res.status === 403) {
         setErrorMessage("Bu işletmenin müşteri araçlarını görüntüleme yetkiniz bulunmuyor.")
         setVehicles([])
@@ -119,11 +142,19 @@ export default function VehiclesPage() {
         return
       }
       const data = await res.json()
-      setVehicles(Array.isArray(data.vehicles) ? data.vehicles : [])
-    } catch {
-      setErrorMessage("Bağlantı hatası: Müşteri araçları yüklenemedi.")
+      if (activeOrgFetchRef.current === orgId) {
+        setVehicles(Array.isArray(data.vehicles) ? data.vehicles : [])
+      }
+    } catch (err: unknown) {
+      const error = err as { name?: string }
+      if (error?.name === "AbortError") return // Intentional cancellation — not an error
+      if (activeOrgFetchRef.current === orgId) {
+        setErrorMessage("Bağlantı hatası: Müşteri araçları yüklenemedi.")
+      }
     } finally {
-      setLoadingVehicles(false)
+      if (activeOrgFetchRef.current === orgId) {
+        setLoadingVehicles(false)
+      }
     }
   }, [])
 
@@ -148,27 +179,84 @@ export default function VehiclesPage() {
     })
   }, [vehicles, searchQuery])
 
-  // Focus trap and Esc key for modal accessibility
+  // Close modal and return focus to the element that triggered it
+  const closeModal = useCallback(() => {
+    setModalMode("none")
+    setSelectedVehicle(null)
+    setFormValues(initialFormValues)
+    setFormErrors({})
+    // Return focus to the trigger button for keyboard users (WCAG 2.1 SC 2.4.3)
+    setTimeout(() => {
+      triggerButtonRef.current?.focus()
+      triggerButtonRef.current = null
+    }, 0)
+  }, [])
+
+  // Full focus trap and Esc key for modal accessibility (WCAG 2.1 SC 2.1.2)
   useEffect(() => {
-    if (modalMode !== "none") {
-      setTimeout(() => firstInputRef.current?.focus(), 50)
-      const handleKeyDown = (e: KeyboardEvent) => {
-        if (e.key === "Escape") {
-          closeModal()
+    if (modalMode === "none") return
+
+    const FOCUSABLE =
+      'a[href],area[href],input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),button:not([disabled]),[tabindex]:not([tabindex="-1"])'
+
+    // Set initial focus: Plate input for create/edit, Cancel button for delete
+    const timer = setTimeout(() => {
+      if (modalMode === "delete") {
+        cancelDeleteRef.current?.focus()
+      } else {
+        firstInputRef.current?.focus()
+      }
+    }, 50)
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        closeModal()
+        return
+      }
+
+      if (e.key === "Tab") {
+        const container = modalRef.current
+        if (!container) return
+        const focusableEls = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+          (el) => !el.closest("[aria-hidden='true']")
+        )
+        if (focusableEls.length === 0) return
+
+        const first = focusableEls[0]
+        const last = focusableEls[focusableEls.length - 1]
+
+        if (e.shiftKey) {
+          // Shift+Tab: wrap backward from first to last
+          if (document.activeElement === first) {
+            e.preventDefault()
+            last.focus()
+          }
+        } else {
+          // Tab: wrap forward from last to first
+          if (document.activeElement === last) {
+            e.preventDefault()
+            first.focus()
+          }
         }
       }
-      window.addEventListener("keydown", handleKeyDown)
-      return () => window.removeEventListener("keydown", handleKeyDown)
     }
-  }, [modalMode])
 
-  const openCreateModal = () => {
+    window.addEventListener("keydown", handleKeyDown)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener("keydown", handleKeyDown)
+    }
+  }, [modalMode, closeModal])
+
+  const openCreateModal = (e: React.MouseEvent<HTMLElement>) => {
+    triggerButtonRef.current = e.currentTarget
     setFormValues(initialFormValues)
     setFormErrors({})
     setModalMode("create")
   }
 
-  const openEditModal = (vehicle: VehicleItem) => {
+  const openEditModal = (vehicle: VehicleItem, e: React.MouseEvent<HTMLElement>) => {
+    triggerButtonRef.current = e.currentTarget
     setSelectedVehicle(vehicle)
     setFormValues({
       plate: vehicle.plate || "",
@@ -182,19 +270,14 @@ export default function VehiclesPage() {
     setModalMode("edit")
   }
 
-  const openDeleteModal = (vehicle: VehicleItem) => {
+  const openDeleteModal = (vehicle: VehicleItem, e: React.MouseEvent<HTMLElement>) => {
+    triggerButtonRef.current = e.currentTarget
     setSelectedVehicle(vehicle)
     setModalMode("delete")
   }
 
-  const closeModal = () => {
-    setModalMode("none")
-    setSelectedVehicle(null)
-    setFormValues(initialFormValues)
-    setFormErrors({})
-  }
-
   // Handle Create or Update submission
+  //   Routes through /personal/vehicles (personal session auth) — NOT native JWT org route
   const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!activeOrg) return
@@ -209,7 +292,15 @@ export default function VehiclesPage() {
     setErrorMessage("")
     setStatusMessage("")
 
-    const payload: Record<string, unknown> = {}
+    const payload: Record<string, unknown> = {
+      organization_id: activeOrg.id,
+      action: modalMode === "create" ? "create" : "update",
+    }
+
+    if (modalMode === "edit" && selectedVehicle?.id) {
+      payload.vehicle_id = selectedVehicle.id
+    }
+
     if (formValues.plate.trim()) payload.plate = formValues.plate.trim()
     else if (modalMode === "edit") payload.plate = null
 
@@ -229,14 +320,8 @@ export default function VehiclesPage() {
     else if (modalMode === "edit") payload.model_year = null
 
     try {
-      const url =
-        modalMode === "create"
-          ? `/dogruadres/organizations/${activeOrg.id}/vehicles`
-          : `/dogruadres/organizations/${activeOrg.id}/vehicles/${selectedVehicle?.id}`
-      const method = modalMode === "create" ? "POST" : "PATCH"
-
-      const res = await fetch(url, {
-        method,
+      const res = await fetch("/personal/vehicles", {
+        method: "POST",
         credentials: "include",
         cache: "no-store",
         headers: {
@@ -258,7 +343,7 @@ export default function VehiclesPage() {
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}))
-        const msg = errorData.message || "Araç kaydedilemedi. Lütfen alanları kontrol edin."
+        const msg = (errorData as { message?: string }).message || "Araç kaydedilemedi. Lütfen alanları kontrol edin."
         setErrorMessage(msg)
         return
       }
@@ -278,21 +363,27 @@ export default function VehiclesPage() {
   }
 
   // Handle Delete confirmation
+  //   Routes through /personal/vehicles (personal session auth) — NOT native JWT org route
   const handleDeleteConfirm = async () => {
     if (!activeOrg || !selectedVehicle) return
     setSubmitting(true)
     setErrorMessage("")
     setStatusMessage("")
     try {
-      const res = await fetch(
-        `/dogruadres/organizations/${activeOrg.id}/vehicles/${selectedVehicle.id}`,
-        {
-          method: "DELETE",
-          credentials: "include",
-          cache: "no-store",
-          headers: { Accept: "application/json" },
-        }
-      )
+      const res = await fetch("/personal/vehicles", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "delete",
+          organization_id: activeOrg.id,
+          vehicle_id: selectedVehicle.id,
+        }),
+      })
 
       if (res.status === 403) {
         setErrorMessage("Araç kaydını silme yetkisi yalnızca işletme sahibi veya yöneticisine aittir.")
@@ -424,7 +515,7 @@ export default function VehiclesPage() {
 
         <Button
           variant="primary"
-          onClick={openCreateModal}
+          onClick={(e) => openCreateModal(e)}
           disabled={!activeOrg || loadingVehicles}
           className="flex items-center gap-2 min-h-[44px]"
         >
@@ -499,7 +590,7 @@ export default function VehiclesPage() {
                         <Button
                           variant="secondary"
                           size="small"
-                          onClick={() => openEditModal(vehicle)}
+                          onClick={(e) => openEditModal(vehicle, e)}
                           aria-label={`${vehicle.plate || vehicle.vin} aracını düzenle`}
                           className="min-h-[36px] min-w-[36px]"
                         >
@@ -511,7 +602,7 @@ export default function VehiclesPage() {
                           variant="danger"
                           size="small"
                           disabled={!canDelete}
-                          onClick={() => openDeleteModal(vehicle)}
+                          onClick={(e) => openDeleteModal(vehicle, e)}
                           aria-label={
                             canDelete
                               ? `${vehicle.plate || vehicle.vin} aracını sil`
@@ -745,7 +836,7 @@ export default function VehiclesPage() {
           aria-labelledby="modal-delete-title"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
         >
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4">
+          <div ref={modalRef} className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4">
             <div className="flex items-center gap-3 text-red-600">
               <Trash className="w-6 h-6" aria-hidden="true" />
               <Heading level="h2" id="modal-delete-title" className="text-lg font-bold text-gray-900">
@@ -765,6 +856,7 @@ export default function VehiclesPage() {
 
             <div className="flex items-center justify-end gap-2 pt-2">
               <Button
+                ref={cancelDeleteRef}
                 type="button"
                 variant="secondary"
                 onClick={closeModal}

@@ -3,7 +3,6 @@ import {
   type VehicleItem,
   type OrgInfo,
   type VehicleFormValues,
-  validateVehicleForm,
   canDeleteVehicle,
 } from "../validation"
 
@@ -117,7 +116,9 @@ describe("Vehicles UI - Interaction and Data Mapping Logic", () => {
     expect(results).toHaveLength(0)
   })
 
-  it("builds correct API payload for vehicle creation", () => {
+  it("builds correct /personal/vehicles POST payload for vehicle creation", () => {
+    // The UI routes ALL vehicle mutations through /personal/vehicles (personal session auth)
+    // NOT through /dogruadres/organizations/:id/vehicles (native JWT — blocked by nativeIngress)
     const form: VehicleFormValues = {
       plate: "34 XYZ 99",
       vin: "WVWZZZ123456",
@@ -126,7 +127,12 @@ describe("Vehicles UI - Interaction and Data Mapping Logic", () => {
       model: "Doblo",
       model_year: "2021",
     }
-    const payload: Record<string, unknown> = {}
+    const orgId = "daorg_01JBMX1234567890ABCDEFGH0"
+
+    const payload: Record<string, unknown> = {
+      organization_id: orgId,
+      action: "create",
+    }
     if (form.plate.trim()) payload.plate = form.plate.trim()
     if (form.vin.trim()) payload.vin = form.vin.trim()
     if (form.label.trim()) payload.label = form.label.trim()
@@ -135,6 +141,8 @@ describe("Vehicles UI - Interaction and Data Mapping Logic", () => {
     if (form.model_year.trim()) payload.model_year = Number(form.model_year)
 
     expect(payload).toEqual({
+      organization_id: orgId,
+      action: "create",
       plate: "34 XYZ 99",
       vin: "WVWZZZ123456",
       label: "Müşteri: Ali Bey",
@@ -144,7 +152,7 @@ describe("Vehicles UI - Interaction and Data Mapping Logic", () => {
     })
   })
 
-  it("builds correct API payload for vehicle update with cleared fields", () => {
+  it("builds correct /personal/vehicles POST payload for vehicle update with cleared fields", () => {
     const form: VehicleFormValues = {
       plate: "34 ABC 123",
       vin: "", // cleared
@@ -153,7 +161,14 @@ describe("Vehicles UI - Interaction and Data Mapping Logic", () => {
       model: "Focus",
       model_year: "", // cleared
     }
-    const payload: Record<string, unknown> = {}
+    const orgId = "daorg_01JBMX1234567890ABCDEFGH0"
+    const vehicleId = "daveh_01JBMX1234567890ABCDEFGH1"
+
+    const payload: Record<string, unknown> = {
+      organization_id: orgId,
+      action: "update",
+      vehicle_id: vehicleId,
+    }
     if (form.plate.trim()) payload.plate = form.plate.trim()
     else payload.plate = null
 
@@ -172,12 +187,30 @@ describe("Vehicles UI - Interaction and Data Mapping Logic", () => {
     if (form.model_year.trim()) payload.model_year = Number(form.model_year)
     else payload.model_year = null
 
+    expect(payload.organization_id).toBe(orgId)
+    expect(payload.action).toBe("update")
+    expect(payload.vehicle_id).toBe(vehicleId)
     expect(payload.plate).toBe("34 ABC 123")
     expect(payload.vin).toBeNull()
     expect(payload.label).toBeNull()
     expect(payload.make).toBe("Ford")
     expect(payload.model).toBe("Focus")
     expect(payload.model_year).toBeNull()
+  })
+
+  it("builds correct /personal/vehicles POST payload for vehicle delete", () => {
+    const orgId = "daorg_01JBMX1234567890ABCDEFGH0"
+    const vehicleId = "daveh_01JBMX1234567890ABCDEFGH1"
+
+    const payload = {
+      action: "delete",
+      organization_id: orgId,
+      vehicle_id: vehicleId,
+    }
+
+    expect(payload.action).toBe("delete")
+    expect(payload.organization_id).toBe(orgId)
+    expect(payload.vehicle_id).toBe(vehicleId)
   })
 
   it("handles organization context parsing correctly", () => {
