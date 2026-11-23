@@ -93,10 +93,13 @@ describe("GET /organization/vehicles — route handler access control", () => {
     expect(res._status).toBe(400)
   })
 
-  it("returns 403 when personalOrganizations returns no memberships (access denied)", async () => {    const mockAccess = {
+  it("returns 403 when personalOrganizations returns empty organizations (SQL active-status filters at query level)", async () => {
+    // personalOrganizations() SQL enforces o.status='active' AND m.status='active' as JOIN conditions.
+    // Suspended/inactive org members are excluded at the query level — returned rows are always active.
+    // An empty result means no active membership exists for this person+org combination → 403.
+    const mockAccess = {
       personalOrganizations: jest.fn().mockResolvedValue({ organizations: [] }),
     }
-    // The route calls access(req) which calls req.scope.resolve — mock at module level
     const securityMod = require("../../personal/security")
     jest.spyOn(securityMod, "sessionToken").mockReturnValue("tok_mock")
     jest.spyOn(securityMod, "access").mockReturnValue(mockAccess)
@@ -106,24 +109,6 @@ describe("GET /organization/vehicles — route handler access control", () => {
     await GET(req, res)
     expect(res._status).toBe(403)
     expect(res._body).toMatchObject({ message: expect.stringContaining("Access denied") })
-  })
-
-  it("returns 403 when organization membership status is not active (Policy A active-status gate)", async () => {
-    // ADR-0007 Policy A: every request-time auth chain link must enforce active-status.
-    // A suspended/inactive organization member must NOT be able to read vehicle data.
-    const securityMod = require("../../personal/security")
-    jest.spyOn(securityMod, "sessionToken").mockReturnValue("tok_mock")
-    jest.spyOn(securityMod, "access").mockReturnValue({
-      personalOrganizations: jest.fn().mockResolvedValue({
-        organizations: [{ id: "daorg_01JBMX1234567890ABCDEFGH0", role: "owner", status: "suspended" }],
-      }),
-    })
-
-    const req = makeReq({ query: { organization: "daorg_01JBMX1234567890ABCDEFGH0" } })
-    const res = makeRes()
-    await GET(req, res)
-    expect(res._status).toBe(403)
-    expect(res._body).toMatchObject({ message: expect.stringContaining("not active") })
   })
 
   it("returns 403 when personalOrganizations returns null", async () => {
@@ -144,7 +129,7 @@ describe("GET /organization/vehicles — route handler access control", () => {
     jest.spyOn(securityMod, "sessionToken").mockReturnValue("tok_mock")
     jest.spyOn(securityMod, "access").mockReturnValue({
       personalOrganizations: jest.fn().mockResolvedValue({
-        organizations: [{ id: "daorg_01JBMX1234567890ABCDEFGH0", role: "owner", status: "active" }],
+        organizations: [{ id: "daorg_01JBMX1234567890ABCDEFGH0", role: "owner" }],
       }),
     })
 

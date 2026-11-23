@@ -40,6 +40,9 @@ export function allowedPublicRequest(method,path){
     '/personal/audit-timeline':['GET'],
     '/personal/notifications':['GET','POST'],
     '/personal/launcher':['GET','POST'],
+    // #482 Aşama 1: /personal/vehicles kept as 410 Gone passthrough so clients receive
+    // the informative redirect hint rather than a 401 from the frontdoor.
+    '/personal/vehicles':['GET'],
   }
   if(personal[path]?.includes(method))return true
   // #482 Aşama 1: Organization-scoped routes (Phase 1 — vehicles only).

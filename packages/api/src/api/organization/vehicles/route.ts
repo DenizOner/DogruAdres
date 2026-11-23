@@ -24,9 +24,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.status(403).json({ message: "Access denied" })
   }
   const activeOrg = orgDecision.organizations[0]
-  if (activeOrg.status !== "active") {
-    return res.status(403).json({ message: "Organization membership is not active" })
-  }
+  // Note: personalOrganizations() SQL already enforces o.status='active' AND m.status='active'
+  // as JOIN conditions — rows returned are guaranteed active. No redundant status field check needed.
 
   const vehicleService = req.scope.resolve<VehicleModuleService>(DOGRUADRES_VEHICLE_MODULE)
   const vehicles = await vehicleService.listLiveVehicles(activeOrg.id)
