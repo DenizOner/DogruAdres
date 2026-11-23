@@ -58,9 +58,173 @@ This repository implements DoğruAdres on the open-source Mercur marketplace sta
     1. A genuinely independent Denetçi Subagent has performed a complete source review and issued an evidence-backed `PASS` (`REVIEW-PROVENANCE-v1`).
     2. All applicable real CI, security, unit, integration, and negative path checks have passed on the exact HEAD SHA.
     3. Zero unresolved blocking findings exist.
+  - **Pre-flight PR Readiness Check (MANDATORY — before any CI trigger or merge attempt):**
+    The Lead Agent MUST verify ALL of the following via GitHub CLI / Git **before** starting any CodeQL / CI run, and again immediately **before** executing the squash merge. If any item is not GREEN, **stop immediately**, resolve the blocker, and do not proceed to CI or merge:
+    - `PR-READY-01` — Zero unresolved review comment threads (no open/pending threads on the GitHub PR)
+    - `PR-READY-02` — No reviewer with an active `CHANGES_REQUESTED` state on the current HEAD SHA
+    - `PR-READY-03` — Denetçi `REVIEW-PROVENANCE-v1 PASS` strictly bound to the exact HEAD SHA (`headRefOid`); any commit pushed after review invalidates PASS
+    - `PR-READY-04` — PR is not in DRAFT state
+    - `PR-READY-05` — No merge conflict reported by GitHub (`mergeable: MERGEABLE`)
+    - `PR-READY-06` — Branch is synchronized with target base (`origin/main`); zero commits behind (prevent branch drift)
+
+    **CI cost rule:** A CI/CodeQL run consumes significant time and compute. Never trigger one while any `PR-READY-*` item is RED. Resolve all blockers first, then trigger CI exactly once per HEAD SHA. If new commits are pushed after CI passes, the full pre-flight check must be repeated before the next merge attempt.
+
+    **Pre-flight command template (run before CI and again before merge):**
+
+    Step 1 — PR state check (PR-READY-01, 02, 04, 05):
+    ```
+    PR=<PR_NUMBER>
+    gh pr view $PR \
+      --json number,title,isDraft,mergeable,reviewDecision,reviews,reviewThreads \
+      --jq '
+        {
+          "PR-READY-01 (unresolved_threads)":
+            (if ([.reviewThreads[] | select(.isResolved == false)] | length) == 0
+             then "GREEN"
+             else "RED — \([.reviewThreads[] | select(.isResolved == false)] | length) unresolved thread(s)" end),
+          "PR-READY-02 (changes_requested)":
+            (if ([.reviews[] | select(.state == "CHANGES_REQUESTED")] | length) == 0
+             then "GREEN"
+             else "RED — CHANGES_REQUESTED by: \([.reviews[] | select(.state == "CHANGES_REQUESTED") | .author.login] | join(", "))" end),
+          "PR-READY-04 (not_draft)":
+            (if .isDraft == false then "GREEN" else "RED — PR is DRAFT" end),
+          "PR-READY-05 (mergeable)":
+            (if .mergeable == "MERGEABLE" then "GREEN" else "RED — mergeable=\(.mergeable)" end)
+        }
+      '
+    ```
+
+    Step 2 — Denetçi PASS & SHA Traceability check (PR-READY-03):
+    ```
+    gh pr view $PR --json headRefOid,comments \
+      --jq '
+        .headRefOid as $head |
+        [.comments[] | select(.body | test("REVIEW-PROVENANCE-v1"; "i") and test("PASS"; "i") and contains($head[0:7]))]
+        | if length > 0
+          then "PR-READY-03 (denetci_pass_sha): GREEN — PASS verified on current HEAD SHA (\($head[0:7]))"
+          else "PR-READY-03 (denetci_pass_sha): RED — no REVIEW-PROVENANCE-v1 PASS matching current HEAD SHA (\($head[0:7]))"
+          end
+      '
+    ```
+
+    Step 3 — Branch Drift check (PR-READY-06):
+    ```
+    git fetch origin main --quiet
+    BEHIND=$(git rev-list --count HEAD..origin/main)
+    if [ "$BEHIND" -eq 0 ]; then
+      echo "PR-READY-06 (branch_sync): GREEN — branch is up to date with origin/main"
+    else
+      echo "PR-READY-06 (branch_sync): RED — branch is $BEHIND commit(s) behind origin/main. Run: gh pr update-branch $PR"
+    fi
+    ```
+
+    All six items must output `GREEN` before triggering CI or attempting merge.
+
+    **Granular CI diagnosis template (`gh pr checks`):**
+    If CI fails or hangs, do not guess or re-trigger blindly. Query failing checks specifically:
+    ```
+    gh pr checks $PR --json name,state,conclusion \
+      --jq '.[] | select(.conclusion != "SUCCESS" and .conclusion != null) | {name, conclusion}'
+    ```
+
   - Merging directly into `main` or force-pushing is strictly forbidden.
-  - **Autonomous merge (no redundant approval):** When all three conditions above are met, the Lead Agent performs the squash merge autonomously without asking the Product Owner for per-PR confirmation. The Product Owner has pre-authorized merge for any PR that satisfies the full gate.
-  - **Automatic branch deletion after merge:** Immediately after a successful squash merge, the Lead Agent deletes the remote feature branch (`git push origin --delete <branch>`) and the local branch (`git branch -d <branch>`), then switches to `main` and pulls. No confirmation needed. Exception: retain a branch only if another open PR explicitly targets it as its base.
+  - **Autonomous merge (no redundant approval):** When all conditions above are met and all CI checks pass, the Lead Agent performs the squash merge autonomously:
+    ```
+    gh pr merge $PR --squash --delete-branch=false
+    ```
+  - **Post-Merge Verification & Automatic cleanup:** Immediately after executing merge, the Lead Agent MUST verify that GitHub recorded the merge successfully before deleting branches:
+    ```
+    gh pr view $PR --json state,mergedAt,mergeCommit \
+      --jq '{state, mergedAt, merge_sha: .mergeCommit.oid}'
+    ```
+    Required state: `state == "MERGED"` and `merge_sha != null`.
+    ONLY upon confirmed `MERGED` state:
+    1. Delete remote feature branch: `git push origin --delete <branch>`
+    2. Switch to main and pull: `git checkout main && git pull origin main`
+    3. Delete local branch: `git branch -d <branch>`
+    If merge verification fails, do NOT delete local or remote branch; report status to Product Owner immediately. Exception: retain a branch only if another open PR explicitly targets it as its base.
+
+### Controlled Continuous Improvement Protocol (Kontrollü Sürekli İyileştirme Protokolü)
+
+**Scope & Standard Compliance (agents.md):** Governs controlled, evidence-based refinement of instructions in `AGENTS.md` across this repository. Follows the official [AGENTS.md standard](https://agents.md/) using standard GitHub Flavored Markdown (no proprietary markup or non-standard syntax). The root `AGENTS.md` establishes repository-wide policy; any subdirectory `AGENTS.md` instructions inherit and narrow scope without overriding parent security or authorization invariants. Contradictions between instructions must be reported and resolved explicitly, never dismissed silently. This protocol serves exclusively to make instructions more accurate, reliable, efficient, and concise; it **never** expands agent autonomy, bypasses security controls, or alters approval boundaries.
+
+#### 1. Continuous Improvement Lifecycle (6-Phase Cycle)
+
+1. **Phase 1 — Learning from Experience (Deneyimlerden Öğrenme):**
+   - At task completion checkpoints, agents systematically analyze: completed development tasks, failed tests and CI outcomes, pull request reviews, independent reviewer findings (`REVIEW-PROVENANCE-v1`), repeated mistakes and corrections, user feedback, workflow inefficiencies, and instruction ambiguities or contradictions.
+   - Analysis and pattern recognition run passively and autonomously; no prior user approval is required for this phase.
+
+2. **Phase 2 — Formulating Improvement Proposals (İyileştirme Fikirleri Oluşturma):**
+   - Improvements may take the form of: adding a necessary general rule, correcting an inaccurate instruction, merging redundant rules, removing obsolete policies, condensing verbose guidance, or improving test/review instructions.
+   - Every proposal MUST structure the following six items:
+     1. *Identified Problem (Tespit Edilen Sorun):* Exact friction, failure, ambiguity, or inefficiency observed.
+     2. *Concrete Evidence (Somut Kanıtlar):* Specific task, commit, CI failure, or test log demonstrating the issue.
+     3. *Proposed Solution (Önerilen Çözüm):* Exact proposed wording change or rule adjustment in `AGENTS.md`.
+     4. *Affected Rules (Etkilenecek Kurallar):* Specific existing sections and rules modified, merged, or retired.
+     5. *Expected Benefit (Beklenen Fayda):* Measurable improvement in agent precision, velocity, or safety.
+     6. *Risks & Side Effects (Riskler ve Yan Etkiler):* Potential unintended behavioral changes or regression risks.
+   - **No Overfitting:** Do not convert one-off anomalies or isolated edge cases into permanent global rules. Propose changes ONLY if they provide enduring value for future agent executions.
+
+3. **Phase 3 — Mandatory User Approval (ZORUNLU Kullanıcı Onayı):**
+   - **NO BRANCH, COMMIT, OR PR MAY BE CREATED FOR AN AGENTS.md IMPROVEMENT BEFORE EXPLICIT USER/PRODUCT OWNER APPROVAL.**
+   - The Lead Agent presents the 6 structured points to the user in plain Turkish (#ELI5).
+   - The user may approve, reject, or request revisions on individual proposals.
+   - Unapproved proposals must not be staged, committed, or pushed.
+   - Rejected proposals must never be re-proposed without substantial new empirical evidence.
+
+4. **Phase 4 — Implementation of Approved Proposals (Onaylanan Fikirlerin Uygulanması):**
+   - Upon receiving explicit user approval:
+     1. Lock the scope strictly to the approved proposal; scope expansion is prohibited.
+     2. Create a dedicated initiative branch (e.g., `docs/agents-continuous-improvement` or `docs/...`).
+     3. Prepare the exact `AGENTS.md` edit, preserving document coherence and removing obsolete or redundant text.
+     4. Execute applicable verification checks (markdown formatting, link validity, rule consistency).
+     5. Submit the change via a dedicated pull request for independent review.
+   - If unexpected requirements or new ideas emerge during editing, stop and seek fresh user approval before expanding scope.
+
+5. **Phase 5 — Independent Review & Verification (Test ve Bağımsız Denetim):**
+   - Every `AGENTS.md` PR must undergo independent review by a dedicated, read-only Denetçi Subagent operating in a strictly separate context (`STRICT READ-ONLY`).
+   - The Denetçi verifies against eight mandatory criteria:
+     1. *Scope Fidelity:* Conformance strictly to the user-approved scope.
+     2. *agents.md Standard Compliance:* Standard CommonMark/GFM formatting, no proprietary markup.
+     3. *Rule Consistency:* No contradiction with existing root or parent governance policies.
+     4. *Security & Authority Boundary:* Zero weakening of security, permissions, or approval gates.
+     5. *Clarity & Actionability:* Instructions are concise, unambiguous, and directly executable.
+     6. *No Historical Bloat:* No commit logs, incident post-mortems, or changelogs inside `AGENTS.md`.
+     7. *No Regression:* Preserves all existing invariants and prevents behavioral degradation.
+     8. *PR Readiness:* All `PR-READY-01` through `PR-READY-06` checks pass.
+   - Review standards must never be relaxed to fabricate a passing outcome. If any criterion fails, the verdict is `CHANGES REQUIRED` or `BLOCKED`; merge is prohibited.
+
+6. **Phase 6 — Merge & Continuous Observation (Birleştirme ve Sürekli İzleme):**
+   - The Lead Agent may squash-merge the PR autonomously without redundant per-PR user confirmation ONLY WHEN:
+     - Explicit prior user approval was recorded for the exact proposal.
+     - The change is strictly within approved scope.
+     - All mandatory CI and PR readiness checks are GREEN.
+     - Independent Denetçi review has issued `REVIEW-PROVENANCE-v1 PASS` on the exact HEAD SHA.
+     - Repository branch protection and mergeability checks are satisfied.
+   - Following merge, subsequent agent executions observe the impact of revised instructions, feeding new observations back into Phase 1.
+
+#### 2. Brevity & Document Discipline (AGENTS.md Dosyasını Sade Tutma)
+
+`AGENTS.md` is an enduring, actionable operational handbook for AI agents—**not a historical repository, error log, or changelog.**
+
+- **Retain in `AGENTS.md`:** Current, active, and binding rules; directly actionable instructions; security boundaries; testing criteria; concise process workflows.
+- **Exclude from `AGENTS.md`:** Historical improvement records, changelogs, superseded rule versions, detailed error post-mortems, CI/test stdout dumps, exhaustive review transcripts, and chronological decision histories. These belong in Git commit history, GitHub Issues, PR descriptions, and CI logs.
+- **Editorial Discipline:** Consolidate semantically overlapping rules, delete obsolete clauses, replace explanatory essays with tight imperative instructions, and avoid duplicated text across sections. Success is measured by agent behavioral accuracy and clarity, never by document line count.
+
+#### 3. Immutable Governance & Safety Invariants (Değiştirilemeyen Güvenlik İlkeleri)
+
+The following ten rules are absolute and binding across all improvement cycles:
+
+1. **No Self-Approval:** An agent can never approve its own improvement proposal or its own authored diff.
+2. **Mandatory Prior Approval:** No branch, commit, or pull request may be created without explicit user/Product Owner approval.
+3. **No Re-submission without New Evidence:** A proposal rejected by the user cannot be re-proposed without significant, newly demonstrated evidence.
+4. **Strict Scope Confinement:** Approved scope cannot be expanded silently during implementation.
+5. **No Indirect Propagation:** Unapproved ideas cannot be introduced indirectly through adjacent documentation, rules, or skill files.
+6. **No Security Degradation:** Security controls, authorization chains, resource custody, and user approval mechanisms can never be weakened or relaxed.
+7. **Fail-Closed Independent Review:** If the independent Denetçi review fails or cannot be executed, merge is strictly blocked; PASS cannot be inferred.
+8. **No Rule Bypass:** Repository protections, pre-flight readiness checks (`PR-READY-01..06`), and zero-cost constraints cannot be bypassed.
+9. **Traceability & Reversibility:** Full Git provenance and clean revertibility must be maintained for every revision.
+10. **Self-Referential Immutability:** These ten safety invariants can never be modified, bypassed, or weakened through the continuous improvement protocol itself.
 
 
 
@@ -163,13 +327,9 @@ For **every** DoğruAdres frontend and backend development change, before writin
 
 ### Current independent-review and merge authorization (#208)
 
-**Binding canonical decision: [#208](https://github.com/DenizOner/DogruAdres/issues/208).** Within an already authorized delivery scope, the authorized PR author/maintainer may merge a PR **without requesting a further Product Owner approval for that PR or commit**, but only after all of these observable gates:
+**Binding canonical decision: [#208](https://github.com/DenizOner/DogruAdres/issues/208).** Within an already authorized delivery scope, all PR merge operations and independent review gates are strictly governed by the authoritative **[Merge Gate & Pre-flight Readiness Check](#verification-ladder--delivery-gates)** at the top of this document. Merging directly into `main` or force-pushing is strictly forbidden. Successful code merge is **not** automatic product/module/browser acceptance or authorization to deploy.
 
-1. A **genuinely independent execution** (the dedicated Denetçi Subagent, running in a strictly separate read-only context) reads the current complete relevant diff/source, approved scope and security/architecture boundaries and returns an evidence-backed **PASS**. The reviewer must actually inspect the primary source/diff, not repeat the author's summary. The shared GitHub credentials (`DenizOner`) neither prove nor disprove independence; operational separation is mandatory.
-2. All applicable **real CI, security, test and functional acceptance** gates for this change pass on the correct source; significant user-facing/security changes retain the required real-browser, HTTP, persistence and negative-path evidence. No unresolved blocking finding, failed required check, unapproved scope change or false test PASS is permitted. A green build, lint, mock or self-review alone is insufficient.
-3. **Immediately before merging**, verify PR branch, current HEAD and base, changed-file scope, up-to-date independent PASS evidence, actual applicable CI outcomes, mergeability, and any *actually enabled* GitHub branch protection/ruleset. If either revision or the relevant risk/scope changes, obtain proportionate fresh independent review and CI; if proof is missing or a blocker remains, do not merge.
-4. Use GitHub's normal PR squash merge, **never direct main push/force push**; record actual merged/main SHAs, exact reviewer and CI references in the PR/Issue. Successful code merge is **not** automatic product/module/browser acceptance or authorization to deploy.
-5. Existing **separate Product Owner decisions** are still required before new product/security/architecture policies, major dependencies, forbidden-cost services, destructive data/migration operations, production deployment, repository security settings, and other explicit approval-bound actions. This general merge policy does not authorize those actions or override an explicit PR-specific hold.
+Existing **separate Product Owner decisions** are still required before new product/security/architecture policies, major dependencies, forbidden-cost services, destructive data/migration operations, production deployment, repository security settings, and other explicit approval-bound actions. This general merge policy does not authorize those actions or override an explicit PR-specific hold.
 
 ### Reviewer provenance and operational separation (binding #208)
 
@@ -244,7 +404,7 @@ Never silently turn an upstream issue into project-owned maintenance work.
 
 ## Resource rule
 
-This project runs primarily on a resource-constrained Windows laptop. Prefer targeted builds/tests and minimum task-owned services/containers, stop only safely identified task-owned processes, and avoid redundant installs. Reuse exact-SHA evidence when still valid; never trade away security, data safety or necessary end-to-end checks to save resources.
+Follow the mandatory resource custody and Windows laptop development constraints defined in **[Local Execution, Isolation, and Resource Custody (#229)](#local-execution-isolation-and-resource-custody-229)** and **[§12B Local resource custody and exact-target preflight](#12b-local-resource-custody-and-exact-target-preflight-p0-workspace-discipline)**. Prefer targeted builds/tests, preserve dirty files/volumes, and never trade away security, data safety, or necessary end-to-end checks to save resources.
 
 ## ASVS 5.0.0 auditor skill — use without new test gates
 
@@ -310,16 +470,6 @@ Before first mutation or new task-owned worktree, verify the *actual* filesystem
 
 At completion, close clean, reproducible worktrees individually with `git worktree remove <exact path>` *without force* only after checking every unpushed commit, tracked/untracked/ignored file, local-only evidence, active consumer and Docker/DB owner. Dirty worktrees, unknown backups, database volumes and shared Git roots remain KEEP. **Only actually merged PRs' original source branches may be considered for authorized deletion after verified final-HEAD merge/content preservation;** if a condition is unknown, record KEEP/BLOCKED with the precise owner and missing proof, rather than silently abandoning or deleting the branch. Remote branch removal never deletes or authorizes cleanup of local worktrees, backups or protected data.
 
-## Cross-branch documentation cutover and safe integration
-
-When a feature branch predates governance cutovers, its legacy `docs/dogruadres/**` source files may still exist and may contain unique engineering evidence. **Do not blindly merge them back into `main`, delete them in-place, rewrite their history, or treat their presence as a second canonical rulebook.**
-
-1. Compare the exact feature-branch blobs with the canonical GitHub Issues and immutable provenance on the branch being integrated; transfer every genuinely newer accepted scope, source-specific supersession, and unique bounded test report before considering removal.
-2. Treat accepted ADR-0005/ADR-0006 and later scoped Vehicle/Audit amendments as binding only within their recorded approval scope. The earlier ADR-0004 co-location approval is superseded. Preserve historic wording, but route agents to the latest explicit accepted decision and the current authorized implementation gate.
-3. Reconcile `docs/dogruadres/**` paths in a **separately reviewed integration/cleanup change** so that merging an old feature branch does not silently resurrect already retired governance documentation.
-4. Independently review the complete code diff and scope, not merely the Markdown cleanup. In particular, `feature/af-1-foundation-audit-outbox` also contains `dogruadres-vehicle` source and migrations; no blanket branch merge or accidental Vehicle implementation authorization follows from a documentation migration or accepted ADR.
-5. Do not delete or rewrite an active dirty local worktree or feature branch to perform cutover. Do not merge into `main` before independent-review and CI gates in #208 are met; a draft PR must be ready and reviewed. Deployment, fixture creation, data mutations, repository protection changes and other separately gated actions retain their required Product Owner authority.
-
 ## GitHub-centered decision, task, evidence and migration workflow
 
 GitHub is the single canonical collaboration platform, with **separate responsibilities**:
@@ -335,7 +485,7 @@ GitHub is the single canonical collaboration platform, with **separate responsib
 
 ## Canonical security, Mercur integration and upgrade guardrails
 
-The following is the **current agent-executable policy**, consolidated from previous `docs/dogruadres/{SECURITY,MERCUR-INTEGRATION,UPGRADE-POLICY}.md`. Their exact historical text and original source blobs remain in Issues [#144](https://github.com/DenizOner/DogruAdres/issues/144), [#143](https://github.com/DenizOner/DogruAdres/issues/143), [#145](https://github.com/DenizOner/DogruAdres/issues/145) respectively, but must not be treated as separate active rulebooks. Architecture snapshot [#142](https://github.com/DenizOner/DogruAdres/issues/142) contains past factual assertions; verify implementation against code/runtime and applicable newer ADRs.
+The following is the **current agent-executable policy** for security, framework integration and upgrades. For historical background, see canonical decision issues [#144](https://github.com/DenizOner/DogruAdres/issues/144), [#143](https://github.com/DenizOner/DogruAdres/issues/143), and [#145](https://github.com/DenizOner/DogruAdres/issues/145).
 
 ### Mandatory security and Organization access rules
 
@@ -367,9 +517,9 @@ For significant work, its **Issue** must identify objective, user-visible outcom
 
 ## Canonical approved product decisions and architecture decisions
 
-GitHub Issues hold the complete canonical requirements/decision records; the former `docs/dogruadres/REQUIREMENTS.md` is retained only in Git history after a verified lossless migration. Use the exact DA-* decision ID to find its corresponding `[DEC DA-...]` issue. [Requirements baseline, approval provenance, cross-domain invariants and open/deferred registers](https://github.com/DenizOner/DogruAdres/issues/141) hold the other authoritative global clauses. A closed APPROVED record registers an existing approved decision, **not** tested/implemented code. PROPOSED, OPEN and DEFERRED entries remain unresolved; GitHub Discussions is the intended deliberation venue when a supported authoring interface is available. The migration governance issue is [#18](https://github.com/DenizOner/DogruAdres/issues/18).
+GitHub Issues hold the complete canonical requirements and decision records. Use the exact DA-* decision ID to find its corresponding `[DEC DA-...]` issue. [Requirements baseline, approval provenance, cross-domain invariants and open/deferred registers](https://github.com/DenizOner/DogruAdres/issues/141) hold the other authoritative global clauses. A closed APPROVED record registers an existing approved decision, **not** tested/implemented code. PROPOSED, OPEN and DEFERRED entries remain unresolved.
 
-Accepted architectural decision Issues (original source and dates retained): [ADR-0001](https://github.com/DenizOner/DogruAdres/issues/29), [ADR-0002](https://github.com/DenizOner/DogruAdres/issues/30), [ADR-0003](https://github.com/DenizOner/DogruAdres/issues/31), [ADR-0005](https://github.com/DenizOner/DogruAdres/issues/33), [ADR-0006](https://github.com/DenizOner/DogruAdres/issues/34), and [ADR-0007](https://github.com/DenizOner/DogruAdres/issues/35). [ADR-0004](https://github.com/DenizOner/DogruAdres/issues/32) is historically preserved but **SUPERSEDED** by ADR-0005 and must never be treated as current authorization. ADR-0005/0006 original approved source comes from the Vehicle feature branch and ADR-0007 from the Foundation feature branch; do not infer the main branch contains these original docs.
+Accepted architectural decision Issues: [ADR-0001](https://github.com/DenizOner/DogruAdres/issues/29), [ADR-0002](https://github.com/DenizOner/DogruAdres/issues/30), [ADR-0003](https://github.com/DenizOner/DogruAdres/issues/31), [ADR-0005](https://github.com/DenizOner/DogruAdres/issues/33), [ADR-0006](https://github.com/DenizOner/DogruAdres/issues/34), and [ADR-0007](https://github.com/DenizOner/DogruAdres/issues/35). [ADR-0004](https://github.com/DenizOner/DogruAdres/issues/32) is **SUPERSEDED** by ADR-0005 and must never be treated as current authorization.
 
 When sources conflict, apply the [authority / precedence model](#authority--precedence-model), check the exact approval and supersession scope, and distinguish historical evidence from current permissions. Never silently treat an archived proposal as binding or close implementation/QA work because its decision record is complete.
 
@@ -459,13 +609,8 @@ The active M0/Vehicle acceptance and evidence requirements in §§12–13 remain
 
 These responsibilities are mandatory and do not expand an operation's authorized scope. Existing approval gates, authority precedence and accepted ADRs remain in force.
 
-- **Product Owner:** defines business goals, behavior, priorities and budget; approves or rejects requirements, business policies, architectural proposals and significant tradeoffs; authorizes bounded implementation and repository changes. The owner makes informed decisions from understandable recommendations and is not expected to understand source code, Git internals or Mercur extension mechanisms. Never require the owner to design a technical solution that the advisor or agent should prepare.
-- **Ana / Lider Mühendis Ajan (Lead Agent):** executes approved active work directly on the repository using available local tools, including source/PR/CI/tests. Owns architectural coherence, plans tasks, delegates to Subagents where beneficial or required, and ensures all gates are satisfied before recommending merge.
-- **Alt Ajanlar (Specialized Subagents):** invoked by the Lead Agent for dedicated tasks:
-  - **Bağımsız Denetçi:** read-only, separate context; conducts independent source and security reviews; emits `REVIEW-PROVENANCE-v1`. Never reviews own code.
-  - **Uzman Geliştirici:** runs isolated feature or bug-fix implementations in distinct worktrees/branches.
-  - **Araştırmacı:** read-only deep dives into installed docs, contracts, and APIs.
-  - **Test / QA Doğrulayıcı:** runs targeted test suites, Playwright browser journeys, and persistence checks.
+- **Role definitions:** Refer to the authoritative **[Roles and Architecture](#roles-and-architecture)** section at the top of this document for the detailed responsibilities of the **Product Owner**, **Ana / Lider Mühendis Ajan (Lead Agent)**, and **Alt Ajanlar (Specialized Subagents: Bağımsız Denetçi, Uzman Geliştirici, Araştırmacı, Test/QA)**.
+- **Decision boundary:** The Product Owner exclusively decides business goals, scope, and budget. Agents execute approved work and must never require the owner to design technical solutions that the agent should prepare.
 
 #### Required problem report
 
@@ -499,9 +644,7 @@ DoğruAdres is the product and development target. Mercur, Medusa, Redis and Pos
 
 This policy follows the latest explicit Product Owner scope instruction. It preserves accepted product decisions and ADR history, grants no implementation or database permission, and does not authorize remote publication.
 
-## Active R0/M0 delivery and authorization policies — later accepted controls
-
-**Provenance and status:** The following binding sections were approved later than the archived `main` principles and are reconstructed from `feature/af-1-foundation-audit-outbox:docs/dogruadres/PRINCIPLES.md` (source blob `7dfa31e63787859aea2e475dd0364e84070f3d5e`) and its `SECURITY.md` (source blob `47dfef53731a650f0159c150eb5d7a500463ae9b`). [Accepted ADR-0007](https://github.com/DenizOner/DogruAdres/issues/35), [R0 complete evidence #206](https://github.com/DenizOner/DogruAdres/issues/206) and [M0 acceptance #147](https://github.com/DenizOner/DogruAdres/issues/147) preserve the decisions and their bounded evidence. The immutable source text is not modified. This active agent policy does **not** approve implementation or past test execution.
+## Active delivery and authorization policies (ADR-0007, #206, #147)
 
 ## Binding Vehicle authorization Policy A
 
@@ -532,7 +675,7 @@ Every acceptance claim uses one of: **SOURCE VERIFIED**, **TEST EXECUTED AND PAS
 
 Preserve independent physical modules, module-owned canonical audit/outbox atomicity and the derived Audit Index. Authorization Policy A is binding; its implementation remains gated by real verification. Governance approval does not expand a checkpoint's resource, source or publication permissions.
 
-## 12A. Permanent evidence-first and anti-repetition delivery discipline (D9 retrospective)
+## 12A. Permanent evidence-first and anti-repetition delivery discipline
 
 **Authority:** accepted [#217 retrospective](https://github.com/DenizOner/DogruAdres/issues/217#issuecomment-6299069205). Applies to every authorized developer, Lead Agent, and Subagent; it does not relax security/approval constraints.
 
