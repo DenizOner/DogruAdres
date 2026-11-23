@@ -66,9 +66,9 @@ describe("organization invitations route — HTTP contract (moved from /personal
       organizations: [{ id: "daorg_allowed", role: "owner" }],
     })
     service.listInvitations.mockResolvedValue([])
-    ;(createInvitationWorkflow as jest.Mock).mockReturnValue({ run: mockCreateRun })
-    ;(acceptInvitationWorkflow as jest.Mock).mockReturnValue({ run: mockAcceptRun })
-    ;(revokeInvitationWorkflow as jest.Mock).mockReturnValue({ run: mockRevokeRun })
+    ;(createInvitationWorkflow as unknown as jest.Mock).mockReturnValue({ run: mockCreateRun })
+    ;(acceptInvitationWorkflow as unknown as jest.Mock).mockReturnValue({ run: mockAcceptRun })
+    ;(revokeInvitationWorkflow as unknown as jest.Mock).mockReturnValue({ run: mockRevokeRun })
     ;(sendSmtpEmail as jest.Mock).mockResolvedValue(undefined)
     ;(verifiedEmailForActorContext as jest.Mock).mockResolvedValue("user@example.com")
     mockCreateRun.mockResolvedValue({
