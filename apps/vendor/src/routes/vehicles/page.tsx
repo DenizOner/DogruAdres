@@ -52,6 +52,23 @@ export default function VehiclesPage() {
 
   const [statusMessage, setStatusMessage] = useState<string>("")
   const [errorMessage, setErrorMessage] = useState<string>("")
+  const [csrfToken, setCsrfToken] = useState<string>("")
+
+  // Fetch CSRF token from personal session for mutation requests
+  useEffect(() => {
+    fetch("/personal/session", {
+      method: "GET",
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (typeof data?.csrf_token === "string") {
+          setCsrfToken(data.csrf_token)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const modalRef = useRef<HTMLDivElement>(null)
   const firstInputRef = useRef<HTMLInputElement>(null)
@@ -320,16 +337,26 @@ export default function VehiclesPage() {
     else if (modalMode === "edit") payload.model_year = null
 
     try {
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      }
+      if (csrfToken) {
+        headers["x-csrf-token"] = csrfToken
+      }
+
       const res = await fetch("/personal/vehicles", {
         method: "POST",
         credentials: "include",
         cache: "no-store",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify(payload),
       })
+
+      if (res.status === 503) {
+        setErrorMessage("Müşteri aracı kayıt işlemleri yetkilendirme entegrasyonu tamamlanana kadar geçici olarak kapalıdır.")
+        return
+      }
 
       if (res.status === 409) {
         setErrorMessage("Bu plaka veya şasi numarası bu işletmede zaten kayıtlı.")
@@ -370,20 +397,30 @@ export default function VehiclesPage() {
     setErrorMessage("")
     setStatusMessage("")
     try {
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      }
+      if (csrfToken) {
+        headers["x-csrf-token"] = csrfToken
+      }
+
       const res = await fetch("/personal/vehicles", {
         method: "POST",
         credentials: "include",
         cache: "no-store",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify({
           action: "delete",
           organization_id: activeOrg.id,
           vehicle_id: selectedVehicle.id,
         }),
       })
+
+      if (res.status === 503) {
+        setErrorMessage("Müşteri aracı silme işlemleri yetkilendirme entegrasyonu tamamlanana kadar geçici olarak kapalıdır.")
+        return
+      }
 
       if (res.status === 403) {
         setErrorMessage("Araç kaydını silme yetkisi yalnızca işletme sahibi veya yöneticisine aittir.")
@@ -495,6 +532,14 @@ export default function VehiclesPage() {
           {errorMessage}
         </Alert>
       )}
+
+      {/* Information Banner on Mutation Gate */}
+      <Container className="p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2 text-xs text-blue-900">
+        <InformationCircle className="w-4 h-4 text-blue-600 shrink-0" aria-hidden="true" />
+        <span>
+          Müşteri araç portföyü şu anda görüntüleme modundadır. Yeni araç ekleme ve silme işlemleri kurumsal yetkilendirme (Policy A) entegrasyonu sonrasında aktifleşecektir.
+        </span>
+      </Container>
 
       {/* Search and Action Toolbar */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
