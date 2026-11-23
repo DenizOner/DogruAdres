@@ -67,21 +67,26 @@ This repository implements DoğruAdres on the open-source Mercur marketplace sta
     - `PR-READY-05` — No merge conflict reported by GitHub (`mergeable: MERGEABLE`)
     - `PR-READY-06` — Branch is synchronized with target base (`origin/main`); zero commits behind (prevent branch drift)
 
-    **CI cost rule:** A CI/CodeQL run consumes significant time and compute. Never trigger one while any `PR-READY-*` item is RED. Resolve all blockers first, then trigger CI exactly once per HEAD SHA. If new commits are pushed after CI passes, the full pre-flight check must be repeated before the next merge attempt.
+    **CI cost rule:** A full CI/CodeQL run consumes significant time and compute. Never trigger one while any `PR-READY-*` item is RED. Resolve all blockers first, then trigger CI exactly once per HEAD SHA. If new commits are pushed after CI passes, the full pre-flight check must be repeated before the next merge attempt. (Note: in accordance with `.github/workflows/identity-organization-foundation.yml`, required early development checks such as Foundation static checks and API test builds run on draft pushes; `PR-READY-04` is enforced before marking ready for final full CI and merge).
 
     **Pre-flight command template (run before CI and again before merge):**
 
     Step 1 — PR state check (PR-READY-01, 02, 04, 05):
     ```
     PR=<PR_NUMBER>
+    # Check unresolved review threads via GraphQL (PR-READY-01)
+    UNRESOLVED=$(gh api graphql -f query='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){reviewThreads(first:100){nodes{isResolved}}}}}' -F owner=':owner' -F repo=':repo' -F pr=$PR --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length')
+    if [ "$UNRESOLVED" -eq 0 ]; then
+      echo "PR-READY-01 (unresolved_threads): GREEN — zero unresolved review threads"
+    else
+      echo "PR-READY-01 (unresolved_threads): RED — $UNRESOLVED unresolved thread(s)"
+    fi
+
+    # Check reviews, draft status, and mergeability (PR-READY-02, 04, 05)
     gh pr view $PR \
-      --json number,title,isDraft,mergeable,reviewDecision,reviews,reviewThreads \
+      --json number,title,isDraft,mergeable,reviews \
       --jq '
         {
-          "PR-READY-01 (unresolved_threads)":
-            (if ([.reviewThreads[] | select(.isResolved == false)] | length) == 0
-             then "GREEN"
-             else "RED — \([.reviewThreads[] | select(.isResolved == false)] | length) unresolved thread(s)" end),
           "PR-READY-02 (changes_requested)":
             (if ([.reviews[] | select(.state == "CHANGES_REQUESTED")] | length) == 0
              then "GREEN"
@@ -99,10 +104,10 @@ This repository implements DoğruAdres on the open-source Mercur marketplace sta
     gh pr view $PR --json headRefOid,comments \
       --jq '
         .headRefOid as $head |
-        [.comments[] | select(.body | test("REVIEW-PROVENANCE-v1"; "i") and test("PASS"; "i") and contains($head[0:7]))]
+        [.comments[] | select(.body | test("REVIEW-PROVENANCE-v1"; "i") and test("verdict:\\s*[\"'\''\"]?PASS"; "i") and contains($head[0:7]))]
         | if length > 0
-          then "PR-READY-03 (denetci_pass_sha): GREEN — PASS verified on current HEAD SHA (\($head[0:7]))"
-          else "PR-READY-03 (denetci_pass_sha): RED — no REVIEW-PROVENANCE-v1 PASS matching current HEAD SHA (\($head[0:7]))"
+          then "PR-READY-03 (denetci_pass_sha): GREEN — verified REVIEW-PROVENANCE-v1 verdict: PASS on current HEAD SHA (\($head[0:7]))"
+          else "PR-READY-03 (denetci_pass_sha): RED — no valid REVIEW-PROVENANCE-v1 verdict: PASS matching current HEAD SHA (\($head[0:7]))"
           end
       '
     ```
@@ -123,8 +128,8 @@ This repository implements DoğruAdres on the open-source Mercur marketplace sta
     **Granular CI diagnosis template (`gh pr checks`):**
     If CI fails or hangs, do not guess or re-trigger blindly. Query failing checks specifically:
     ```
-    gh pr checks $PR --json name,state,conclusion \
-      --jq '.[] | select(.conclusion != "SUCCESS" and .conclusion != null) | {name, conclusion}'
+    gh pr checks $PR --json name,state,bucket \
+      --jq '.[] | select(.bucket != "pass" and .bucket != "skipping") | {name, state, bucket}'
     ```
 
   - Merging directly into `main` or force-pushing is strictly forbidden.
@@ -191,7 +196,7 @@ This repository implements DoğruAdres on the open-source Mercur marketplace sta
      5. *Clarity & Actionability:* Instructions are concise, unambiguous, and directly executable.
      6. *No Historical Bloat:* No commit logs, incident post-mortems, or changelogs inside `AGENTS.md`.
      7. *No Regression:* Preserves all existing invariants and prevents behavioral degradation.
-     8. *PR Readiness:* All `PR-READY-01` through `PR-READY-06` checks pass.
+     8. *PR Readiness:* Verification that all applicable pre-flight criteria (`PR-READY-01`, `02`, `04`, `05`, `06`) are satisfied; the Denetçi review itself issues the evidence-backed `PASS` that satisfies `PR-READY-03` for merge.
    - Review standards must never be relaxed to fabricate a passing outcome. If any criterion fails, the verdict is `CHANGES REQUIRED` or `BLOCKED`; merge is prohibited.
 
 6. **Phase 6 — Merge & Continuous Observation (Birleştirme ve Sürekli İzleme):**
