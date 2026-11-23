@@ -136,7 +136,7 @@ export default function VehiclesPage() {
 
     try {
       const res = await fetch(
-        `/personal/vehicles?organization=${encodeURIComponent(orgId)}`,
+        `/organization/vehicles?organization=${encodeURIComponent(orgId)}`,
         {
           method: "GET",
           credentials: "include",
@@ -294,7 +294,7 @@ export default function VehiclesPage() {
   }
 
   // Handle Create or Update submission
-  //   Routes through /personal/vehicles (personal session auth) — NOT native JWT org route
+  //   Routes through /organization/vehicles (organization-scoped session auth) — #482
   const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!activeOrg) return
@@ -345,7 +345,7 @@ export default function VehiclesPage() {
         headers["x-csrf-token"] = csrfToken
       }
 
-      const res = await fetch("/personal/vehicles", {
+      const res = await fetch("/organization/vehicles", {
         method: "POST",
         credentials: "include",
         cache: "no-store",
@@ -390,7 +390,7 @@ export default function VehiclesPage() {
   }
 
   // Handle Delete confirmation
-  //   Routes through /personal/vehicles (personal session auth) — NOT native JWT org route
+  //   Routes through /organization/vehicles (organization-scoped session auth) — #482
   const handleDeleteConfirm = async () => {
     if (!activeOrg || !selectedVehicle) return
     setSubmitting(true)
@@ -405,7 +405,7 @@ export default function VehiclesPage() {
         headers["x-csrf-token"] = csrfToken
       }
 
-      const res = await fetch("/personal/vehicles", {
+      const res = await fetch("/organization/vehicles", {
         method: "POST",
         credentials: "include",
         cache: "no-store",
