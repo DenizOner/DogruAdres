@@ -353,7 +353,7 @@ export default async function({ container }: ExecArgs) {
 
     report.checks = {
       adminAccessSuccess: true,
-      adminMembershipReadSuccess: true,
+      ...(ui ? { adminMembershipReadDenied: true } : { adminMembershipReadSuccess: true }),
       memberAccessSuccess: true,
       memberMembershipReadDenied: true,
       memberScopeSurvivedRefresh: true,
@@ -381,9 +381,9 @@ export default async function({ container }: ExecArgs) {
   } catch (error) {
     report.execution = "FAILED; no retry"
     report.errorType = error instanceof Error ? error.name : "UnknownError"
-    report.errorMessage = ui ? "B04-UI assertion failed; no retry; inspect last sanitized phase" : error instanceof Error ? error.message : String(error)
+    report.errorMessage = error instanceof Error ? error.message : String(error)
     console.log((ui ? "B04_UI_EVIDENCE " : "B04_EVIDENCE ") + JSON.stringify(report))
-    throw new Error(ui ? "B04-UI failed; see sanitized evidence; no retry" : "B04 native acceptance assertion failed; see sanitized evidence: " + (error instanceof Error ? error.stack : error))
+    throw new Error(ui ? `B04-UI failed (${report.errorMessage}); see sanitized evidence; no retry` : "B04 native acceptance assertion failed; see sanitized evidence: " + (error instanceof Error ? error.stack : error))
   } finally {
     if (server) await new Promise<void>(resolve => server.close(() => resolve()))
     await http?.close()

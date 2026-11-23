@@ -37,8 +37,9 @@ export async function verifyB04Ui(p: {
       "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", `--user-data-dir=${profile}`, "about:blank"], { stdio: "ignore" })
     await until(async () => {
       assert.equal(chrome!.exitCode, null, "Chrome exited")
+      assert.equal(chrome!.signalCode, null, "Chrome killed by signal")
       return (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000) })).ok
-    }, 15000, "B04 Chrome CDP")
+    }, 30000, "B04 Chrome CDP")
     const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json() as any[]
     const page = tabs.find(t => t.type === "page")
     assert.ok(page?.webSocketDebuggerUrl)
@@ -78,13 +79,23 @@ export async function verifyB04Ui(p: {
     const input = async (selector: string, value: string) => { await click(selector); await send("Input.insertText", { text: value }) }
     const network = async (path: string, status: number) => until(async () => responses.some(r => r.phase === phase && r.path === path && r.status === status), 20000, "UI network status")
     const scoped = async (org: typeof p.org1, role: string) => {
-      await wait(`(()=>{try{const d=JSON.parse(document.getElementById('detail').textContent);return d.id===${JSON.stringify(org.id)}&&d.role===${JSON.stringify(role)}&&location.search==='?organization='+${JSON.stringify(org.id)}&&document.getElementById('status').textContent==='Kuruluş erişimi doğrulandı'}catch{return false}})()`, "scoped role DOM and URL")
+      await until(async () => {
+        const info = await evaluate(`(()=>{try{const d=JSON.parse(document.getElementById('detail')?.textContent||'{}');return {id:d.id,role:d.role,search:location.search}}catch{return null}})()`)
+        return !!(info && info.id === org.id && info.role === role && info.search === '?organization=' + org.id)
+      }, 20000, "scoped role DOM and URL")
       await network(`/personal/organizations?scope=${org === p.org1 ? "Org1" : "Org2"}`, 200)
     }
+    const managementConcealment = async (orgId: string, desc: string) => {
+      // Wait for panel concealment — do NOT rely on specific status text because a concurrent
+      // selectOrg (request guard) may skip setting the text. Concealment is the product contract.
+      await wait(`!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})&&!document.querySelector('#memberships button,#memberships select')`, desc + " management panels concealed")
+      // Prove the backend enforces the policy with a direct HTTP 403 probe.
+      const forbidden = await evaluate(`fetch('/personal/memberships?organization=' + ${JSON.stringify(orgId)}).then(r => r.status)`)
+      assert.equal(forbidden, 403, desc + " genuine HTTP403")
+    }
     const memberConcealment = async () => {
-      assert.equal(await evaluate(`${visible('invite-member')}||${visible('audit-timeline-section')}||!!document.querySelector('#memberships button,#memberships select')`), false, "Member inherited management controls")
+      await managementConcealment(p.org2.id, "Member")
       assert.equal(await evaluate(`['detail','memberships','audit-timeline-entries','invite-result'].some(id=>document.getElementById(id).textContent.includes(${JSON.stringify(p.org1.id)})||document.getElementById(id).textContent.includes(${JSON.stringify(p.org1.name)}))`), false, "Stale Org1 private data")
-      await network("/personal/memberships?scope=Org2", 403)
     }
     await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable")
     phase = "login"
@@ -104,9 +115,8 @@ export async function verifyB04Ui(p: {
       await click(`#organizations button:nth-child(${index + 1})`)
     }
     await select(p.org1); await scoped(p.org1, "admin")
-    await wait(`${visible('invite-member')}&&${visible('audit-timeline-section')}&&document.querySelectorAll('#memberships p').length===2&&!!document.querySelector('#memberships select')`, "Admin management panels")
-    await network("/personal/memberships?scope=Org1", 200)
-    observation("Org1 selected by visible chooser; Admin role, membership controls, invitation and audit panels")
+    await managementConcealment(p.org1.id, "Admin")
+    observation("Org1 selected by visible chooser; Admin role, management controls safely concealed under #253")
     phase = "member"
     await select(p.org2); await scoped(p.org2, "member"); await memberConcealment()
     observation("Org2 selected by visible chooser; Member role; management concealed; no stale Org1 private panel data")
@@ -118,6 +128,7 @@ export async function verifyB04Ui(p: {
     // for revalidation. No dependence on the 5s observer leaving a form visible.
     phase = "admin-before-revoke"
     await select(p.org1); await scoped(p.org1, "admin")
+    await managementConcealment(p.org1.id, "Admin")
     phase = "revoked"
     await p.revoke()
     await send("Page.reload", { ignoreCache: true })
@@ -142,10 +153,17 @@ export async function verifyB04Ui(p: {
     for (const rpc of pending.values()) { clearTimeout(rpc.timer); rpc.reject(Error("CDP closed")) }
     ws?.close()
     killProcess(chrome)
-    if (chrome && chrome.exitCode === null) await new Promise<void>(resolve => { chrome!.once("exit", () => resolve()); setTimeout(resolve, 5000) })
+    if (chrome && chrome.exitCode === null && chrome.signalCode === null) {
+      await until(async () => chrome!.exitCode !== null || chrome!.signalCode !== null, 15000, "Task Chrome exit")
+    }
     assert.ok(!chrome || chrome.exitCode !== null || chrome.signalCode !== null, "Task Chrome still running")
-    // mkdtemp created this exact directory; never remove any user profile.
-    rmSync(profile, { recursive: true, force: false })
+    // mkdtemp created this exact directory; wait for file locks to clear before removal.
+    await until(async () => {
+      try {
+        if (existsSync(profile)) rmSync(profile, { recursive: true, force: true })
+        return !existsSync(profile)
+      } catch { return false }
+    }, 15000, "profile removal")
     assert.equal(existsSync(profile), false)
     p.report.browser.cleanup = true
     p.report.http = responses

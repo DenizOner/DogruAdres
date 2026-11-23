@@ -70,7 +70,7 @@ export default async function({container}:ExecArgs){
   const domain=async()=>{const result:any={};for(const t of ['da_organization_membership','da_audit_event','da_audit_outbox','da_security_outbox'])result[t]=(await q(`select count(*)::int n,md5(coalesce(string_agg(to_jsonb(r)::text,E'\\n' order by to_jsonb(r)::text),'')) hash from "${t}" r`))[0];return result}
   const denied=async(c:B06Chrome,name:string,body:object,status:number,bad=false)=>{c.phase=name;await strong(c);const before=await domain();assert.equal((await c.post(body,bad)).status,status);assert.deepEqual(await domain(),before);report.checks.push({phase:name,actor:c.actor,http:status,zeroDomainAuditOutbox:true,evidence:'REAL CHROME FETCH / NATIVE HTTP / SQL; denied POST, not a visible role control'})}
   await b.select(orgs[0].name,'member')
-  await b.wait("document.getElementById('memberships-status').textContent==='Üyelik listesini görüntüleme izniniz yok.'")
+  await b.wait("document.getElementById('memberships-status').textContent==='Uye listesi ve davet yonetimi icin yetki gerekli.'")
   await denied(b,'member-denied',{action:'protected_owner',organization_id:orgs[0].id,membership_id:b1.id,role:'owner'},403)
   await a.select(orgs[0].name,'owner');await a.ready()
   await denied(a,'foreign-target',{action:'protected_owner',organization_id:orgs[0].id,membership_id:b2.id,role:'owner'},404)
