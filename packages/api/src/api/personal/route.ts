@@ -599,7 +599,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
     const closingWrite=['store-owner-closing','store-platform-closing','store-platform-closing-final-review','platform/store-closings','platform/store-closing-reviews','store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
-    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite||ownerPauseWrite||(path==='company-launcher'&&options.method==='POST');
+    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite||ownerPauseWrite||(path==='/organization/launcher'&&options.method==='POST');
     let data;
     try{
       data=await r.json();
