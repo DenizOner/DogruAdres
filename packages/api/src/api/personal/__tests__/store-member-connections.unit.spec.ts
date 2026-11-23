@@ -1,9 +1,9 @@
-import {POST} from "../store-member-connections/route"
+﻿import {POST} from "../../organization/store-member-connections/route"
 import {addSellerMemberWorkflow} from "@mercurjs/core/workflows"
 import {SellerRole} from "@mercurjs/types"
-import {access,csrf,enabled,sessionToken} from "../security"
+import {access,csrf,enabled,sessionToken} from "../../personal/security"
 
-jest.mock("../security",()=>({
+jest.mock("../../personal/security",()=>({
   access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
 }))
 jest.mock("@mercurjs/core/workflows",()=>({addSellerMemberWorkflow:jest.fn()}))

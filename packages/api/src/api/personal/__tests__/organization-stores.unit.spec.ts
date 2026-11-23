@@ -1,5 +1,5 @@
 import { access, enabled, sessionToken } from "../security"
-import { GET } from "../organization-stores/route"
+import { GET } from "../../organization/stores/route"
 
 jest.mock("../security", () => ({
   access: jest.fn(),

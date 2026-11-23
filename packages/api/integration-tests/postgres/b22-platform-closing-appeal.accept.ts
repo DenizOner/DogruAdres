@@ -220,7 +220,7 @@ async function verifyDualRolePlatformOwnerLockOrder(input:{
   organizationId:string;sellerId:string
 }):Promise<void>{
   const {staff,q,pgUrl,organizationId,sellerId,personId}=input
-  const ownerRead="/personal/store-owner-pause?"+
+  const ownerRead="/organization/store-owner-pause?"+
     new URLSearchParams({organization_id:organizationId,seller_id:sellerId})
   assert.equal((await read(staff,ownerRead)).status,200,
     "Real dual-role Staff Person independently has protected Owner access")
@@ -271,9 +271,9 @@ async function verifyDualRolePlatformOwnerLockOrder(input:{
         "signal:AbortSignal.timeout(45000)}).then(r=>r.status);"+
         "globalThis[x.result]=p;return true}",
         JSON.stringify({path,payload,csrf,
-          result:path==="/personal/store-owner-pause"?
+          result:path==="/organization/store-owner-pause"?
             "__daDualRoleOwner":"__daDualRoleStaff"}))
-    await send("/personal/store-owner-pause",owner)
+    await send("/organization/store-owner-pause",owner)
     ownerStarted=true
     const waitingAdvisory=async()=>Number((await q(
       "select count(*)::int n from pg_locks h join pg_locks w "+
@@ -505,7 +505,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
     ownerPassword,foreignEmail,foreignPassword,foreignPersonId,foreignOrgName,container}=input
   await verifySmtpTestCredentialScopeOverHttps(staff,browser,staffPersonId,q)
   const path="/personal/platform/store-closings"
-  const privatePath="/personal/store-platform-closing"
+  const privatePath="/organization/store-platform-closing"
   const mailPath="/personal/platform/store-closing-email-readiness?"+
     new URLSearchParams({organization_id:ownerOrgId,seller_id:sellerId}).toString()
   const readPath=privatePath+"?"+new URLSearchParams({
@@ -513,7 +513,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
   const before=(await q("select id,status,name,handle from seller where id=$1",[sellerId]))[0]
   assert.equal(before?.id,sellerId)
   assert.equal(before?.status,"open","Source Store must be trading before Staff closes")
-  const initialOwnerPause=await read(browser,"/personal/store-owner-pause?"+
+  const initialOwnerPause=await read(browser,"/organization/store-owner-pause?"+
     new URLSearchParams({organization_id:ownerOrgId,seller_id:sellerId}))
   assert.equal(initialOwnerPause.status,200,
     "Protected Owner can check the actual native Store before Staff closes it")
@@ -890,7 +890,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
   // #307 P2: although native Seller remains 'open', the actual protected
   // Owner's personal HTTPS pause state must honor the separate platform
   // closure; all voluntary controls stay disabled after a real page reload.
-  const pausePath="/personal/store-owner-pause?"+
+  const pausePath="/organization/store-owner-pause?"+
     new URLSearchParams({organization_id:ownerOrgId,seller_id:sellerId})
   const ownerPauseRead=await read(browser,pausePath)
   assert.equal(ownerPauseRead.status,200)
@@ -930,12 +930,12 @@ export async function verifyB22PlatformClosingAppeal(input:{
     (select count(*)::int from da_store_owner_closing where seller_id=$1) closings`,
     [sellerId])
   const voluntaryBefore=await voluntaryWrites()
-  assert.equal((await write(browser,"/personal/store-owner-pause",{
+  assert.equal((await write(browser,"/organization/store-owner-pause",{
     action:"resume",organization_id:ownerOrgId,seller_id:sellerId,
     request_id:"dasp_"+randomBytes(16).toString("hex"),
     expected_version:ownerPauseRead.body.version})).status,403,
     "Owner cannot resume platform-closed sales even through direct HTTPS")
-  assert.equal((await write(browser,"/personal/store-owner-closing",{
+  assert.equal((await write(browser,"/organization/store-owner-closing",{
     action:"start",organization_id:ownerOrgId,seller_id:sellerId,
     request_id:"dasc_"+randomBytes(16).toString("hex"),
     expected_version:0,consequences_acknowledged:true})).status,409,
@@ -1112,7 +1112,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
   // four-send retry require their own actual execution evidence.
   const emailToken=randomBytes(32).toString("hex")
   const tokenDigest=createHash("sha256").update(emailToken).digest("hex")
-  const visitPath="/personal/store-platform-closing-email-visit"
+  const visitPath="/organization/store-platform-closing-email-visit"
   const queue=await q(`select person_id,attempts from da_store_platform_closing_email
     where seller_id=$1 and person_id=$2`,[sellerId,ownerPersonId])
   assert.equal(queue.length,1,"Closing must create exactly one Owner mail queue row")
@@ -1967,9 +1967,9 @@ export async function verifyB22PlatformClosingSecondStageRequest(input:{
 }):Promise<void>{
   const {browser,staff,q,foundation,sourceSellerId,reviewSellerId,
     ownerPersonId,staffPersonId,organizationId,organizationName}=input
-  const readPath="/personal/store-platform-closing?"+
+  const readPath="/organization/store-platform-closing?"+
     new URLSearchParams({organization_id:organizationId,seller_id:reviewSellerId})
-  const postPath="/personal/store-platform-closing-final-review"
+  const postPath="/organization/store-platform-closing-final-review"
   const clockStart=new Date(Date.now()-11*86400000).toISOString()
   const sourceStart=new Date(Date.now()-12*86400000).toISOString()
   const reason="B22 sentetik on iki gün önceki gerekçeli platform kapatma kaydı"
@@ -2165,7 +2165,7 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
     organizationId,reviewSellerId,initialSellerId,
     ownerPersonId,originalStaffPersonId}=input
   const path="/personal/platform/store-closing-reviews"
-  const ownerPath="/personal/store-platform-closing?"+
+  const ownerPath="/organization/store-platform-closing?"+
     new URLSearchParams({organization_id:organizationId,seller_id:reviewSellerId})
   const before=await q("select c.final_review_request_id,c.final_review_requested_at,"+
     "c.deadline_started_at,c.state from da_store_platform_closing c "+

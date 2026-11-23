@@ -605,7 +605,7 @@ export async function verifyAssignedRecipientUse(input:{
   })
   const post=async(browser:B06Chrome,payload:object)=>browser.callFunction(
     "async function(json){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/store-rename-requests',{method:'POST',"+
+    "const r=await fetch('/organization/store-rename-requests',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:json});return {status:r.status,body:await r.json()}}",
     JSON.stringify(payload))
@@ -728,7 +728,7 @@ export async function verifyAssignedRecipientUse(input:{
   try{
     const ownerRead=await owner.callFunction(
       "async function(url){const r=await fetch(url);return {status:r.status,body:await r.json()}}",
-      "/personal/store-rename-requests?"+new URLSearchParams({
+      "/organization/store-rename-requests?"+new URLSearchParams({
         organization_id:target.organization_id,seller_id:target.seller_id
       }).toString())
     assert.equal(ownerRead.status,200)

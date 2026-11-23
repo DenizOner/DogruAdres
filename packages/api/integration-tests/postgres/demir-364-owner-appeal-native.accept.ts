@@ -351,7 +351,7 @@ export default async function({container}:any){
     await owner.login(A.email,A.password,A.person)
     marker("STEP DEMIR364 scenario: owner-strong-session")
     await owner.select(orgs[2].name,"owner")
-    const ownerPreLink="/personal/store-platform-closing?"+
+    const ownerPreLink="/organization/store-platform-closing?"+
       new URLSearchParams({organization_id:orgs[2].id,
         seller_id:nativeStores[0]}).toString()
     assert.equal((await browserGet(owner,ownerPreLink)).status,403,
@@ -381,7 +381,7 @@ export default async function({container}:any){
     await staff.login(B.email,B.password,B.person)
     marker("STEP DEMIR364 scenario: staff-strong-session")
     const root="/personal/platform/store-closings"
-    const ownerBase="/personal/store-platform-closing"
+    const ownerBase="/organization/store-platform-closing"
     const ownerUrl=(s:string)=>ownerBase+"?"+
       new URLSearchParams({organization_id:orgs[2].id,seller_id:s}).toString()
     const reason="B22 Demir isolated platform decision for synthetic Gamma Store"
@@ -444,7 +444,7 @@ export default async function({container}:any){
         "(seller_id,person_id,attempt,token_sha256) values($1,$2,4,$3)",
         [s,A.person,digest])
       marker("STEP DEMIR364 scenario: mail-link-created")
-      const link="/personal/store-platform-closing-email-visit"
+      const link="/organization/store-platform-closing-email-visit"
       assert.equal((await browserPost(staff,link,{token:emailToken})).status,403)
       marker("STEP DEMIR364 scenario: foreign-link-denied")
       assert.equal((await browserPost(owner,link,{token:emailToken},true)).status,403)
@@ -554,10 +554,10 @@ export default async function({container}:any){
       request_id:"dasfr_"+randomBytes(16).toString("hex"),
       expected_version:1,reason:"Demir separate second-stage independent review request"}
     assert.equal((await browserPost(staff,
-      "/personal/store-platform-closing-final-review",finalPayload)).status,403)
+      "/organization/store-platform-closing-final-review",finalPayload)).status,403)
     marker("STEP DEMIR364 scenario: sc-staff-denied")
     assert.equal((await browserPost(owner,
-      "/personal/store-platform-closing-final-review",finalPayload,true)).status,403)
+      "/organization/store-platform-closing-final-review",finalPayload,true)).status,403)
     marker("STEP DEMIR364 scenario: sc-csrf-denied")
     // Verify day30/31 boundary BEFORE the final review POST. When
     // final_review_request_id IS NULL the da_store_platform_final_review_complete
@@ -591,7 +591,7 @@ export default async function({container}:any){
     await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz, deadline_audit_event_id=$2 "+
       "where seller_id=$3",[day11,day11Audit,nativeStores[1]])
     const final=await browserPost(owner,
-      "/personal/store-platform-closing-final-review",finalPayload)
+      "/organization/store-platform-closing-final-review",finalPayload)
     assert.equal(final.status,200,"Day11 real Owner HTTPS second-stage request")
     assert.equal(final.body.final_review_requested,true)
     assert.equal(final.body.permanent_finalization_enabled,false)

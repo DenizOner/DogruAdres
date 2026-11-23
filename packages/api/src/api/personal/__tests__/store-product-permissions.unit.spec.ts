@@ -1,7 +1,7 @@
-import {GET,POST} from "../store-product-permissions/route"
-import {access,csrf,enabled,sessionToken} from "../security"
+﻿import {GET,POST} from "../../organization/store-product-permissions/route"
+import {access,csrf,enabled,sessionToken} from "../../personal/security"
 
-jest.mock("../security",()=>({
+jest.mock("../../personal/security",()=>({
   access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
 }))
 describe("B22 Owner-only products.edit authority",()=>{

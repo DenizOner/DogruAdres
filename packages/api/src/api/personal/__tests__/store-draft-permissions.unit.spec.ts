@@ -1,7 +1,7 @@
-import {GET,POST} from "../store-draft-permissions/route"
-import {access,csrf,enabled,sessionToken} from "../security"
+﻿import {GET,POST} from "../../organization/store-draft-permissions/route"
+import {access,csrf,enabled,sessionToken} from "../../personal/security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
-jest.mock("../security",()=>({
+jest.mock("../../personal/security",()=>({
   access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
 }))
 describe("B22 private Store draft Member grant route (unit, not Chrome/PG16)",()=>{

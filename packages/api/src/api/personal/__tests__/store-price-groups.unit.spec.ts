@@ -1,8 +1,8 @@
-import {GET,POST} from "../store-price-groups/route"
-import {access,csrf,enabled,sessionToken} from "../security"
+﻿import {GET,POST} from "../../organization/store-price-groups/route"
+import {access,csrf,enabled,sessionToken} from "../../personal/security"
 import {ContainerRegistrationKeys} from "@medusajs/framework/utils"
 
-jest.mock("../security",()=>({
+jest.mock("../../personal/security",()=>({
   access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
 }))
 describe("B22 Store-owned CustomerGroup ↔ audited Buyer Organization grant",()=>{

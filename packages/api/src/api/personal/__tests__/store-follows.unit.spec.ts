@@ -1,7 +1,7 @@
-import {GET,POST} from "../store-follows/route"
-import {access,csrf,enabled,sessionToken} from "../security"
+﻿import {GET,POST} from "../../organization/store-follows/route"
+import {access,csrf,enabled,sessionToken} from "../../personal/security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
-jest.mock("../security",()=>({
+jest.mock("../../personal/security",()=>({
   access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
 }))
 

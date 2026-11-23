@@ -90,25 +90,25 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/organizations" && req.method==="GET") ||
       (path==="/personal/organization-applications" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/contexts" && req.method==="GET") ||
-      (path==="/personal/organization-stores" && req.method==="GET") ||
+      (path==="/personal/organization-stores" && req.method==="GET") || // 410 Gone — moved to /organization/stores (#482)
       (path==="/personal/catalog" && req.method==="GET") ||
-      (path==="/personal/store-follows" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/store-applications" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/store-rename-requests" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/store-owner-pause" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/store-owner-closing" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/store-platform-closing" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/store-platform-closing-final-review" && req.method==="POST") ||
+      (path==="/personal/store-follows" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-follows (#482)
+      (path==="/personal/store-applications" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-applications (#482)
+      (path==="/personal/store-rename-requests" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-rename-requests (#482)
+      (path==="/personal/store-owner-pause" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-owner-pause (#482)
+      (path==="/personal/store-owner-closing" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-owner-closing (#482)
+      (path==="/personal/store-platform-closing" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-platform-closing (#482)
+      (path==="/personal/store-platform-closing-final-review" && req.method==="POST") || // 410 Gone — moved to /organization/store-platform-closing-final-review (#482)
       (path==="/personal/platform/store-closings" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/platform/store-closing-reviews" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/platform/store-closing-email-readiness" && req.method==="GET") ||
-      (path==="/personal/store-platform-closing-email-visit" && req.method==="POST") ||
-      (path==="/personal/store-draft-permissions" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/store-product-permissions" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/store-member-connections" && req.method==="POST") ||
+      (path==="/personal/store-platform-closing-email-visit" && req.method==="POST") || // 410 Gone — moved to /organization/store-platform-closing-email-visit (#482)
+      (path==="/personal/store-draft-permissions" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-draft-permissions (#482)
+      (path==="/personal/store-product-permissions" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-product-permissions (#482)
+      (path==="/personal/store-member-connections" && req.method==="POST") || // 410 Gone — moved to /organization/store-member-connections (#482)
       (path==="/personal/buyer-permissions" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/store-buyer-blocks" && req.method==="POST") ||
-      (path==="/personal/store-price-groups" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/store-buyer-blocks" && req.method==="POST") || // 410 Gone — moved to /organization/store-buyer-blocks (#482)
+      (path==="/personal/store-price-groups" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-price-groups (#482)
       (path==="/personal/buyer-context" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/order-groups" && req.method==="GET") ||
       (path==="/personal/return-requests" && req.method==="GET") ||
@@ -131,6 +131,21 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/organization/launcher" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/audit-timeline" && req.method==="GET") ||
       (path==="/organization/notifications" && ["GET","POST"].includes(req.method)) ||
+      // #482 Aşama 3: Store routes moved from /personal/ to /organization/
+      (path==="/organization/store-applications" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/store-follows" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/store-buyer-blocks" && req.method==="POST") ||
+      (path==="/organization/store-draft-permissions" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/store-owner-pause" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/store-owner-closing" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/store-platform-closing" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/store-platform-closing-email-visit" && req.method==="POST") ||
+      (path==="/organization/store-platform-closing-final-review" && req.method==="POST") ||
+      (path==="/organization/store-rename-requests" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/store-member-connections" && req.method==="POST") ||
+      (path==="/organization/store-price-groups" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/store-product-permissions" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/stores" && req.method==="GET") ||
       ((path==="/personal/platform" || path==="/personal/platform/smtp") && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/mfa" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/mfa/enroll" && req.method==="POST") ||

@@ -13,7 +13,7 @@ type Rename={request_id:string;organization_id:string;seller_id:string;
 
 const ownerPost=(owner:B06Chrome,payload:object)=>owner.callFunction(
   "async function(body){const session=await(await fetch('/personal/session')).json();"+
-  "const r=await fetch('/personal/store-rename-requests',{method:'POST',"+
+  "const r=await fetch('/organization/store-rename-requests',{method:'POST',"+
   "headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
   "body});return {status:r.status,body:await r.json()}}",JSON.stringify(payload))
 

@@ -74,13 +74,13 @@ export default async function({container}:any){
       assert.equal(JSON.stringify(data).includes(mail),false,"Personal email leaked")
       return {status:response.status,data}
     }
-    const own="/personal/organization-stores?organization="+encodeURIComponent(org.id)
+    const own="/organization/stores?organization="+encodeURIComponent(org.id)
     const allowedOrg=await get("/personal/organizations?id="+encodeURIComponent(org.id),cookie)
     assert.equal(allowedOrg.status,200)
     assert.equal((await get(own,cookie)).status,403,"Native SellerMember must not auto-grant Store")
     assert.equal((await get(own)).status,403,"Anonymous Store access must be denied")
     assert.equal((await get(own,cookie,{"x-seller-id":store.id})).status,400,"Forged seller context must be rejected")
-    assert.equal((await get("/personal/organization-stores?organization=daorg_foreign",cookie)).status,403)
+    assert.equal((await get("/organization/stores?organization=daorg_foreign",cookie)).status,403)
     assert.equal((await get(own+"&unexpected=1",cookie)).status,400)
     // A genuine, current publishable key still cannot stand in for a Buyer Org.
     const {result:[publishable]}=await createApiKeysWorkflow(container).run({input:{

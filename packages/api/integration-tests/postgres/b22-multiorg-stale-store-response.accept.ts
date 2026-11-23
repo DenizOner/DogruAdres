@@ -74,7 +74,7 @@ export async function verifyB22MultiOrgStaleStoreResponse(input:{
         const method=String(options.method||(
           typeof request==='object'&&request.method)||'GET').toUpperCase()
         if(method==='POST')state.writes++
-        const isList=url.pathname==='/personal/organization-stores'&&
+        const isList=url.pathname==='/organization/stores'&&
           method==='GET'&&!url.searchParams.has('purpose')
         const org=url.searchParams.get('organization')
         if(isList&&org===alphaId){
@@ -220,7 +220,7 @@ export async function verifyB22MultiOrgStaleStoreResponse(input:{
     assert.equal(gammaSelected,gamma.id,
       "The active Organization must remain Gamma after stale Alpha delivery")
     const http=browser.http.slice(httpStart)
-    assert.ok(http.filter(x=>x.path==="/personal/organization-stores"&&
+    assert.ok(http.filter(x=>x.path==="/organization/stores"&&
       x.method==="GET"&&x.status===200&&x.tls).length>=2,
       "Both list reads must be real HTTPS GET 200 in Chrome network evidence")
     assert.equal(http.some(x=>x.method==="POST"),false,
