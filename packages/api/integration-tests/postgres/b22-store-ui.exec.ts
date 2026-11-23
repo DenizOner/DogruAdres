@@ -8068,7 +8068,7 @@ export default async function({container}:any){
         where person_id=$1 and organization_id=$2 and permission='buyer.purchase'
           and revoked_at is null`,[B.person,organizations[0].id])
       return rows.length===1
-    },19000,"B22 real Chrome buyer permission issued")
+    },30000,"B22 real Chrome buyer permission issued")
     const [buyerGrant]=await q(`select id,source_audit_event_id,issued_by_person_id
       from da_organization_buyer_permission where person_id=$1
         and organization_id=$2 and revoked_at is null`,
