@@ -45,14 +45,27 @@ describe("Platform admin launcher frontdoor UI contract", () => {
     const html = String(res.send.mock.calls[0]?.[0] ?? "")
 
     expect(html).toContain("platformLauncherTargets={")
-    expect(html).toContain("'organization-review':{label:'İşletme başvuruları incelemesi'")
-    expect(html).toContain("'store-approvals':{label:'Platform mağaza onayları'")
-    expect(html).toContain("'store-renames':{label:'Mağaza ad/bağlantı değişiklikleri'")
-    expect(html).toContain("'store-closings':{label:'Platform mağaza kapatma süreci'")
-    expect(html).toContain("'store-closing-reviews':{label:'Bağımsız mağaza kapatma incelemesi'")
-    expect(html).toContain("'platform-mfa':{label:'Platform için MFA politikası'")
-    expect(html).toContain("'platform-smtp':{label:'Platform SMTP ve bildirim ayarları'")
-    expect(html).toContain("'store-policy':{label:'Şirket mağaza başvuru hakkı yönetimi'")
+    expect(html).toContain("'organization-review':{label:'İşletme başvuruları incelemesi',target:'organization-review-panel'}")
+    expect(html).toContain("'store-approvals':{label:'Platform mağaza onayları',target:'store-approval-panel'}")
+    expect(html).toContain("'store-renames':{label:'Mağaza ad/bağlantı değişiklikleri',target:'store-rename-review-panel'}")
+    expect(html).toContain("'store-closings':{label:'Platform mağaza kapatma süreci',target:'platform-closing-panel'}")
+    expect(html).toContain("'store-closing-reviews':{label:'Bağımsız mağaza kapatma incelemesi',target:'platform-closing-review-panel'}")
+    expect(html).toContain("'platform-mfa':{label:'Platform için MFA politikası',target:'mfa-platform'}")
+    expect(html).toContain("'platform-smtp':{label:'Platform SMTP ve bildirim ayarları',target:'smtp-platform'}")
+    expect(html).toContain("'store-policy':{label:'Şirket mağaza başvuru hakkı yönetimi',target:'platform-store-policy-panel'}")
+
+    for (const targetId of [
+      "organization-review-panel",
+      "store-approval-panel",
+      "store-rename-review-panel",
+      "platform-closing-panel",
+      "platform-closing-review-panel",
+      "mfa-platform",
+      "smtp-platform",
+      "platform-store-policy-panel",
+    ]) {
+      expect(html).toContain(`id="${targetId}"`)
+    }
 
     expect(html).toContain("function clearPlatformLauncher()")
     expect(html).toContain("function validPlatformLauncherResponse(data)")

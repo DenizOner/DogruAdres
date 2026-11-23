@@ -1877,8 +1877,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   let platformLauncherData=null,platformLauncherRequest=0,platformLauncherBusy=false;
   const platformLauncherTargets={
     'organization-review':{label:'İşletme başvuruları incelemesi',target:'organization-review-panel'},
-    'store-approvals':{label:'Platform mağaza onayları',target:'platform-store-review'},
-    'store-renames':{label:'Mağaza ad/bağlantı değişiklikleri',target:'platform-store-renames'},
+    'store-approvals':{label:'Platform mağaza onayları',target:'store-approval-panel'},
+    'store-renames':{label:'Mağaza ad/bağlantı değişiklikleri',target:'store-rename-review-panel'},
     'store-closings':{label:'Platform mağaza kapatma süreci',target:'platform-closing-panel'},
     'store-closing-reviews':{label:'Bağımsız mağaza kapatma incelemesi',target:'platform-closing-review-panel'},
     'platform-mfa':{label:'Platform için MFA politikası',target:'mfa-platform'},
