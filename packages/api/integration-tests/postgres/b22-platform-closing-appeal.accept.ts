@@ -531,7 +531,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
   // seller_scope=inspect is read-only Cart-to-Seller mapping, never an
   // availability or checkout grant. Prove real Buyer catalogue visibility
   // independently BEFORE closing, on the exact native Seller page.
-  const catalogBase="/personal/catalog?organization_id="+
+  const catalogBase="/organization/catalog?organization_id="+
     encodeURIComponent(buyerOrganizationId)
   let sellerPage=-1
   for(let page=0;page<5;page++){

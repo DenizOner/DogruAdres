@@ -71,6 +71,12 @@ export function allowedPublicRequest(method,path){
     '/organization/store-price-groups':['GET','POST'],
     '/organization/store-product-permissions':['GET','POST'],
     '/organization/stores':['GET'],
+    // #482 Aşama 4: Buyer/catalog routes moved from /personal/ to /organization/
+    '/organization/catalog':['GET'],
+    '/organization/buyer-context':['GET','POST'],
+    '/organization/buyer-permissions':['GET','POST'],
+    '/organization/order-groups':['GET'],
+    '/organization/return-requests':['GET'],
   }
   if(organization[path]?.includes(method))return true
   // #217 closed B4B: no unscoped catalog or seller/offer/search relay.

@@ -1,4 +1,4 @@
-﻿import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { randomBytes } from "node:crypto"
 import { enabled } from "./security"
 export const AUTHENTICATE = false
@@ -4202,7 +4202,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     panel.hidden=true;
     statusEl.textContent='';
     try{
-      const data=await api('buyer-context?organization_id='+encodeURIComponent(org));
+      const data=await api('/organization/buyer-context?organization_id='+encodeURIComponent(org));
       if(seq!==buyerContextRequest||request!==organizationRequest||
          currentOrg!==org||document.hidden||el('workspace').hidden)return;
       if(data.organization_id!==org||
@@ -4239,7 +4239,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     statusEl.textContent='Sipariş ve kuruluş yetkisi denetleniyor…';
     try{
       const params=new URLSearchParams({organization_id:org,order_group_id:id});
-      const data=await api('order-groups?'+params.toString());
+      const data=await api('/organization/order-groups?'+params.toString());
       if(!valid())return;
       const group=data?.order_group;
       if(data.organization_id!==org||!group||group.id!==id||
@@ -4284,7 +4284,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     statusEl.textContent='Yetkili mağaza ürünleri denetleniyor…';
     try{
       const query=new URLSearchParams({organization_id:org,page:String(page)});
-      const data=await api('catalog?'+query.toString());
+      const data=await api('/organization/catalog?'+query.toString());
       if(seq!==buyerCatalogRequest||request!==organizationRequest||currentOrg!==org||
          document.hidden||el('workspace').hidden||
          el('buyer-context-panel').hidden)return;
@@ -4437,7 +4437,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
        el('buyer-context-panel').hidden)return;
     statusEl.textContent='Müşteri bağı kontrol ediliyor…';
     try{
-      const result=await api('buyer-context?organization_id='+
+      const result=await api('/organization/buyer-context?organization_id='+
         encodeURIComponent(org)+'&customer=verified');
       if(org!==currentOrg||request!==organizationRequest||
          document.hidden||el('workspace').hidden)return;
@@ -4471,7 +4471,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('buyer-grants-panel').hidden=true;
     if(!keepOutcome)statusEl.textContent='Satın alma yetkileri denetleniyor…';
     try{
-      const data=await api('buyer-permissions?organization_id='+encodeURIComponent(org));
+      const data=await api('/organization/buyer-permissions?organization_id='+encodeURIComponent(org));
       if(seq!==buyerPermissionRequest||request!==organizationRequest||
          currentOrg!==org||document.hidden)return;
       const members=currentMemberships.slice();
@@ -4525,7 +4525,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     for(const b of buttons)b.disabled=true;
     const membership_id=form.elements.namedItem('membership_id').value;
     try{
-      const result=await api('buyer-permissions',{method:'POST',
+      const result=await api('/organization/buyer-permissions',{method:'POST',
         body:JSON.stringify({action,organization_id:org,membership_id})});
       if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
       if(result.status!==(action==='grant'?'active':'revoked'))
