@@ -30,6 +30,7 @@ import {
 import { sendSmtpEmail } from "./smtp-client"
 import { PersonalNotifications } from "./personal-notifications"
 import { CompanyLauncherConflict, companyLauncherAvailable, companyLauncherProject, companyLauncherValidate } from "./company-launcher"
+import { PlatformLauncherConflict, platformLauncherAvailable, platformLauncherProject, platformLauncherValidate } from "./platform-launcher"
 import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedSellerIds, verifiedStoreProductEditGrant } from "./legal-store-ownership"
 import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
 import { organizationActionAllowed, ownerRoleAllows } from "./role-action-policy"
@@ -6897,6 +6898,77 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(saved.length!==1)throw new CompanyLauncherConflict()
     return {organization_id:input.organization,
       ...companyLauncherProject(saved[0],allowed)}
+  }
+
+  private async platformLauncherActor_(
+    token: string, context: Context
+  ): Promise<{ person_id: string; tasks: string[] } | null> {
+    const db = securitySql(context.transactionManager)
+    const session = await new IdentitySessions(db).current(token, true)
+    if (!session) return null
+    const rows = await db.execute(`select distinct g.task from da_platform_staff_grant g
+      join da_person p on p.id=g.person_id
+      join da_browser_session s on s.person_id=p.id and s.id=? and s.status='active'
+      join da_person_security e on e.person_id=p.id and e.epoch=s.epoch
+      join da_login_binding b on b.auth_identity_id=s.auth_identity_id and b.person_id=p.id and b.actor_type=s.actor_type and b.actor_id=s.actor_id and b.revoked_at is null and b.verified_at is not null
+      join da_actor_mapping a on a.person_id=p.id and a.actor_type=s.actor_type and a.actor_id=s.actor_id and a.deleted_at is null
+      join da_session_policy q on q.id='current'
+      where g.person_id=? and g.resource='platform' and g.revoked_at is null
+      and statement_timestamp()<s.created_at+q.absolute_lifetime_seconds*interval '1 second'
+      and statement_timestamp()<s.last_activity_at+q.idle_timeout_seconds*interval '1 second'
+      and s.last_strong_auth_at is not null and statement_timestamp()<s.last_strong_auth_at+q.recent_auth_seconds*interval '1 second'
+      and p.disabled_at is null and p.deleted_at is null and (g.expires_at is null or g.expires_at>clock_timestamp())`,
+      [session.id, session.person_id]) as Array<{ task: string }>
+    return { person_id: session.person_id, tasks: rows.map(r => r.task) }
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformLauncher(
+    token: string, @MedusaContext() context: Context = {}
+  ) {
+    const actor = await this.platformLauncherActor_(token, context)
+    if (!actor) return null
+    const allowed = platformLauncherAvailable(actor.tasks)
+    if (!allowed.length) return null
+    const db = securitySql(context.transactionManager)
+    const rows = await db.execute(`select app_ids,collapsed_ids,version from da_platform_launcher_preference
+      where person_id=?`,
+      [actor.person_id]) as Array<{ app_ids: unknown; collapsed_ids: unknown; version: unknown }>
+    if (rows.length > 1) throw new IdentityAccessDenied()
+    return platformLauncherProject(rows[0] ?? null, allowed)
+  }
+
+  @InjectTransactionManager()
+  async personalSavePlatformLauncher(
+    token: string, input: { app_ids: string[]; collapsed_ids: string[]; expected_version: number },
+    @MedusaContext() context: Context = {}
+  ) {
+    const actor = await this.platformLauncherActor_(token, context)
+    if (!actor) return null
+    const allowed = platformLauncherAvailable(actor.tasks)
+    if (!allowed.length) return null
+    const db = securitySql(context.transactionManager)
+    const preference = platformLauncherValidate(
+      input.app_ids, input.collapsed_ids, input.expected_version, allowed)
+    let saved: Array<{ app_ids: unknown; collapsed_ids: unknown; version: unknown }>
+    if (preference.expected_version === 0) {
+      saved = await db.execute(`insert into da_platform_launcher_preference
+        (id,person_id,app_ids,collapsed_ids,version,updated_at)
+        values(?,?,?,?,1,clock_timestamp())
+        on conflict(person_id) do nothing
+        returning app_ids,collapsed_ids,version`,
+        [randomUUID(), actor.person_id,
+          JSON.stringify(preference.app_ids), JSON.stringify(preference.collapsed_ids)])
+    } else {
+      saved = await db.execute(`update da_platform_launcher_preference
+        set app_ids=?,collapsed_ids=?,version=version+1,updated_at=clock_timestamp()
+        where person_id=? and version=?
+        returning app_ids,collapsed_ids,version`,
+        [JSON.stringify(preference.app_ids), JSON.stringify(preference.collapsed_ids),
+          actor.person_id, preference.expected_version])
+    }
+    if (saved.length !== 1) throw new PlatformLauncherConflict()
+    return platformLauncherProject(saved[0], allowed)
   }
 
   // ---------------------------------------------------------------------------

@@ -146,7 +146,7 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/organization/store-price-groups" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/store-product-permissions" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/stores" && req.method==="GET") ||
-      ((path==="/personal/platform" || path==="/personal/platform/smtp") && ["GET","POST"].includes(req.method)) ||
+      ((path==="/personal/platform" || path==="/personal/platform/smtp" || path==="/personal/platform/launcher") && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/mfa" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/mfa/enroll" && req.method==="POST") ||
       (path==="/personal/mfa/manage" && req.method==="POST") ||
