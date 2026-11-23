@@ -37,8 +37,9 @@ export async function verifyB04Ui(p: {
       "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", `--user-data-dir=${profile}`, "about:blank"], { stdio: "ignore" })
     await until(async () => {
       assert.equal(chrome!.exitCode, null, "Chrome exited")
+      assert.equal(chrome!.signalCode, null, "Chrome killed by signal")
       return (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000) })).ok
-    }, 15000, "B04 Chrome CDP")
+    }, 30000, "B04 Chrome CDP")
     const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json() as any[]
     const page = tabs.find(t => t.type === "page")
     assert.ok(page?.webSocketDebuggerUrl)

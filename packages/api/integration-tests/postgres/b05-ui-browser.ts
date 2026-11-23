@@ -29,8 +29,9 @@ export async function verifyB05Ui(p: {
       "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", `--user-data-dir=${profile}`, "about:blank"], { stdio: "ignore" })
     await until(async () => {
       assert.equal(chrome!.exitCode, null, "Chrome exited")
+      assert.equal(chrome!.signalCode, null, "Chrome killed by signal")
       return (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000) })).ok
-    }, 15000, "B05 CDP readiness")
+    }, 30000, "B05 CDP readiness")
     const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json() as any[]
     ws = new WebSocket(tabs.find(t => t.type === "page").webSocketDebuggerUrl)
     await new Promise<void>((resolve, reject) => { ws!.onopen = () => resolve(); ws!.onerror = () => reject(Error("CDP unavailable")) })
