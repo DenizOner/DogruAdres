@@ -152,10 +152,17 @@ export async function verifyB04Ui(p: {
     for (const rpc of pending.values()) { clearTimeout(rpc.timer); rpc.reject(Error("CDP closed")) }
     ws?.close()
     killProcess(chrome)
-    if (chrome && chrome.exitCode === null) await new Promise<void>(resolve => { chrome!.once("exit", () => resolve()); setTimeout(resolve, 5000) })
+    if (chrome && chrome.exitCode === null && chrome.signalCode === null) {
+      await until(async () => chrome!.exitCode !== null || chrome!.signalCode !== null, 15000, "Task Chrome exit")
+    }
     assert.ok(!chrome || chrome.exitCode !== null || chrome.signalCode !== null, "Task Chrome still running")
-    // mkdtemp created this exact directory; never remove any user profile.
-    rmSync(profile, { recursive: true, force: false })
+    // mkdtemp created this exact directory; wait for file locks to clear before removal.
+    await until(async () => {
+      try {
+        if (existsSync(profile)) rmSync(profile, { recursive: true, force: true })
+        return !existsSync(profile)
+      } catch { return false }
+    }, 15000, "profile removal")
     assert.equal(existsSync(profile), false)
     p.report.browser.cleanup = true
     p.report.http = responses
