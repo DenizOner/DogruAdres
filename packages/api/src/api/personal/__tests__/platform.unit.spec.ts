@@ -1,4 +1,4 @@
-import { GET, POST } from "../platform/route"
+import { GET, POST } from "../../platform/route"
 import { access, csrf, enabled, sessionToken } from "../security"
 import { ContainerRegistrationKeys, MedusaError } from "@medusajs/framework/utils"
 

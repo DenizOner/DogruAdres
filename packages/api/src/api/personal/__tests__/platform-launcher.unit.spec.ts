@@ -1,5 +1,5 @@
 import { access, csrf, enabled, sessionToken } from "../security"
-import { GET, POST } from "../platform/launcher/route"
+import { GET, POST } from "../../platform/launcher/route"
 import {
   PlatformLauncherConflict,
   PlatformLauncherInvalid,
