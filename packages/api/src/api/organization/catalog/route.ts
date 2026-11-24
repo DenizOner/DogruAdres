@@ -4,8 +4,8 @@ import {MercurModules} from "@mercurjs/types"
 import {access,enabled,sessionToken} from "../../personal/security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 import {nativeSellerTradingAt} from "../../../modules/dogruadres-access/native-seller-trading"
-import {nativeDirectTryListPrice,type DirectTryListPrice} from "../../personal/catalog/native-try-list-price"
-import {nativeBuyerGroupTryReference,type BuyerGroupTryReference} from "../../personal/catalog/native-group-try-reference"
+import {nativeDirectTryListPrice,type DirectTryListPrice} from "./native-try-list-price"
+import {nativeBuyerGroupTryReference,type BuyerGroupTryReference} from "./native-group-try-reference"
 
 export const AUTHENTICATE=false
 const selection=z.object({

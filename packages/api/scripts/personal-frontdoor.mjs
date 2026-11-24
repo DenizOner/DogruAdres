@@ -11,41 +11,12 @@ export function allowedPublicRequest(method,path){
   const personal={
     '/personal':['GET'], '/personal/session':['GET','POST','DELETE'],
     '/personal/challenge':['POST'], '/personal/register':['POST'], '/personal/organizations':['GET'],
+    '/personal/profile':['GET','POST'],
     '/personal/organization-applications':['GET','POST'],
-    '/personal/platform':['GET','POST'], '/personal/platform/smtp':['GET','POST'], '/personal/memberships':['GET','POST'], // /personal/platform* 410 Gone — moved to /platform/* (#482 Aşama 5)
-    '/personal/invitations':['GET','POST'], '/personal/mfa':['GET','POST'], '/personal/mfa/enroll':['POST'], '/personal/mfa/manage':['POST'],
+    '/personal/mfa':['GET','POST'], '/personal/mfa/enroll':['POST'], '/personal/mfa/manage':['POST'],
     '/personal/contexts':['GET'],
-    '/personal/organization-stores':['GET'],
-    '/personal/catalog':['GET'], '/personal/store-follows':['GET','POST'],
-    '/personal/store-applications':['GET','POST'],
-    '/personal/store-rename-requests':['GET','POST'],
-    '/personal/store-owner-pause':['GET','POST'],
-    '/personal/store-owner-closing':['GET','POST'],
-    '/personal/store-platform-closing':['GET','POST'],
-    '/personal/store-platform-closing-final-review':['POST'],
-    '/personal/platform/store-closings':['GET','POST'], // 410 Gone — moved to /platform/store-closings (#482 Aşama 5)
-    '/personal/platform/store-closing-reviews':['GET','POST'], // 410 Gone — moved to /platform/store-closing-reviews (#482 Aşama 5)
-    '/personal/platform/store-closing-email-readiness':['GET'], // 410 Gone — moved to /platform/store-closing-email-readiness (#482 Aşama 5)
-    '/personal/store-platform-closing-email-visit':['POST'],
-      '/personal/store-draft-permissions':['GET','POST'],
-    '/personal/platform/stores':['GET','POST'], // 410 Gone — moved to /platform/stores (#482 Aşama 5)
-    '/personal/platform/store-renames':['GET','POST'], // 410 Gone — moved to /platform/store-renames (#482 Aşama 5)
-    '/personal/store-buyer-blocks':['POST'],
-    '/personal/store-product-permissions':['GET','POST'],
-    '/personal/buyer-permissions':['GET','POST'],
-    '/personal/buyer-context':['GET','POST'],
-    '/personal/order-groups':['GET'],
-    '/personal/product-drafts':['GET','POST'],
     '/personal/links':['GET','POST'],
-    '/personal/audit-timeline':['GET'], // 410 Gone — moved to /organization/audit-timeline (#482)
-    '/personal/notifications':['GET','POST'], // 410 Gone — moved to /organization/notifications (#482)
     '/personal/launcher':['GET','POST'],
-    '/personal/company-launcher':['GET','POST'], // 410 Gone — moved to /organization/launcher (#482)
-    '/personal/memberships':['GET','POST'], // 410 Gone — moved to /organization/memberships (#482)
-    '/personal/invitations':['GET','POST'], // 410 Gone — moved to /organization/invitations (#482)
-    // #482 Aşama 1: /personal/vehicles kept as 410 Gone passthrough so clients receive
-    // the informative redirect hint rather than a 401 from the frontdoor.
-    '/personal/vehicles':['GET'],
   }
   if(personal[path]?.includes(method))return true
   // #482 Aşama 1–2: Organization-scoped routes; extended per phase of the routing refactor.
@@ -68,6 +39,7 @@ export function allowedPublicRequest(method,path){
     '/organization/store-platform-closing-final-review':['POST'],
     '/organization/store-rename-requests':['GET','POST'],
     '/organization/store-member-connections':['POST'],
+    '/organization/product-drafts':['GET','POST'],
     '/organization/store-price-groups':['GET','POST'],
     '/organization/store-product-permissions':['GET','POST'],
     '/organization/stores':['GET'],
@@ -91,6 +63,7 @@ export function allowedPublicRequest(method,path){
     '/platform/store-closing-reviews':['GET','POST'],
     '/platform/store-closing-email-readiness':['GET'],
     '/platform/store-application-policy':['GET','POST'],
+    '/platform/organization-applications':['GET','POST'],
   }
   if(platform[path]?.includes(method))return true
   // #217 closed B4B: no unscoped catalog or seller/offer/search relay.
@@ -166,8 +139,7 @@ export function startFrontdoor(env=process.env){
       // #482 Aşama 4: /organization/catalog and /organization/order-groups carry the same
       // privacy contract as their /personal/ predecessors (410 stubs).
       if(req.method==='GET'&&
-         ['/personal/catalog','/personal/order-groups',
-          '/organization/catalog','/organization/order-groups'].includes(url.pathname)){
+         ['/organization/catalog','/organization/order-groups'].includes(url.pathname)){
         res.setHeader('Vary','Cookie')
         res.setHeader('X-Robots-Tag','noindex, nofollow, noarchive')
       }

@@ -1,4 +1,4 @@
-import { GET,POST } from "../product-drafts/route"
+import { GET,POST } from "../../organization/product-drafts/route"
 import { access,csrf,enabled,sessionToken } from "../security"
 import { createProductsWorkflow } from "@mercurjs/core/workflows"
 import { IdentityAccessDenied } from "../../../modules/dogruadres-access/identity-session"

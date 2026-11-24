@@ -2,11 +2,11 @@
  * #377 r12 — genuine GET handler with synthetic modules.
  * These are source tests, NOT native PG16, HTTPS/Chrome, or tenant acceptance.
  */
-import { GET } from "../route"
-import { access, enabled, sessionToken } from "../../security"
-import { IdentityAccessDenied } from "../../../../modules/dogruadres-access/identity-session"
+import { GET } from "../return-requests/route"
+import { access, enabled, sessionToken } from "../../personal/security"
+import { IdentityAccessDenied } from "../../../modules/dogruadres-access/identity-session"
 
-jest.mock("../../security", () => ({
+jest.mock("../../personal/security", () => ({
   access: jest.fn(), enabled: jest.fn(), sessionToken: jest.fn(),
 }))
 

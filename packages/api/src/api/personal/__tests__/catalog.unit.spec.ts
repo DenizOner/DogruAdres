@@ -6,17 +6,17 @@ import {GET} from "../../organization/catalog/route"
 import {access,enabled,sessionToken} from "../security"
 import {MercurModules} from "@mercurjs/types"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
-import {nativeDirectTryListPrice} from "../catalog/native-try-list-price"
-import {nativeBuyerGroupTryReference} from "../catalog/native-group-try-reference"
+import {nativeDirectTryListPrice} from "../../organization/catalog/native-try-list-price"
+import {nativeBuyerGroupTryReference} from "../../organization/catalog/native-group-try-reference"
 import {nativeSellerTradingAt} from "../../../modules/dogruadres-access/native-seller-trading"
 
 jest.mock("../security",()=>({
   access:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
 }))
-jest.mock("../catalog/native-try-list-price",()=>({
+jest.mock("../../organization/catalog/native-try-list-price",()=>({
   nativeDirectTryListPrice:jest.fn()
 }))
-jest.mock("../catalog/native-group-try-reference",()=>({
+jest.mock("../../organization/catalog/native-group-try-reference",()=>({
   nativeBuyerGroupTryReference:jest.fn()
 }))
 

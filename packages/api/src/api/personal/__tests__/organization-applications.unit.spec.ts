@@ -134,41 +134,18 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     }finally{spy.mockRestore()}
   })
 
-  it("denies missing safe preview, then serves only an authorized raster without raw bytes",async()=>{
-    req.query={action:"review_preview",application_id:payload.application_id}
-    await GET(req,res)
-    expect(service.personalReadOrganizationApplicationReviewPreview).toHaveBeenCalledWith(
-      "opaque",payload.application_id)
-    expect(res.status).toHaveBeenLastCalledWith(403)
-    expect(res.send).not.toHaveBeenCalled()
-
-    const pixels=Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0])
-    service.personalReadOrganizationApplicationReviewPreview.mockResolvedValueOnce({
-      content:pixels,mimeType:"image/png",applicationVersion:3,documentVersion:1
-    })
-    await GET(req,res)
-    expect(res.status).toHaveBeenLastCalledWith(200)
-    expect(res.send).toHaveBeenLastCalledWith(pixels)
-    expect(res.setHeader).toHaveBeenCalledWith("Content-Type","image/png")
-    expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","no-store")
-    expect(res.setHeader).toHaveBeenCalledWith("X-Content-Type-Options","nosniff")
-    expect(JSON.stringify(res.json.mock.calls)).not.toContain("%PDF")
-
-    service.personalReadOrganizationApplicationReviewPreview.mockRejectedValueOnce(
-      new Error("scanner unavailable"))
-    await GET(req,res)
-    expect(res.status).toHaveBeenLastCalledWith(503)
-    expect(res.send).toHaveBeenCalledTimes(1)
-    expect(JSON.stringify(res.json.mock.calls)).not.toContain("scanner unavailable")
-
-    req.query={action:"review_preview",application_id:"daorg_other"}
-    await GET(req,res)
+  it("rejects reviewer actions on personal endpoint (moved to platform)", async () => {
+    req.query = { action: "review_preview", application_id: payload.application_id }
+    await GET(req, res)
     expect(res.status).toHaveBeenLastCalledWith(400)
-    req.query={action:"review_preview",application_id:payload.application_id}
-    req.headers.authorization="Bearer forged"
-    await GET(req,res)
+
+    req.query = { action: "review_queue" }
+    await GET(req, res)
     expect(res.status).toHaveBeenLastCalledWith(400)
-    expect(service.personalReadOrganizationApplicationReviewPreview).toHaveBeenCalledTimes(3)
+
+    req.body = { action: "review_decision", application_id: payload.application_id, expected_version: 1, decision: "approve" }
+    await POST(req, res)
+    expect(res.status).toHaveBeenLastCalledWith(400)
   })
 
   it("requires CSRF and denies browser-supplied native actor credentials",async()=>{
@@ -472,38 +449,6 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     expect(res.status).toHaveBeenLastCalledWith(400)
   })
 
-  it("fails closed on approval while verified staff document safety is unavailable", async () => {
-    req.body={action:"review_decision",application_id:payload.application_id,
-      expected_version:3,decision:"approve"}
-    service.personalReviewOrganizationApplication=jest.fn()
-      .mockRejectedValue(new TaxCertificateReviewUnavailable())
-    await POST(req,res)
-    expect(service.personalReviewOrganizationApplication)
-      .toHaveBeenCalledWith("opaque",req.body)
-    expect(res.status).toHaveBeenLastCalledWith(503)
-    expect(res.json).toHaveBeenLastCalledWith({message:"Document review unavailable"})
-    expect(res.send).not.toHaveBeenCalled()
-  })
-
-  it("allows platform review staff to list submitted applications and denies unauthorized callers", async () => {
-    req.query = { action: "review_queue" }
-    service.personalSubmittedOrganizationApplications.mockResolvedValueOnce({
-      applications: [{ id: payload.application_id, status: "submitted", tax_identifier: "12345678901", duplicate_review_required: true }],
-      next_cursor: null
-    })
-    await GET(req, res)
-    expect(service.personalSubmittedOrganizationApplications).toHaveBeenCalledWith("opaque", undefined)
-    expect(res.status).toHaveBeenLastCalledWith(200)
-    expect(res.json).toHaveBeenLastCalledWith({
-      applications: [{ id: payload.application_id, status: "submitted", tax_identifier: "12345678901", duplicate_review_required: true }],
-      next_cursor: null
-    })
-
-    // Denied caller
-    service.personalSubmittedOrganizationApplications.mockResolvedValueOnce(null)
-    await GET(req, res)
-    expect(res.status).toHaveBeenLastCalledWith(403)
-  })
 
   it("refuses an unscanned upload before private file, metadata or audit mutation",async()=>{
     const os=require("node:os"),path=require("node:path"),fsp=require("node:fs/promises")

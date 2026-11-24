@@ -1426,6 +1426,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   }
 
   @InjectTransactionManager()
+  // @ts-expect-error MedusaService template literal method clash
   async createOrganizationInvitation(
     input: Readonly<{ organization_id: string; actor_person_id: string; actor_type: string; actor_id: string; email: string; role: "admin" | "member" }>,
     @MedusaContext() sharedContext: Context = {}

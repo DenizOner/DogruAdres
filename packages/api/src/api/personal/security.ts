@@ -90,48 +90,15 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/organizations" && req.method==="GET") ||
       (path==="/personal/organization-applications" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/contexts" && req.method==="GET") ||
-      (path==="/personal/organization-stores" && req.method==="GET") || // 410 Gone — moved to /organization/stores (#482)
-      (path==="/personal/catalog" && req.method==="GET") || // 410 Gone — moved to /organization/catalog (#482)
-      (path==="/personal/store-follows" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-follows (#482)
-      (path==="/personal/store-applications" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-applications (#482)
-      (path==="/personal/store-rename-requests" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-rename-requests (#482)
-      (path==="/personal/store-owner-pause" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-owner-pause (#482)
-      (path==="/personal/store-owner-closing" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-owner-closing (#482)
-      (path==="/personal/store-platform-closing" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-platform-closing (#482)
-      (path==="/personal/store-platform-closing-final-review" && req.method==="POST") || // 410 Gone — moved to /organization/store-platform-closing-final-review (#482)
-      (path==="/personal/platform/store-closings" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /platform/store-closings (#482 Aşama 5)
-      (path==="/personal/platform/store-closing-reviews" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /platform/store-closing-reviews (#482 Aşama 5)
-      (path==="/personal/platform/store-closing-email-readiness" && req.method==="GET") || // 410 Gone — moved to /platform/store-closing-email-readiness (#482 Aşama 5)
-      (path==="/personal/store-platform-closing-email-visit" && req.method==="POST") || // 410 Gone — moved to /organization/store-platform-closing-email-visit (#482)
-      (path==="/personal/store-draft-permissions" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-draft-permissions (#482)
-      (path==="/personal/store-product-permissions" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-product-permissions (#482)
-      (path==="/personal/store-member-connections" && req.method==="POST") || // 410 Gone — moved to /organization/store-member-connections (#482)
-      (path==="/personal/buyer-permissions" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/buyer-permissions (#482)
-      (path==="/personal/store-buyer-blocks" && req.method==="POST") || // 410 Gone — moved to /organization/store-buyer-blocks (#482)
-      (path==="/personal/store-price-groups" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-price-groups (#482)
-      (path==="/personal/buyer-context" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/buyer-context (#482)
-      (path==="/personal/order-groups" && req.method==="GET") || // 410 Gone — moved to /organization/order-groups (#482)
-      (path==="/personal/return-requests" && req.method==="GET") || // 410 Gone — moved to /organization/return-requests (#482)
-      (path==="/personal/product-drafts" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/platform/stores" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /platform/stores (#482 Aşama 5)
-      (path==="/personal/platform/store-renames" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /platform/store-renames (#482 Aşama 5)
-      (path==="/personal/platform/store-name-transfers" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /platform/store-name-transfers (#482 Aşama 5)
-      (path==="/personal/platform/store-application-policy" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /platform/store-application-policy (#482 Aşama 5)
-      (path==="/personal/audit-timeline" && req.method==="GET") || // 410 Gone — moved to /organization/audit-timeline (#482)
       (path==="/personal/launcher" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/company-launcher" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/launcher (#482)
-      (path==="/personal/notifications" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/notifications (#482)
       (path==="/personal/links" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/memberships" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/memberships (#482)
-      (path==="/personal/invitations" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/invitations (#482)
-      (path==="/personal/vehicles" && req.method==="GET") || // 410 Gone — moved to /organization/vehicles (#482)
+      (path==="/organization/product-drafts" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/vehicles" && req.method==="GET") ||
       (path==="/organization/memberships" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/invitations" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/launcher" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/audit-timeline" && req.method==="GET") ||
       (path==="/organization/notifications" && ["GET","POST"].includes(req.method)) ||
-      // #482 Aşama 3: Store routes moved from /personal/ to /organization/
       (path==="/organization/store-applications" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/store-follows" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/store-buyer-blocks" && req.method==="POST") ||
@@ -146,16 +113,11 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/organization/store-price-groups" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/store-product-permissions" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/stores" && req.method==="GET") ||
-      // #482 Aşama 4: Buyer/catalog routes moved from /personal/ to /organization/
       (path==="/organization/catalog" && req.method==="GET") ||
       (path==="/organization/buyer-context" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/buyer-permissions" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/order-groups" && req.method==="GET") ||
       (path==="/organization/return-requests" && req.method==="GET") ||
-      // #482 Aşama 5: Platform prefix routes moved from /personal/platform/* to /platform/*
-      // 410 passthrough: eski istemciler bilgilendirici 410 alır, 401 değil.
-      ((path==="/personal/platform" || path==="/personal/platform/smtp" || path==="/personal/platform/launcher") && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /platform/* (#482 Aşama 5)
-      // New /platform/ routes
       (path==="/platform" && ["GET","POST"].includes(req.method)) ||
       (path==="/platform/smtp" && ["GET","POST"].includes(req.method)) ||
       (path==="/platform/launcher" && ["GET","POST"].includes(req.method)) ||
@@ -166,6 +128,7 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/platform/store-closing-reviews" && ["GET","POST"].includes(req.method)) ||
       (path==="/platform/store-closing-email-readiness" && req.method==="GET") ||
       (path==="/platform/store-application-policy" && ["GET","POST"].includes(req.method)) ||
+      (path==="/platform/organization-applications" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/mfa" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/mfa/enroll" && req.method==="POST") ||
       (path==="/personal/mfa/manage" && req.method==="POST") ||
