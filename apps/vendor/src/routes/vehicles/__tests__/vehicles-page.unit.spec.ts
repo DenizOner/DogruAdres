@@ -195,6 +195,30 @@ describe("VehiclesPage - validateVehicleForm", () => {
     expect(initialFormValues.model).toBe("")
     expect(initialFormValues.model_year).toBe("")
   })
+
+  it("supports i18n translator function when provided", () => {
+    const mockT = (key: string) => {
+      const translations: Record<string, string> = {
+        "vehicles.validation.plateOrVinRequired": "Translated: identifier required",
+        "vehicles.validation.plateMaxLength": "Translated: plate max 64",
+        "vehicles.validation.plateInvalidChars": "Translated: plate invalid chars",
+        "vehicles.validation.vinMaxLength": "Translated: vin max 128",
+        "vehicles.validation.vinInvalidChars": "Translated: vin invalid chars",
+        "vehicles.validation.makeMaxLength": "Translated: make max 100",
+        "vehicles.validation.modelMaxLength": "Translated: model max 100",
+        "vehicles.validation.labelMaxLength": "Translated: label max 100",
+        "vehicles.validation.modelYearInvalid": "Translated: year invalid",
+      }
+      return translations[key] || key
+    }
+
+    const emptyErrors = validateVehicleForm(initialFormValues, mockT)
+    expect(emptyErrors.plate).toBe("Translated: identifier required")
+    expect(emptyErrors.vin).toBe("Translated: identifier required")
+
+    const invalidYearErrors = validateVehicleForm({ ...initialFormValues, plate: "34 ABC 12", model_year: "999" }, mockT)
+    expect(invalidYearErrors.model_year).toBe("Translated: year invalid")
+  })
 })
 
 describe("VehiclesPage - role-based delete permission logic", () => {
@@ -215,3 +239,54 @@ describe("VehiclesPage - role-based delete permission logic", () => {
     expect(canDeleteVehicle("guest")).toBe(false)
   })
 })
+
+describe("i18n Resource Parity and Schema Integrity", () => {
+  it("verifies vendor panel i18n key parity between TR and EN", async () => {
+    const vendorTr = await import("../../../i18n/tr.json")
+    const vendorEn = await import("../../../i18n/en.json")
+
+    const extractKeys = (obj: Record<string, any>, prefix = ""): string[] => {
+      let keys: string[] = []
+      for (const [k, v] of Object.entries(obj)) {
+        const fullKey = prefix ? `${prefix}.${k}` : k
+        if (v && typeof v === "object" && !Array.isArray(v)) {
+          keys = keys.concat(extractKeys(v, fullKey))
+        } else {
+          keys.push(fullKey)
+        }
+      }
+      return keys.sort()
+    }
+
+    const trKeys = extractKeys(vendorTr.default || vendorTr)
+    const enKeys = extractKeys(vendorEn.default || vendorEn)
+
+    expect(trKeys).toEqual(enKeys)
+    expect(trKeys.length).toBeGreaterThan(20)
+  })
+
+  it("verifies admin panel i18n key parity between TR and EN", async () => {
+    const adminTr = await import("../../../../../admin/src/i18n/tr.json")
+    const adminEn = await import("../../../../../admin/src/i18n/en.json")
+
+    const extractKeys = (obj: Record<string, any>, prefix = ""): string[] => {
+      let keys: string[] = []
+      for (const [k, v] of Object.entries(obj)) {
+        const fullKey = prefix ? `${prefix}.${k}` : k
+        if (v && typeof v === "object" && !Array.isArray(v)) {
+          keys = keys.concat(extractKeys(v, fullKey))
+        } else {
+          keys.push(fullKey)
+        }
+      }
+      return keys.sort()
+    }
+
+    const trKeys = extractKeys(adminTr.default || adminTr)
+    const enKeys = extractKeys(adminEn.default || adminEn)
+
+    expect(trKeys).toEqual(enKeys)
+    expect(trKeys.length).toBeGreaterThan(30)
+  })
+})
+
