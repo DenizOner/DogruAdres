@@ -2,7 +2,7 @@ import type {MedusaRequest,MedusaResponse} from "@medusajs/framework/http"
 import {z} from "@medusajs/framework/zod"
 import {access,enabled,sessionToken} from "../../personal/security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
-import {verifiedEmailForActorContext} from "../../../dogruadres/invitations/accept/route"
+import {verifiedEmailForActorContext} from "../../dogruadres/invitations/accept/route"
 
 export const AUTHENTICATE=false
 const query=z.object({
