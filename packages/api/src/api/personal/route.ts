@@ -601,17 +601,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       e.uncertain=true;throw e}
     // Even HTTP 200 cannot prove a price-group POST's outcome if its body is
     // truncated, unreadable or not a JSON object. Do not claim rejection.
-    const groupWrite=path==='/organization/store-price-groups'&&options.method==='POST';
-    const draftWrite=path==='organization-applications'&&options.method==='POST';
-    const followWrite=path==='/organization/store-follows'&&options.method==='POST';
-    const policyWrite=path==='platform/store-application-policy'&&options.method==='POST';
-    const storeApplicationWrite=path==='/organization/store-applications'&&options.method==='POST';
-    const renameWrite=path==='/organization/store-rename-requests'&&options.method==='POST';
-    const ownerPauseWrite=path==='/organization/store-owner-pause'&&options.method==='POST';
-    const grantWrite=path==='/organization/store-draft-permissions'&&options.method==='POST';
-    const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
-    const closingWrite=['/organization/store-owner-closing','/organization/store-platform-closing','/organization/store-platform-closing-final-review','platform/store-closings','platform/store-closing-reviews','/organization/store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
-    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite||ownerPauseWrite||((path==='/organization/launcher'||path==='platform/launcher')&&options.method==='POST');
+    const p = path.startsWith('/') ? path : '/' + path;
+    const groupWrite=(p==='/organization/store-price-groups'||path==='organization/store-price-groups')&&options.method==='POST';
+    const draftWrite=(p==='/organization-applications'||p==='/organization/organization-applications'||path==='organization-applications')&&options.method==='POST';
+    const followWrite=(p==='/organization/store-follows'||path==='organization/store-follows')&&options.method==='POST';
+    const policyWrite=(p==='/platform/store-application-policy'||path==='platform/store-application-policy')&&options.method==='POST';
+    const storeApplicationWrite=(p==='/organization/store-applications'||path==='organization/store-applications')&&options.method==='POST';
+    const renameWrite=(p==='/organization/store-rename-requests'||path==='organization/store-rename-requests')&&options.method==='POST';
+    const ownerPauseWrite=(p==='/organization/store-owner-pause'||path==='organization/store-owner-pause')&&options.method==='POST';
+    const grantWrite=(p==='/organization/store-draft-permissions'||path==='organization/store-draft-permissions')&&options.method==='POST';
+    const platformStoreWrite=(p==='/platform/stores'||path==='platform/stores')&&options.method==='POST';
+    const closingWrite=(['/organization/store-owner-closing','/organization/store-platform-closing','/organization/store-platform-closing-final-review','/platform/store-closings','platform/store-closings','/platform/store-closing-reviews','platform/store-closing-reviews','/organization/store-platform-closing-email-visit'].includes(p)||['platform/store-closings','platform/store-closing-reviews'].includes(path))&&options.method==='POST';
+    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite||ownerPauseWrite||((p==='/organization/launcher'||p==='/platform/launcher'||path==='platform/launcher')&&options.method==='POST');
     let data;
     try{
       data=await r.json();
