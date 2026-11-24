@@ -1506,14 +1506,14 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     assertPrivateResponses()
     b.phase='native-admin-smtp-navigation'
     await b.send("Page.navigate",{url:b.origin+path})
-    try {await b.wait("document.body.textContent.includes('Platform SMTP Ayarları')")}
+    try {await b.wait("document.body.textContent.includes('Platform SMTP Ayarları') || document.body.textContent.includes('Platform SMTP Settings')")}
     catch(error){
       // Before any SMTP secret input: bounded diagnostics of this one native
       // navigation. No cookies, headers, HTML source or input values retained.
       await b.screenshot(join(evidence,"native-navigation-failed.png"))
       writeFileSync(join(evidence,"native-navigation-failed.json"),JSON.stringify({
         source:process.env.GITHUB_SHA,
-        document:await b.eval("({onExpectedPath:location.pathname==='/dashboard/settings/smtp',headingPresent:document.body.textContent.includes('Platform SMTP Ayarları')})"),
+        document:await b.eval("({onExpectedPath:location.pathname==='/dashboard/settings/smtp',headingPresent:document.body.textContent.includes('Platform SMTP Ayarları') || document.body.textContent.includes('Platform SMTP Settings')})"),
         errors:b.runtimeErrors,
         http:b.http.filter(r=>r.phase===b.phase).map(({method,path,status})=>({method,path,status})),
       },null,2))
@@ -1527,7 +1527,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     assertPrivateResponses()
     return response
   }
-  const hidden=async(b:B06Chrome)=>b.wait("!document.querySelector('#smtp-host') && !document.body.textContent.includes('Yapılandırma yükleniyor')")
+  const hidden=async(b:B06Chrome)=>b.wait("!document.querySelector('#smtp-host') && !document.body.textContent.includes('Yapılandırma yükleniyor') && !document.body.textContent.includes('Loading configuration')")
   const reload=async(b:B06Chrome,status:number)=>{
     // Inspect response bodies before navigating away from their document.
     assertPrivateResponses()
@@ -1601,7 +1601,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   assert.equal(await browser.eval("document.querySelector('form').checkValidity()"),true)
   const saveStart=browser.http.length
   await browser.click("form button[type=submit]")
-  try {await browser.wait("document.body.textContent.includes('Ayar sürümü: 1')")}
+  try {await browser.wait("document.body.textContent.includes('Ayar sürümü: 1') || document.body.textContent.includes('Config version: 1')")}
   catch(error){
     // Read back this one ambiguous attempt before the dedicated DB is retired.
     // Never retry its submit; retain no request payload or password/ciphertext.
@@ -1609,7 +1609,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     // Diagnostic metadata only: never depend on a stale CDP response body.
     const responses=posts.map(post=>({status:post.status}))
     const state=await browser.eval(`({
-      versionRendered:document.body.textContent.includes('Ayar sürümü: 1'),
+      versionRendered:document.body.textContent.includes('Ayar sürümü: 1') || document.body.textContent.includes('Config version: 1'),
       hostMatches:document.querySelector('#smtp-host')?.value==='smtp.b22.example.invalid',
       senderMatches:document.querySelector('#smtp-from-email')?.value==='b22@example.invalid',
       validity:Array.from(document.querySelectorAll('form input')).map(e=>({id:e.id,valid:e.validity.valid})),
@@ -1632,7 +1632,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   assert.equal(safe.body.settings.password,null);assert.ok(!('password_encrypted' in safe.body.settings))
   mark("Real browser save HTTP200; PG16 version1, disabled, encrypted password; GET secret null")
   await reload(browser,200)
-  await browser.wait("document.body.textContent.includes('Ayar sürümü: 1')")
+  await browser.wait("document.body.textContent.includes('Ayar sürümü: 1') || document.body.textContent.includes('Config version: 1')")
   assert.equal(await browser.eval("document.querySelector('#smtp-host').value"),saved[0].host)
   assert.equal(await browser.eval("document.querySelector('#smtp-pass').value"),"")
   await browser.screenshot(join(evidence,"saved-refreshed.png"))
