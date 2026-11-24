@@ -3,11 +3,12 @@
 // These tests evaluate only the real /personal HTML refreshMfa handler with
 // synthetic server-response objects; a passing test is NOT native MFA acceptance.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const source = readFileSync(
-  new URL('../../packages/api/src/api/personal/route.ts', import.meta.url), 'utf8');
+const consolePath = new URL('../../packages/api/src/api/personal/console-view.ts', import.meta.url);
+const routePath = new URL('../../packages/api/src/api/personal/route.ts', import.meta.url);
+const source = readFileSync(existsSync(consolePath) ? consolePath : routePath, 'utf8');
 const begin = '  async function refreshMfa(){';
 const end = '\n  async function links(){';
 const start = source.indexOf(begin);
