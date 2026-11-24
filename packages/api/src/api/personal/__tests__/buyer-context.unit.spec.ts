@@ -1,4 +1,4 @@
-import {GET,POST} from "../buyer-context/route"
+import {GET,POST} from "../../organization/buyer-context/route"
 import {access,csrf,enabled,sessionToken} from "../security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 jest.mock("../security",()=>({

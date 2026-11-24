@@ -164,7 +164,7 @@ describe('B22 Buyer catalogue Seller-window navigation (shipped browser JS)',()=
 })
 describe('B22 Store follow malformed HTTP 200 (shipped UI + real api() wrapper)',()=>{
   const org='daorg_a',seller='sel_a'
-  const catalogPath='/personal/catalog?organization_id='+org+'&page=0'
+  const catalogPath='/organization/catalog?organization_id='+org+'&page=0'
   const followPath='/organization/store-follows'
   const statePath=followPath+'?organization_id='+org+'&seller_id='+seller
   const catalog={organization_id:org,page:0,stores:[{
