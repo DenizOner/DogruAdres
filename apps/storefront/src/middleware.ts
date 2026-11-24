@@ -8,6 +8,17 @@ const BACKEND_URL = process.env.MEDUSA_BACKEND_URL;
 const PUBLISHABLE_API_KEY = process.env.NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY;
 const DEFAULT_REGION = process.env.NEXT_PUBLIC_DEFAULT_REGION || 'us';
 
+const isSensitiveAuthRoute = (path: string) =>
+  /^\/(?:[a-z]{2}\/)?(?:login|register|forgot-password|invitations|account|user)(?:\/|$)/i.test(path);
+
+function applySensitiveHeaders(response: NextResponse) {
+  response.headers.set('Referrer-Policy', 'no-referrer');
+  response.headers.set('Cache-Control', 'private, no-store');
+  response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+  response.headers.set('X-Content-Type-Options', 'nosniff');
+  return response;
+}
+
 const makeAuthRedirect = (
   req: NextRequest,
   locale: string,
@@ -22,6 +33,11 @@ const makeAuthRedirect = (
   if (reason === 'sessionExpired') {
     response.cookies.delete('_medusa_jwt');
   }
+
+  response.headers.set('Cache-Control', 'private, no-store');
+  response.headers.set('Referrer-Policy', 'no-referrer');
+  response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+  response.headers.set('X-Content-Type-Options', 'nosniff');
 
   return response;
 };
@@ -188,11 +204,15 @@ export async function middleware(request: NextRequest) {
       const response = NextResponse.rewrite(rewriteUrl);
       response.headers.set('Referrer-Policy', 'no-referrer');
       response.headers.set('Cache-Control', 'private, no-store');
+      response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+      response.headers.set('X-Content-Type-Options', 'nosniff');
       return response;
     }
     const response = NextResponse.next();
     response.headers.set('Referrer-Policy', 'no-referrer');
     response.headers.set('Cache-Control', 'private, no-store');
+    response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+    response.headers.set('X-Content-Type-Options', 'nosniff');
     return response;
   }
 
@@ -210,7 +230,11 @@ export async function middleware(request: NextRequest) {
   const cacheId = cacheIdCookie?.value || crypto.randomUUID();
 
   if (looksLikeLocale && cacheIdCookie) {
-    return NextResponse.next();
+    const response = NextResponse.next();
+    if (isSensitiveAuthRoute(decodedPath)) {
+      applySensitiveHeaders(response);
+    }
+    return response;
   }
 
   const response = NextResponse.next();
@@ -229,7 +253,15 @@ export async function middleware(request: NextRequest) {
     const redirectPath = pathname === '/' ? '' : pathname;
     const queryString = request.nextUrl.search ? request.nextUrl.search : '';
     const redirectUrl = `${request.nextUrl.origin}/${countryCode}${redirectPath}${queryString}`;
-    return NextResponse.redirect(redirectUrl, 307);
+    const redirectResponse = NextResponse.redirect(redirectUrl, 307);
+    if (isSensitiveAuthRoute(decodedPath)) {
+      applySensitiveHeaders(redirectResponse);
+    }
+    return redirectResponse;
+  }
+
+  if (isSensitiveAuthRoute(decodedPath)) {
+    applySensitiveHeaders(response);
   }
 
   return response;

@@ -346,6 +346,10 @@ jobs:
             node scripts/verify-image-optimizer.mjs
             node scripts/verify-image-dev.mjs
           fi
+      - name: Storefront security headers and configuration unit tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: apps/storefront
+        run: bun test next.config.headers.test.ts
       - name: Native SMTP HTTPS privacy negative regressions
         id: asvs_smtp_http
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -390,7 +394,7 @@ jobs:
         working-directory: packages/api
         env:
           TEST_TYPE: unit
-        run: bun run jest --runInBand --runTestsByPath src/subscribers/__tests__/auth-verification-requested.unit.spec.ts src/modules/notification-smtp/__tests__/notification-smtp.unit.spec.ts src/modules/notification-smtp/__tests__/notification-transport.unit.spec.ts src/modules/notification-smtp/__tests__/verification-origin.unit.spec.ts src/api/personal/__tests__/token-privacy.unit.spec.ts src/api/auth/__tests__/verify-email.unit.spec.ts
+        run: bun run jest --runInBand --runTestsByPath src/subscribers/__tests__/auth-verification-requested.unit.spec.ts src/modules/notification-smtp/__tests__/notification-smtp.unit.spec.ts src/modules/notification-smtp/__tests__/notification-transport.unit.spec.ts src/modules/notification-smtp/__tests__/verification-origin.unit.spec.ts src/api/personal/__tests__/token-privacy.unit.spec.ts src/api/auth/__tests__/verify-email.unit.spec.ts src/api/organization/__tests__/organization-catalog-access-control.unit.spec.ts src/api/organization/__tests__/organization-return-requests.unit.spec.ts
       - name: Personal session, Organization selection and ingress unit contracts
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api

@@ -52,16 +52,40 @@ const nextConfig: NextConfig = {
   output: "standalone",
   trailingSlash: false,
   reactStrictMode: true,
-  // Reset links carry one-time bearer tokens: do not leak URLs through referrers
-  // or cache full-token pages. Does not alter other Storefront routes.
+  // Defense-in-depth: strict security headers on all routes, and private no-store
+  // on one-time tokens, authentication screens, invitations, and user account pages.
   async headers() {
-    const securityHeaders = [
+    const globalSecurityHeaders = [
+      { key: 'X-Content-Type-Options', value: 'nosniff' },
+      { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+      { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+    ];
+    const sensitiveRouteHeaders = [
       { key: 'Referrer-Policy', value: 'no-referrer' },
-      { key: 'Cache-Control', value: 'no-store' },
+      { key: 'Cache-Control', value: 'private, no-store, no-cache, must-revalidate' },
+      { key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' },
+      { key: 'X-Content-Type-Options', value: 'nosniff' },
     ];
     return [
-      { source: '/reset-password', headers: securityHeaders },
-      { source: '/:locale/reset-password', headers: securityHeaders },
+      { source: '/:path*', headers: globalSecurityHeaders },
+      { source: '/reset-password', headers: sensitiveRouteHeaders },
+      { source: '/:locale/reset-password', headers: sensitiveRouteHeaders },
+      { source: '/login', headers: sensitiveRouteHeaders },
+      { source: '/:locale/login', headers: sensitiveRouteHeaders },
+      { source: '/register', headers: sensitiveRouteHeaders },
+      { source: '/:locale/register', headers: sensitiveRouteHeaders },
+      { source: '/forgot-password', headers: sensitiveRouteHeaders },
+      { source: '/:locale/forgot-password', headers: sensitiveRouteHeaders },
+      { source: '/auth/:path*', headers: sensitiveRouteHeaders },
+      { source: '/:locale/auth/:path*', headers: sensitiveRouteHeaders },
+      { source: '/verify-email', headers: sensitiveRouteHeaders },
+      { source: '/:locale/verify-email', headers: sensitiveRouteHeaders },
+      { source: '/invitations/:path*', headers: sensitiveRouteHeaders },
+      { source: '/:locale/invitations/:path*', headers: sensitiveRouteHeaders },
+      { source: '/account/:path*', headers: sensitiveRouteHeaders },
+      { source: '/:locale/account/:path*', headers: sensitiveRouteHeaders },
+      { source: '/user/:path*', headers: sensitiveRouteHeaders },
+      { source: '/:locale/user/:path*', headers: sensitiveRouteHeaders },
     ];
   },
   logging: {
