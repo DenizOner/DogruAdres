@@ -45,6 +45,7 @@
     "saveSuccess": "Email settings saved.",
     "saveConflict": "Concurrent modification conflict! Refresh the page and try again.",
     "saveFailed": "Save failed",
+    "saveUnreachable": "Server unreachable",
     "saveError": "Error: {{error}}",
     "testTitle": "Live Connection and Delivery Test",
     "testDesc": "Send a test email; verify acceptance by the server and inbox delivery separately.",

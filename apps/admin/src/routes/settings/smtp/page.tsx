@@ -237,7 +237,7 @@ export default function PlatformSmtpSettingsPage() {
         toast.success(t("smtp.saveSuccess"))
       }
     } catch (err: any) {
-      toast.error(t("smtp.saveError", { error: err.message || "Sunucuya ulaşılamadı" }))
+      toast.error(t("smtp.saveError", { error: err.message || t("smtp.saveUnreachable") }))
     } finally {
       setSaving(false)
     }
@@ -417,7 +417,7 @@ export default function PlatformSmtpSettingsPage() {
                   id="smtp-host"
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
-                  placeholder="smtp.example.com"
+                  placeholder={t("smtp.hostPlaceholder")}
                   required
                   className="min-h-[48px]"
                 />
@@ -432,7 +432,7 @@ export default function PlatformSmtpSettingsPage() {
                   type="number"
                   value={port}
                   onChange={(e) => setPort(Number(e.target.value))}
-                  placeholder="465"
+                  placeholder={t("smtp.portPlaceholder")}
                   required
                   className="min-h-[48px]"
                 />
@@ -507,7 +507,7 @@ export default function PlatformSmtpSettingsPage() {
                   type="email"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="ornek@dogruadres.com"
+                  placeholder={t("smtp.userPlaceholder")}
                   className="min-h-[48px]"
                 />
               </div>
@@ -545,7 +545,7 @@ export default function PlatformSmtpSettingsPage() {
                   type="email"
                   value={fromEmail}
                   onChange={(e) => setFromEmail(e.target.value)}
-                  placeholder="bildirim@dogruadres.com"
+                  placeholder={t("smtp.fromEmailPlaceholder")}
                   required
                   className="min-h-[48px]"
                 />
@@ -559,7 +559,7 @@ export default function PlatformSmtpSettingsPage() {
                   id="smtp-from-name"
                   value={fromName}
                   onChange={(e) => setFromName(e.target.value)}
-                  placeholder="DoğruAdres Platformu"
+                  placeholder={t("smtp.fromNamePlaceholder")}
                   className="min-h-[48px]"
                 />
               </div>
@@ -609,7 +609,7 @@ export default function PlatformSmtpSettingsPage() {
                   type="email"
                   value={testRecipient}
                   onChange={(e) => setTestRecipient(e.target.value)}
-                  placeholder="yonetici@dogruadres.net"
+                  placeholder={t("smtp.testRecipientPlaceholder")}
                   className="min-h-[48px]"
                 />
               </div>

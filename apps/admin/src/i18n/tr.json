@@ -45,6 +45,7 @@
     "saveSuccess": "E-posta ayarları kaydedildi.",
     "saveConflict": "Eşzamanlı değişiklik çakışması! Sayfayı yenileyip tekrar deneyiniz.",
     "saveFailed": "Kaydetme başarısız",
+    "saveUnreachable": "Sunucuya ulaşılamadı",
     "saveError": "Hata: {{error}}",
     "testTitle": "Canlı Bağlantı ve Teslimat Testi",
     "testDesc": "Test e-postası gönderin; sunucu tarafından kabulünü ve gelen kutusundaki teslimatını ayrı ayrı kontrol edin.",
