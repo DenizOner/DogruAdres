@@ -1,4 +1,4 @@
-import {GET,POST} from "../platform/store-name-transfers/route"
+import {GET,POST} from "../../platform/store-name-transfers/route"
 import {access,csrf,enabled,sessionToken} from "../security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 

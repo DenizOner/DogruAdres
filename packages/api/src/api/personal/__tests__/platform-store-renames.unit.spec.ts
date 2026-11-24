@@ -1,4 +1,4 @@
-import {GET,POST} from "../platform/store-renames/route"
+import {GET,POST} from "../../platform/store-renames/route"
 import {access,csrf,enabled,sessionToken} from "../security"
 import {updateSellersWorkflow} from "@mercurjs/core/workflows"
 

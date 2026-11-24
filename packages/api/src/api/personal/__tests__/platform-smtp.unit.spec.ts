@@ -1,4 +1,4 @@
-import { GET, POST } from "../platform/smtp/route"
+import { GET, POST } from "../../platform/smtp/route"
 import { access, csrf, enabled, sessionToken } from "../security"
 import { SmtpConcurrentUpdateError, SmtpCredentialScopeChanged } from "../../../modules/dogruadres-access/smtp-settings"
 
