@@ -91,7 +91,7 @@ export async function verifyTwoIndependentStaffNameRightRace(input:{
     target_application_id:target.application_id,
     target_seller_id:target.seller_id}
   const preview=async(b:B06Chrome)=>b.callFunction(
-    "async function(payload){const r=await fetch('/personal/platform/store-name-transfers?'+"+
+    "async function(payload){const r=await fetch('/platform/store-name-transfers?'+"+
     "new URLSearchParams(JSON.parse(payload)),{cache:'no-store'});return r.status}",
     JSON.stringify(values))
   assert.equal(await preview(reviewer),200)
@@ -103,7 +103,7 @@ export async function verifyTwoIndependentStaffNameRightRace(input:{
   const b=payload("dastr_"+randomBytes(16).toString("hex"))
   const post=(staff:B06Chrome,body:object)=>staff.callFunction(
     "async function(payload){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/store-name-transfers',"+
+    "const r=await fetch('/platform/store-name-transfers',"+
     "{method:'POST',headers:{'content-type':'application/json',"+
     "'x-csrf-token':s.csrf_token},body:payload});return {status:r.status}}",
     JSON.stringify(body))

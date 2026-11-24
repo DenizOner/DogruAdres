@@ -39,7 +39,7 @@ export async function verifyRepeatedApprovedStoreRenameHistory(input:{
     JSON.stringify(payload))
   const staffPost=async(requestId:string)=>reviewer.callFunction(
     "async function(json){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+    "const r=await fetch('/platform/store-renames',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:json});return {status:r.status,body:await r.json()}}",
     JSON.stringify({action:"approve",request_id:requestId,seller_id:sellerId}))

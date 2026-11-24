@@ -313,10 +313,10 @@ export async function verifyB22ExceptionalNameRight(input:{
     source_seller_id:source.seller_id,
     target_application_id:target.application_id,
     target_seller_id:target.seller_id}
-  const path="/personal/platform/store-name-transfers"
+  const path="/platform/store-name-transfers"
   const preview=async(browser:B06Chrome)=>browser.callFunction(
     "async function(payload){const params=new URLSearchParams(JSON.parse(payload));"+
-    "const r=await fetch('/personal/platform/store-name-transfers?'+params.toString(),"+
+    "const r=await fetch('/platform/store-name-transfers?'+params.toString(),"+
     "{cache:'no-store'});return {status:r.status,body:await r.json()}}",
     JSON.stringify(values))
   const p=await preview(reviewer)
@@ -445,7 +445,7 @@ export async function verifyB22ExceptionalNameRight(input:{
       "txt.includes('Geçerli ve farklı')?'invalid':'other'}}",
       source.seller_id)
     const http=reviewer.http.filter((e:any)=>
-      e.path==="/personal/platform/store-name-transfers")
+      e.path==="/platform/store-name-transfers")
       .slice(-3).map((e:any)=>({method:e.method,status:e.status}))
     throw new Error("Transfer preview did not complete: "+JSON.stringify({state,http}))
   }
@@ -461,7 +461,7 @@ export async function verifyB22ExceptionalNameRight(input:{
     "text.includes('yeniden doğrulayın')?'reset':'empty'}",
     source.seller_id)
   const metadata=reviewer.http.filter((x:any)=>
-    x.path==="/personal/platform/store-name-transfers").slice(-3)
+    x.path==="/platform/store-name-transfers").slice(-3)
     .map((x:any)=>({method:x.method,status:x.status}))
   assert.equal(previewCategory,"ready","Staff preview category="+
     previewCategory+"; HTTP metadata="+JSON.stringify(metadata))
@@ -496,7 +496,7 @@ export async function verifyB22ExceptionalNameRight(input:{
       ")?.textContent.includes('Önce hedefi doğrulayın')")
   }catch{
     const http=reviewer.http.filter((e:any)=>
-      e.path==="/personal/platform/store-name-transfers")
+      e.path==="/platform/store-name-transfers")
       .slice(-5).map((e:any)=>({method:e.method,status:e.status}))
     const browserState=await reviewer.callFunction(
       "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
@@ -529,7 +529,7 @@ export async function verifyB22ExceptionalNameRight(input:{
     "row.includes('Önce hedefi doğrulayın')?'guard-denied':'other'}",
     source.seller_id)
   const transferHttp=reviewer.http.filter((e:any)=>
-    e.path==="/personal/platform/store-name-transfers")
+    e.path==="/platform/store-name-transfers")
     .slice(-4).map((e:any)=>({method:e.method,status:e.status}))
   assert.equal(stage,"success","Real transfer POST outcome="+stage+
     "; HTTP metadata="+JSON.stringify(transferHttp))
@@ -735,14 +735,14 @@ export async function verifyAssignedRecipientUse(input:{
     assert.equal(ownerRead.body?.requests?.find((r:any)=>r.id===b.request_id)?.status,
       "approving","Owner must read the durable unresolved claim")
     const staffRead=await reviewer.callFunction(
-      "async function(){const r=await fetch('/personal/platform/store-renames?page=0');"+
+      "async function(){const r=await fetch('/platform/store-renames?page=0');"+
       "return {status:r.status,body:await r.json()}}")
     assert.equal(staffRead.status,200)
     assert.equal(staffRead.body?.pending?.find((r:any)=>r.request_id===b.request_id)?.status,
       "approving","Live Staff grant must reveal the same unresolved claim")
     const repeat=await reviewer.callFunction(
       "async function(body){const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+      "const r=await fetch('/platform/store-renames',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body});return r.status}",
       JSON.stringify({action:"approve",request_id:b.request_id,seller_id:b.seller_id}))

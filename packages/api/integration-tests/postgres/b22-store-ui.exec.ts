@@ -1522,7 +1522,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     assert.equal(await b.eval("location.pathname"),path)
   }
   const read=async(b:B06Chrome)=>{
-    const response=await b.eval(`(async()=>{const r=await fetch('/personal/platform/smtp');return {status:r.status,body:await r.json()}})()`)
+    const response=await b.eval(`(async()=>{const r=await fetch('/platform/smtp');return {status:r.status,body:await r.json()}})()`)
     // Inspect while this document still owns the completed response body.
     assertPrivateResponses()
     return response
@@ -1533,7 +1533,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     assertPrivateResponses()
     const start=b.http.length
     await b.send("Page.reload",{ignoreCache:true})
-    await until(async()=>b.http.slice(start).some(r=>r.path==='/personal/platform/smtp'&&r.method==='GET'&&r.status===status),
+    await until(async()=>b.http.slice(start).some(r=>r.path==='/platform/smtp'&&r.method==='GET'&&r.status===status),
       20000,'New document SMTP GET '+status)
   }
   const digest=()=>q("select id,enabled,host,port,security,username,password_encrypted,from_email,from_name,version from da_platform_smtp_settings order by id")
@@ -1605,7 +1605,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   catch(error){
     // Read back this one ambiguous attempt before the dedicated DB is retired.
     // Never retry its submit; retain no request payload or password/ciphertext.
-    const posts=browser.http.slice(saveStart).filter(r=>r.path==='/personal/platform/smtp'&&r.method==='POST')
+    const posts=browser.http.slice(saveStart).filter(r=>r.path==='/platform/smtp'&&r.method==='POST')
     // Diagnostic metadata only: never depend on a stale CDP response body.
     const responses=posts.map(post=>({status:post.status}))
     const state=await browser.eval(`({
@@ -1639,7 +1639,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   mark("New document refresh GET200 and persisted settings rendered; password input empty")
   // A stale real HTTP writer must not overwrite the newer browser save.
   const stale=await browser.eval(`(async()=>{const s=await(await fetch('/personal/session')).json();
-    const r=await fetch('/personal/platform/smtp',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+    const r=await fetch('/platform/smtp',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
     body:JSON.stringify({action:'save',enabled:false,host:'stale.example.invalid',port:465,security:'ssl',from_email:'b22@example.invalid',expected_version:0})});
     return {status:r.status,body:await r.json()}})()`)
   assert.equal(stale.status,409);assertPrivateResponses();assert.deepEqual(await digest(),saved)
@@ -1688,7 +1688,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     assert.equal(b.secretLeaks,false,"Secret in Chrome protocol/console")
   }
   assert.ok(browser.http.some(r=>r.path===path&&r.status===200&&r.tls))
-  assert.ok(browser.http.some(r=>r.path==='/personal/platform/smtp'&&r.method==='POST'&&r.status===200))
+  assert.ok(browser.http.some(r=>r.path==='/platform/smtp'&&r.method==='POST'&&r.status===200))
   writeFileSync(join(evidence,"acceptance.json"),JSON.stringify({
     source:process.env.GITHUB_SHA,sameOrigin:true,nativeModule:"admin_ui",servingMode:"static",
     syntheticOnly:true,smtpEnabled:false,versionBefore:0,versionAfter:1,
@@ -2301,14 +2301,14 @@ async function verifyOwnerStoreRenameRequest(
   process.stdout.write("PASS B22 Chrome/PG16: Owner Store name+URL change request with explicit risk acknowledgement, one private pending record and audit/outbox; foreign/CSRF/invalid/duplicate denied; native Seller unchanged\n")
   // Platform Store approver is a distinct current Person. An ordinary Owner
   // may not even see the pending name-change queue.
-  assert.equal(await browser.eval("(async()=>{return (await fetch('/personal/platform/store-renames')).status})()"),
+  assert.equal(await browser.eval("(async()=>{return (await fetch('/platform/store-renames')).status})()"),
     403,"Organization Owner may not inspect platform rename queue")
   await reviewer.send("Page.bringToFront")
   await reviewer.wait("document.visibilityState==='visible' && "+
     "!document.getElementById('workspace').hidden")
   // Distinguish a server-side authorization/SQL error from asynchronous
   // visibility-driven refresh. Never treat a hidden panel as proof of 403.
-  const reviewQueue=await reviewer.eval("(async()=>{const r=await fetch('/personal/platform/store-renames?page=0');"+
+  const reviewQueue=await reviewer.eval("(async()=>{const r=await fetch('/platform/store-renames?page=0');"+
     "return {status:r.status,body:await r.json()}})()")
   assert.equal(reviewQueue.status,200,"Current Store approver GET must succeed")
   assert.equal(reviewQueue.body.page,0)
@@ -2330,7 +2330,7 @@ async function verifyOwnerStoreRenameRequest(
     const original=globalThis.fetch;let failOnce=true;
     globalThis.fetch=function(input,options){
       if(failOnce&&typeof input==='string'&&
-         input.startsWith('/personal/platform/store-renames?')){
+         input.startsWith('/platform/store-renames?')){
         failOnce=false;globalThis.fetch=original;
         return Promise.resolve(new Response(
           JSON.stringify({message:'Disposable staff queue fault'}),
@@ -2360,7 +2360,7 @@ async function verifyOwnerStoreRenameRequest(
   ]){
     const deniedInvisible=await reviewer.eval(`(async()=>{
       const sess=await(await fetch('/personal/session')).json();
-      const r=await fetch('/personal/platform/store-renames',{method:'POST',
+      const r=await fetch('/platform/store-renames',{method:'POST',
         headers:{'content-type':'application/json','x-csrf-token':sess.csrf_token},
         body:JSON.stringify(${JSON.stringify({action:"reject",request_id:id,seller_id:storeId,reason:invalidReason})})
       });return r.status;
@@ -2391,7 +2391,7 @@ async function verifyOwnerStoreRenameRequest(
   process.stdout.write("PASS B22 Chrome/PG16: visible Staff form rejects readable-letter + nine invisible padding without changing pending decision\n")
   const refusalReason="B22 disposable platform review rejected a proposed public Store name"
   const csrfDenied=await reviewer.eval(`(async()=>{
-    const r=await fetch('/personal/platform/store-renames',{method:'POST',
+    const r=await fetch('/platform/store-renames',{method:'POST',
       headers:{'content-type':'application/json','x-csrf-token':'bad'},
       body:JSON.stringify(${JSON.stringify({
         action:"reject",request_id:id,seller_id:storeId,
@@ -2431,7 +2431,7 @@ async function verifyOwnerStoreRenameRequest(
   assert.ok(decision[0].updated_at&&decision[0].outbox_id)
   const repeat=await reviewer.eval(`(async()=>{
     const s=await(await fetch('/personal/session')).json()
-    const r=await fetch('/personal/platform/store-renames',{
+    const r=await fetch('/platform/store-renames',{
       method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
       body:JSON.stringify(${JSON.stringify({
         action:"reject",request_id:id,seller_id:storeId,reason:refusalReason
@@ -2550,7 +2550,7 @@ async function verifyPlatformStoreRenameApproval(
   // A business Owner never inherits platform Store approval authority.
   const ownerDenied=await owner.eval(`(async()=>{
     const s=await(await fetch('/personal/session')).json()
-    const r=await fetch('/personal/platform/store-renames',{
+    const r=await fetch('/platform/store-renames',{
       method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
       body:JSON.stringify(${JSON.stringify(proposal)})
     });return r.status
@@ -2559,7 +2559,7 @@ async function verifyPlatformStoreRenameApproval(
   await reviewer.send("Page.bringToFront")
   await reviewer.wait("document.visibilityState==='visible'")
   const csrfDenied=await reviewer.eval(`(async()=>{
-    const r=await fetch('/personal/platform/store-renames',{
+    const r=await fetch('/platform/store-renames',{
       method:'POST',headers:{'content-type':'application/json','x-csrf-token':'wrong'},
       body:JSON.stringify(${JSON.stringify(proposal)})
     });return r.status
@@ -2627,7 +2627,7 @@ async function verifyPlatformStoreRenameApproval(
       "Competing Owner POST must reject pending request or unchanged approved name")
     await reviewer.wait("document.getElementById('store-rename-review-status').textContent.includes('etkinleşti')")
     assert.ok(reviewer.http.some((x:any)=>x.method==='POST'&&
-      x.path==='/personal/platform/store-renames'&&x.status===200),
+      x.path==='/platform/store-renames'&&x.status===200),
       "Staff native approval must produce real HTTPS 200")
     const [extraRequest]=await q("select count(*)::int n from da_store_rename_request where id=$1",
       [competing.request_id])
@@ -2711,7 +2711,7 @@ async function verifyPlatformStoreRenameApproval(
   await reviewer.wait("document.visibilityState==='visible'")
   const again=await reviewer.eval(`(async()=>{
     const s=await(await fetch('/personal/session')).json()
-    const r=await fetch('/personal/platform/store-renames',{
+    const r=await fetch('/platform/store-renames',{
       method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
       body:JSON.stringify(${JSON.stringify(proposal)})
     });return r.status
@@ -2719,7 +2719,7 @@ async function verifyPlatformStoreRenameApproval(
   assert.equal(again,409,"Second approval must not repeat native name change")
   const ret=await reviewer.eval(`(async()=>{
     const s=await(await fetch('/personal/session')).json()
-    const r=await fetch('/personal/platform/store-renames',{
+    const r=await fetch('/platform/store-renames',{
       method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
       body:JSON.stringify(${JSON.stringify({...proposal,action:"reject",
         reason:"Previously approved Store cannot also be rejected"})})
@@ -2877,20 +2877,20 @@ async function verifySuspendedStoreRenameBeforeReopen(
   const decision={action:"approve",request_id:requestId,seller_id:sellerId}
   const unauthorized=await owner.callFunction(
     "async function(payload){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+    "const r=await fetch('/platform/store-renames',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:payload});return r.status}",JSON.stringify(decision))
   assert.equal(unauthorized,403,"An Owner cannot approve even a suspended Store rename")
   await reviewer.send("Page.bringToFront")
   await reviewer.wait("document.visibilityState==='visible'")
   const invalidCsrf=await reviewer.callFunction(
-    "async function(payload){const r=await fetch('/personal/platform/store-renames',"+
+    "async function(payload){const r=await fetch('/platform/store-renames',"+
     "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':'invalid'},"+
     "body:payload});return r.status}",JSON.stringify(decision))
   assert.equal(invalidCsrf,403)
   const forged=await reviewer.callFunction(
     "async function(payload){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+    "const r=await fetch('/platform/store-renames',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:payload});return r.status}",JSON.stringify({...decision,organization_id:organizationId}))
   assert.equal(forged,400,"Staff request may not fabricate Organization authority")
@@ -2898,7 +2898,7 @@ async function verifySuspendedStoreRenameBeforeReopen(
   await reviewer.wait("Array.from(document.querySelectorAll('#store-rename-review-list > div')).some("+
     "e=>e.textContent.includes("+JSON.stringify(name)+") && e.textContent.includes('Askıda'))")
   const queue=await reviewer.callFunction(
-    "async function(id){const r=await fetch('/personal/platform/store-renames?page=0');"+
+    "async function(id){const r=await fetch('/platform/store-renames?page=0');"+
     "const b=await r.json();return {status:r.status,row:b.pending?.find(x=>x.request_id===id)}}",
     requestId)
   assert.equal(queue.status,200)
@@ -2931,7 +2931,7 @@ async function verifySuspendedStoreRenameBeforeReopen(
   assert.ok(proof[0].approved_at&&proof[0].audit_id&&proof[0].outbox_id)
   assert.equal(await reviewer.callFunction(
     "async function(payload){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+    "const r=await fetch('/platform/store-renames',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:payload});return r.status}",JSON.stringify(decision)),409,
     "The same approval cannot be replayed")
@@ -3428,7 +3428,7 @@ async function verifyOwnerWithdrawPendingStoreRename(
   await reviewer.send("Page.bringToFront")
   const approval=await reviewer.eval(`(async()=>{
     const sess=await(await fetch('/personal/session')).json()
-    const r=await fetch('/personal/platform/store-renames',{
+    const r=await fetch('/platform/store-renames',{
       method:'POST',headers:{'content-type':'application/json',
         'x-csrf-token':sess.csrf_token},
       body:JSON.stringify(${JSON.stringify({
@@ -6332,21 +6332,21 @@ export default async function({container}:any){
     // user/Person binding. Its canonical audit/outbox producer must emit the
     // exact Staff role accepted by the strict Index projection contract.
     // This is task-owned CI data; no real company approval is performed.
-    assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/platform')).status)()"),403,
+    assert.equal(await reviewer.eval("(async()=> (await fetch('/platform')).status)()"),403,
       "Native sign-in and Store approval grant do not confer Organization provisioning")
     const staffOrgGrantId="da_staff_org_"+rand
     await q(`insert into da_platform_staff_grant
       (id,person_id,task,resource,granted_by_person_id,reason)
       values($1,$2,'organization.provision','platform',$2,'B22 isolated Staff provision fixture')`,
       [staffOrgGrantId,B.person])
-    assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/platform')).status)()"),200)
-    assert.equal((await get("/personal/platform")).status,403,
+    assert.equal(await reviewer.eval("(async()=> (await fetch('/platform')).status)()"),200)
+    assert.equal((await get("/platform")).status,403,
       "Organization Owner cannot acquire separate Staff provision permission")
     const provisionName="B22 Staff provision "+rand
     const provisionBody={name:provisionName,initial_owners:[{actor_type:"user",actor_id:B.actor}]}
     const provision=async(body:unknown, csrfOverride?:string)=>reviewer.eval(`(async()=>{
       const s=await (await fetch('/personal/session')).json()
-      const response=await fetch('/personal/platform',{
+      const response=await fetch('/platform',{
         method:'POST',headers:{'content-type':'application/json',
           'x-csrf-token':${JSON.stringify(csrfOverride??"")}||s.csrf_token},
         body:JSON.stringify(${JSON.stringify(body)})
@@ -6405,7 +6405,7 @@ export default async function({container}:any){
     }
     // Existing organization-provision and store-approve grants confer no
     // company application-policy authority without an additional explicit grant.
-    const companyPolicyPath='/personal/platform/store-application-policy?organization_id='+
+    const companyPolicyPath='/platform/store-application-policy?organization_id='+
       encodeURIComponent(organizations[0].id)
     assert.equal(await reviewer.callFunction("async function(path){return (await fetch(path)).status}",companyPolicyPath),403,
       "Organization provision and Store approve grants must not authorize policy changes")
@@ -6452,7 +6452,7 @@ export default async function({container}:any){
       return actingBrowser.callFunction(
         "async function(org,e,x,reason,valid,version){"+
           "const s=await(await fetch('/personal/session')).json();"+
-          "const r=await fetch('/personal/platform/store-application-policy',{method:'POST',"+
+          "const r=await fetch('/platform/store-application-policy',{method:'POST',"+
             "headers:{'content-type':'application/json','x-csrf-token':valid==='true'?s.csrf_token:'bad'},"+
             "body:JSON.stringify({organization_id:org,expected_enabled:x==='true',expected_version:Number(version),enabled:e==='true',reason})});"+
           "return {status:r.status,body:await r.json()};}",
@@ -6465,7 +6465,7 @@ export default async function({container}:any){
       "select store_application_version from da_organization where id=$1",
       [organizations[0].id])
     assert.equal(initialPolicyRevision.store_application_version,0)
-    assert.equal((await get("/personal/platform/store-application-policy?organization_id="+
+    assert.equal((await get("/platform/store-application-policy?organization_id="+
       encodeURIComponent(organizations[0].id))).status,403,
       "Owner cannot read platform-only policy administration")
     assert.equal((await companyRight(false,true,"B22 synthetic suspension",false)).status,403)
@@ -6833,7 +6833,7 @@ export default async function({container}:any){
 
     await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",
       [staffOrgGrantId])
-    assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/platform')).status)()"),403)
+    assert.equal(await reviewer.eval("(async()=> (await fetch('/platform')).status)()"),403)
     assert.equal((await provision({...provisionBody,name:provisionName+" revoked"})).status,403)
     assert.equal((await q("select count(*)::int n from da_organization where name=$1",
       [provisionName+" revoked"]))[0].n,0)
@@ -13969,7 +13969,7 @@ export default async function({container}:any){
       otherCustomerId:registered[0].actor_id,
       ownerCustomerId:nativeCustomer.id,q
     })
-    const primaryPolicyUrl="/personal/platform/store-application-policy?organization_id="+
+    const primaryPolicyUrl="/platform/store-application-policy?organization_id="+
       encodeURIComponent(organizations[0].id)
     const customerReadPolicy=()=>signupChrome.callFunction(
       "async function(url){return (await fetch(url)).status}",primaryPolicyUrl)
