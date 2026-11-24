@@ -12,7 +12,7 @@ export function allowedPublicRequest(method,path){
     '/personal':['GET'], '/personal/session':['GET','POST','DELETE'],
     '/personal/challenge':['POST'], '/personal/register':['POST'], '/personal/organizations':['GET'],
     '/personal/organization-applications':['GET','POST'],
-    '/personal/platform':['GET','POST'], '/personal/platform/smtp':['GET','POST'], '/personal/memberships':['GET','POST'],
+    '/personal/platform':['GET','POST'], '/personal/platform/smtp':['GET','POST'], '/personal/memberships':['GET','POST'], // /personal/platform* 410 Gone — moved to /platform/* (#482 Aşama 5)
     '/personal/invitations':['GET','POST'], '/personal/mfa':['GET','POST'], '/personal/mfa/enroll':['POST'], '/personal/mfa/manage':['POST'],
     '/personal/contexts':['GET'],
     '/personal/organization-stores':['GET'],
@@ -23,13 +23,13 @@ export function allowedPublicRequest(method,path){
     '/personal/store-owner-closing':['GET','POST'],
     '/personal/store-platform-closing':['GET','POST'],
     '/personal/store-platform-closing-final-review':['POST'],
-    '/personal/platform/store-closings':['GET','POST'],
-    '/personal/platform/store-closing-reviews':['GET','POST'],
-    '/personal/platform/store-closing-email-readiness':['GET'],
+    '/personal/platform/store-closings':['GET','POST'], // 410 Gone — moved to /platform/store-closings (#482 Aşama 5)
+    '/personal/platform/store-closing-reviews':['GET','POST'], // 410 Gone — moved to /platform/store-closing-reviews (#482 Aşama 5)
+    '/personal/platform/store-closing-email-readiness':['GET'], // 410 Gone — moved to /platform/store-closing-email-readiness (#482 Aşama 5)
     '/personal/store-platform-closing-email-visit':['POST'],
       '/personal/store-draft-permissions':['GET','POST'],
-    '/personal/platform/stores':['GET','POST'],
-    '/personal/platform/store-renames':['GET','POST'],
+    '/personal/platform/stores':['GET','POST'], // 410 Gone — moved to /platform/stores (#482 Aşama 5)
+    '/personal/platform/store-renames':['GET','POST'], // 410 Gone — moved to /platform/store-renames (#482 Aşama 5)
     '/personal/store-buyer-blocks':['POST'],
     '/personal/store-product-permissions':['GET','POST'],
     '/personal/buyer-permissions':['GET','POST'],
@@ -79,6 +79,20 @@ export function allowedPublicRequest(method,path){
     '/organization/return-requests':['GET'],
   }
   if(organization[path]?.includes(method))return true
+  // #482 Aşama 5: Platform prefix routes moved from /personal/platform/* to /platform/*
+  const platform={
+    '/platform':['GET','POST'],
+    '/platform/smtp':['GET','POST'],
+    '/platform/launcher':['GET','POST'],
+    '/platform/stores':['GET','POST'],
+    '/platform/store-renames':['GET','POST'],
+    '/platform/store-name-transfers':['GET','POST'],
+    '/platform/store-closings':['GET','POST'],
+    '/platform/store-closing-reviews':['GET','POST'],
+    '/platform/store-closing-email-readiness':['GET'],
+    '/platform/store-application-policy':['GET','POST'],
+  }
+  if(platform[path]?.includes(method))return true
   // #217 closed B4B: no unscoped catalog or seller/offer/search relay.
   // Region bootstrap supports the existing welcome/login locale middleware;
   // it contains no authenticated Buyer Organization pricing decision.

@@ -1916,7 +1916,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('platform-launcher-list').replaceChildren();
     if(!person||document.hidden)return;
     try{
-      const data=await api('platform/launcher');
+      const data=await api('/platform/launcher');
       if(seq!==platformLauncherRequest||epoch!==viewEpoch||person!==currentPersonId||
          document.hidden||el('workspace').hidden)return;
       if(!validPlatformLauncherResponse(data))throw Error('Geçersiz platform başlatıcısı');
@@ -1936,7 +1936,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     platformLauncherBusy=true;
     el('platform-launcher-reset').disabled=true;
     try{
-      const saved=await api('platform/launcher',{method:'POST',body:JSON.stringify({
+      const saved=await api('/platform/launcher',{method:'POST',body:JSON.stringify({
         app_ids:apps,collapsed_ids:collapsed,expected_version:current.version
       })});
       if(seq!==platformLauncherRequest||epoch!==viewEpoch||person!==currentPersonId||
@@ -2235,7 +2235,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           source_application_id:entry.application_id,source_seller_id:entry.seller_id,
           target_application_id:targetApp.value,target_seller_id:targetSeller.value
         });
-        const result=await api('platform/store-name-transfers?'+params.toString());
+        const result=await api('/platform/store-name-transfers?'+params.toString());
         if(previewAt!==viewEpoch||document.hidden)return;
         if(result?.source?.seller_id!==entry.seller_id||
            result?.source?.application_id!==entry.application_id||
@@ -2272,7 +2272,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(!key)key='dastr_'+crypto.randomUUID().replaceAll('-','');
       const decisionAt=viewEpoch;
       try{
-        const result=await api('platform/store-name-transfers',{method:'POST',body:JSON.stringify({
+        const result=await api('/platform/store-name-transfers',{method:'POST',body:JSON.stringify({
           transfer_id:key,source_application_id:verified.source.application_id,
           source_seller_id:verified.source.seller_id,
           target_application_id:verified.target.application_id,
@@ -2306,7 +2306,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       suspendedList=el('store-reactivation-list'),message=el('store-approval-status');
     if(!keepOutcome)message.textContent='Mağazalar kontrol ediliyor…';
     try{
-      const data=await api('platform/stores?page='+storeApprovalPage);
+      const data=await api('/platform/stores?page='+storeApprovalPage);
       if(seq!==storeApprovalRequest||epoch!==viewEpoch||document.hidden)return;
       if(data.page!==storeApprovalPage||typeof data.has_more!=='boolean'||
          !Array.isArray(data.pending)||data.pending.length>30||
@@ -2351,7 +2351,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           button.disabled=true;
           message.textContent='Mağaza onayı gönderiliyor…';
           try{
-            const result=await api('platform/stores',{method:'POST',
+            const result=await api('/platform/stores',{method:'POST',
               body:JSON.stringify({application_id:entry.application_id,seller_id:entry.seller_id})});
             if(result.application_id!==entry.application_id||
                result.seller_id!==entry.seller_id||result.status!=='open'){
@@ -2387,7 +2387,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           reject.disabled=true;button.disabled=true;
           message.textContent='Mağaza başvurusu reddediliyor…';
           try{
-            const result=await api('platform/stores',{method:'POST',
+            const result=await api('/platform/stores',{method:'POST',
               body:JSON.stringify({action:'reject',
                 application_id:entry.application_id,seller_id:entry.seller_id,
                 reason:explanation})});
@@ -2423,7 +2423,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           if(!window.confirm('Askı nedeni giderildi mi? Bu mağazanın ad ve bağlantı hakkı denetlenip aynı Store kimliğiyle açılacaktır.'))return;
           button.disabled=true;message.textContent='Mağaza yeniden açma kararı gönderiliyor…';
           try{
-            const result=await api('platform/stores',{method:'POST',
+            const result=await api('/platform/stores',{method:'POST',
               body:JSON.stringify({action:'unsuspend',
                 application_id:entry.application_id,seller_id:entry.seller_id})});
             if(result.application_id!==entry.application_id||
@@ -2459,7 +2459,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           button.disabled=true;
           message.textContent='Mağazanın askıda olduğu ve önceki karar kaydı doğrulanıyor…';
           try{
-            const result=await api('platform/stores',{method:'POST',
+            const result=await api('/platform/stores',{method:'POST',
               body:JSON.stringify({action:'release',
                 application_id:entry.application_id,seller_id:entry.seller_id})});
             if(result.application_id!==entry.application_id||
@@ -2491,7 +2491,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           button.disabled=true;
           message.textContent='Önceki açılma kararı ve gerçek mağaza durumu doğrulanıyor…';
           try{
-            const result=await api('platform/stores',{method:'POST',
+            const result=await api('/platform/stores',{method:'POST',
               body:JSON.stringify({action:'reconcile',
                 application_id:entry.application_id,seller_id:entry.seller_id})});
             if(result.application_id!==entry.application_id||
@@ -2543,7 +2543,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const list=el('store-rename-review-list'),message=el('store-rename-review-status');
     if(!keepOutcome)message.textContent='İsim değişikliği başvuruları doğrulanıyor…';
     try{
-      const data=await api('platform/store-renames?page='+renameReviewPage);
+      const data=await api('/platform/store-renames?page='+renameReviewPage);
       if(seq!==renameReviewRequest||epoch!==viewEpoch||document.hidden||
          el('workspace').hidden)return;
       if(data.page!==renameReviewPage||typeof data.has_more!=='boolean'||
@@ -2597,7 +2597,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           }
           reject.disabled=true;approve.disabled=true;message.textContent='Ret kararı saklanıyor…';
           try{
-            const answer=await api('platform/store-renames',{
+            const answer=await api('/platform/store-renames',{
               method:'POST',body:JSON.stringify({action:'reject',
                 request_id:entry.request_id,seller_id:entry.seller_id,
                 reason:explanation})
@@ -2631,7 +2631,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           approve.disabled=true;reject.disabled=true;
           message.textContent='Mağaza adı ve bağlantısı onaylanıyor…';
           try{
-            const answer=await api('platform/store-renames',{
+            const answer=await api('/platform/store-renames',{
               method:'POST',body:JSON.stringify({action:'approve',
                 request_id:entry.request_id,seller_id:entry.seller_id})
             });
@@ -5156,7 +5156,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   let smtpSettings=null;
   async function refreshSmtp(){
     try{
-      const data=await api('platform/smtp');
+      const data=await api('/platform/smtp');
       if(data&&data.can_manage&&data.settings){
         smtpSettings=data.settings;
         el('smtp-platform').hidden=false;
@@ -5195,7 +5195,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       };
       const pw=fd.get('password');
       if(pw)payload.password=pw;
-      const res=await api('platform/smtp',{method:'POST',body:JSON.stringify(payload)});
+      const res=await api('/platform/smtp',{method:'POST',body:JSON.stringify(payload)});
       if(res.settings){
         smtpSettings=res.settings;
         await refreshSmtp();
@@ -5222,7 +5222,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       };
       const pw=sfd.get('password');
       if(pw)candidate.password=pw;
-      const res=await api('platform/smtp',{
+      const res=await api('/platform/smtp',{
         method:'POST',
         body:JSON.stringify({
           action:'test',
@@ -5330,7 +5330,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const panel=el('platform-closing-review-panel');
     const statusEl=el('platform-closing-review-status');
     try{
-      const data=await api('platform/store-closing-reviews?page='+page);
+      const data=await api('/platform/store-closing-reviews?page='+page);
       if(seq!==platformReviewRead||epoch!==viewEpoch||document.hidden)return;
       if(data.page!==page||typeof data.has_more!=='boolean'||
          !Array.isArray(data.candidates)||data.candidates.length>30||
@@ -5386,7 +5386,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           feedback.textContent='Karar güvenli biçimde kaydediliyor…';
           try{
             const chosen=selector.value;
-            const result=await api('platform/store-closing-reviews',{
+            const result=await api('/platform/store-closing-reviews',{
               method:'POST',body:JSON.stringify({
                 organization_id:item.organization_id,seller_id:item.seller_id,
                 source_request_id:item.source_request_id,
@@ -5472,7 +5472,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!chosen){target.textContent='';return}
     target.textContent='Owner e-posta bildirimleri kontrol ediliyor…';
     try{
-      const data=await api('platform/store-closing-email-readiness?'+
+      const data=await api('/platform/store-closing-email-readiness?'+
         new URLSearchParams({organization_id:chosen.organization_id,
           seller_id:chosen.seller_id}).toString());
       if(mailRead!==platformClosingMailRead||epoch!==viewEpoch||document.hidden||
@@ -5545,7 +5545,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const panel=el('platform-closing-panel'),msg=el('platform-closing-status');
     msg.textContent='Yetkili mağazalar doğrulanıyor…';
     try{
-      const data=await api('platform/store-closings?page='+platformClosingPage);
+      const data=await api('/platform/store-closings?page='+platformClosingPage);
       if(seq!==platformClosingRead||epoch!==viewEpoch||document.hidden)return;
       if(data.page!==platformClosingPage||!Array.isArray(data.candidates)||
          data.candidates.length>30||typeof data.has_more!=='boolean'||
@@ -5608,7 +5608,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const msg=el('platform-closing-status');
     msg.textContent='Gerekçeli karar güvenli biçimde kaydediliyor…';
     try{
-      const result=await api('platform/store-closings',{method:'POST',
+      const result=await api('/platform/store-closings',{method:'POST',
         body:JSON.stringify({organization_id:chosen.organization_id,
           seller_id:chosen.seller_id,request_id:'dascp_'+crypto.randomUUID().replaceAll('-',''),
           reason})});
@@ -5865,7 +5865,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
     policyStatus.textContent='Başvuru hakkı doğrulanıyor…';
     try{
-      const result=await api('platform/store-application-policy?organization_id='+
+      const result=await api('/platform/store-application-policy?organization_id='+
         encodeURIComponent(org));
       if(seq!==platformStoreRequest||epoch!==viewEpoch||document.hidden||
          el('workspace').hidden||policyInput.value.trim()!==org)return;
@@ -5899,7 +5899,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
     policyStatus.textContent='Politika değişikliği gönderiliyor…';
     try{
-      const result=await api('platform/store-application-policy',{
+      const result=await api('/platform/store-application-policy',{
         method:'POST',body:JSON.stringify({
           organization_id:org,expected_enabled:current.enabled,
           expected_version:current.version,enabled:!current.enabled,reason
