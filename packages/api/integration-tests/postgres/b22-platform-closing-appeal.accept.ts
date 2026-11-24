@@ -69,7 +69,7 @@ async function verifySmtpTestCredentialScopeOverHttps(
       values ($1,$2,'platform.smtp.manage','platform',$2,
               'B22 task-only credential endpoint negative')`,[grantId,staffPersonId])
     granted=true
-    const path="/personal/platform/smtp"
+    const path="/platform/smtp"
     const settings=await read(staff,path)
     assert.equal(settings.status,200,"Strong platform Staff must reach real SMTP GET")
     assert.equal(settings.body?.settings?.has_password,true)
@@ -224,7 +224,7 @@ async function verifyDualRolePlatformOwnerLockOrder(input:{
     new URLSearchParams({organization_id:organizationId,seller_id:sellerId})
   assert.equal((await read(staff,ownerRead)).status,200,
     "Real dual-role Staff Person independently has protected Owner access")
-  assert.equal((await read(staff,"/personal/platform/store-closings")).status,200,
+  assert.equal((await read(staff,"/platform/store-closings")).status,200,
     "Same Person independently has strong platform closing grant")
   const cookie=await staff.token()
   assert.match(cookie??"",/^[A-Za-z0-9_-]{43}$/)
@@ -284,7 +284,7 @@ async function verifyDualRolePlatformOwnerLockOrder(input:{
       [pid]))[0].n)
     await until(async()=>await waitingAdvisory()===1,19000,
       "Owner HTTPS waits on Seller advisory with active Person session")
-    await send("/personal/platform/store-closings",staffPayload)
+    await send("/platform/store-closings",staffPayload)
     staffStarted=true
     await until(async()=>{
       const [w]=await q("select count(*)::int n from pg_stat_activity "+
@@ -389,14 +389,14 @@ async function verifyStaffMailRealHttpSelectionRace(
   await staff.wait("document.visibilityState==='visible' && "+
     "!document.getElementById('platform-closing-panel').hidden")
   // Find a genuine second Staff-visible Store without a closing record.
-  const list=await read(staff,"/personal/platform/store-closings?page=0")
+  const list=await read(staff,"/platform/store-closings?page=0")
   assert.equal(list.status,200)
   assert.ok(Array.isArray(list.body?.candidates))
   let other:{seller_id:string;organization_id:string}|undefined
   for(const candidate of list.body.candidates){
     if(candidate.seller_id===sellerId)continue
     const response=await read(staff,
-      "/personal/platform/store-closing-email-readiness?"+
+      "/platform/store-closing-email-readiness?"+
       new URLSearchParams({organization_id:candidate.organization_id,
         seller_id:candidate.seller_id}))
     if(response.status===403){other=candidate;break}
@@ -435,7 +435,7 @@ async function verifyStaffMailRealHttpSelectionRace(
     "globalThis.__daMailHttpRace=state;"+
     "globalThis.fetch=function(input,init){"+
       "const url=new URL(typeof input==='string'?input:input.url,location.href);"+
-      "const mail=url.pathname==='/personal/platform/store-closing-email-readiness';"+
+      "const mail=url.pathname==='/platform/store-closing-email-readiness';"+
       "const seller=url.searchParams.get('seller_id');"+
       "const real=native.call(globalThis,input,init);"+
       "if(mail&&seller===a&&!state.taken){state.taken=true;"+
@@ -504,9 +504,9 @@ export async function verifyB22PlatformClosingAppeal(input:{
     buyerOrganizationId,checkoutCartId,customerId,query,auth,ownerEmail,
     ownerPassword,foreignEmail,foreignPassword,foreignPersonId,foreignOrgName,container}=input
   await verifySmtpTestCredentialScopeOverHttps(staff,browser,staffPersonId,q)
-  const path="/personal/platform/store-closings"
+  const path="/platform/store-closings"
   const privatePath="/organization/store-platform-closing"
-  const mailPath="/personal/platform/store-closing-email-readiness?"+
+  const mailPath="/platform/store-closing-email-readiness?"+
     new URLSearchParams({organization_id:ownerOrgId,seller_id:sellerId}).toString()
   const readPath=privatePath+"?"+new URLSearchParams({
     organization_id:ownerOrgId,seller_id:sellerId}).toString()
@@ -1407,7 +1407,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
     assert.equal(nowClosed.length,1)
     assert.equal(nowClosed[0].deadline_basis,"admin_alert")
     assert.ok(nowClosed[0].deadline_started_at&&nowClosed[0].deadline_audit_event_id)
-    const fallbackPath="/personal/platform/store-closing-email-readiness?"+
+    const fallbackPath="/platform/store-closing-email-readiness?"+
       new URLSearchParams({organization_id:ownerOrgId,seller_id:suspendedSeller})
     const fallback=await read(staff,fallbackPath)
     assert.equal(fallback.status,200)
@@ -1509,7 +1509,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
       "$6::timestamptz,$7::timestamptz,'owner_delivery',$8)",[
       syntheticSeller,ownerOrgId,request,reason,sourceId,
       sourceAt,deadline,deadlineId])
-    const path="/personal/platform/store-closing-email-readiness?"+
+    const path="/platform/store-closing-email-readiness?"+
       new URLSearchParams({organization_id:ownerOrgId,
         seller_id:syntheticSeller})
     const result=await read(staff,path)
@@ -1763,7 +1763,7 @@ export async function verifyB22RealOrderedSellerDay31(input:{
     "'owner_delivery',$8,$9,$10,$11,$12::timestamptz)",[
     sellerId,organizationId,requestId,reason,events[0].id,sourceAt,
     deadlineAt,events[1].id,appealRequestId,appealReason,events[2].id,appealedAt])
-  const path="/personal/platform/store-closing-email-readiness?"+
+  const path="/platform/store-closing-email-readiness?"+
     new URLSearchParams({organization_id:organizationId,seller_id:sellerId})
   const matured=await read(staff,path)
   assert.equal(matured.status,200,
@@ -1819,7 +1819,7 @@ export async function verifyB22RealOrderedSellerDay31(input:{
   // A different, strongly authenticated platform Staff decides the pending
   // first appeal through the real HTTPS route after day 30. A rejected appeal
   // is NEVER proof that the Seller has no unsettled payment/legal obligations.
-  const reviewPath="/personal/platform/store-closing-reviews"
+  const reviewPath="/platform/store-closing-reviews"
   const reviewReason="B22 bağımsız görevli ilk itiraz incelemesi; başvuru reddedildi"
   const reviewRequestId="dasdr_"+randomBytes(16).toString("hex")
   const decision={organization_id:organizationId,seller_id:sellerId,
@@ -2106,7 +2106,7 @@ export async function verifyB22PlatformClosingSecondStageRequest(input:{
     "Filing review never determines the outcome or reopens sales")
   assert.equal(after.body?.deadline_started_at,clockStart)
   assert.equal(after.body?.final_review_reason,reviewReason)
-  const staffPath="/personal/platform/store-closing-email-readiness?"+
+  const staffPath="/platform/store-closing-email-readiness?"+
     new URLSearchParams({organization_id:organizationId,seller_id:reviewSellerId})
   const secondPending=await read(staff,staffPath)
   assert.equal(secondPending.status,200)
@@ -2164,7 +2164,7 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
   const {host,crt,browsers,ownerBrowser,initialStaff,q,foundation,
     organizationId,reviewSellerId,initialSellerId,
     ownerPersonId,originalStaffPersonId}=input
-  const path="/personal/platform/store-closing-reviews"
+  const path="/platform/store-closing-reviews"
   const ownerPath="/organization/store-platform-closing?"+
     new URLSearchParams({organization_id:organizationId,seller_id:reviewSellerId})
   const before=await q("select c.final_review_request_id,c.final_review_requested_at,"+
@@ -2354,7 +2354,7 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
   assert.equal(stored.length,1)
   assert.match(stored[0].review_decision_request_id,/^dasdr_[a-f0-9]{32}$/)
   assert.equal(stored[0].review_decision,"accepted")
-  const acceptedPath="/personal/platform/store-closing-email-readiness?"+
+  const acceptedPath="/platform/store-closing-email-readiness?"+
     new URLSearchParams({organization_id:organizationId,seller_id:reviewSellerId})
   const acceptedPreflight=await read(initialStaff,acceptedPath)
   assert.equal(acceptedPreflight.status,200)
@@ -2421,7 +2421,7 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
     "async function(raw){const items=JSON.parse(raw);"+
     "const s=await(await fetch('/personal/session')).json();"+
     "return await Promise.all(items.map(async p=>{"+
-    "const r=await fetch('/personal/platform/store-closing-reviews',"+
+    "const r=await fetch('/platform/store-closing-reviews',"+
     "{method:'POST',headers:{'content-type':'application/json',"+
     "'x-csrf-token':s.csrf_token},body:JSON.stringify(p)});"+
     "return {status:r.status,body:await r.json()}}))}",
@@ -2432,7 +2432,7 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
     "where seller_id=$1",[initialSellerId]))[0]
   assert.equal(firstStored.state,"appealed")
   assert.equal(firstStored.review_decision,"rejected")
-  const rejectedPath="/personal/platform/store-closing-email-readiness?"+
+  const rejectedPath="/platform/store-closing-email-readiness?"+
     new URLSearchParams({organization_id:firstPending.organization_id,
       seller_id:initialSellerId})
   const rejectedPreflight=await read(initialStaff,rejectedPath)

@@ -61,7 +61,7 @@ export async function verifyTwoStoreSameHandleApprovalRace(input:{
   // It models interruption, NOT a real SIGKILL or full native rename test.
   const staffPost=(actor:B06Chrome,payload:object)=>actor.callFunction(
     "async function(body){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+    "const r=await fetch('/platform/store-renames',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body,signal:AbortSignal.timeout(45000)});"+
     "return {status:r.status}}",

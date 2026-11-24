@@ -380,7 +380,7 @@ export default async function({container}:any){
     marker("STEP DEMIR364 scenario: staff-browser-started")
     await staff.login(B.email,B.password,B.person)
     marker("STEP DEMIR364 scenario: staff-strong-session")
-    const root="/personal/platform/store-closings"
+    const root="/platform/store-closings"
     const ownerBase="/organization/store-platform-closing"
     const ownerUrl=(s:string)=>ownerBase+"?"+
       new URLSearchParams({organization_id:orgs[2].id,seller_id:s}).toString()
