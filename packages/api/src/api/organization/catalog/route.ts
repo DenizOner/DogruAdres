@@ -28,6 +28,8 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   res.setHeader("Cache-Control","private, no-store")
   res.setHeader("Vary","Cookie")
   res.setHeader("X-Robots-Tag","noindex, nofollow, noarchive")
+  res.setHeader("Referrer-Policy","no-referrer")
+  res.setHeader("X-Content-Type-Options","nosniff")
   if(!enabled())return res.status(503).json({message:"Unavailable"})
   const parsed=selection.safeParse(req.query)
   if(!parsed.success||req.headers["x-seller-id"]!==undefined||

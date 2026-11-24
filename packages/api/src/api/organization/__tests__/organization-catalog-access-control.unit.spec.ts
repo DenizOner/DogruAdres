@@ -97,10 +97,12 @@ describe('organization catalog route — HTTP contract (moved from /personal/cat
     expect(res.status).toHaveBeenCalledWith(403)
   })
 
-  it('GET sets correct cache-control headers', async () => {
+  it('GET sets correct cache-control and security headers', async () => {
     await GET(req, res)
     expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'private, no-store')
     expect(res.setHeader).toHaveBeenCalledWith('Vary', 'Cookie')
     expect(res.setHeader).toHaveBeenCalledWith('X-Robots-Tag', 'noindex, nofollow, noarchive')
+    expect(res.setHeader).toHaveBeenCalledWith('Referrer-Policy', 'no-referrer')
+    expect(res.setHeader).toHaveBeenCalledWith('X-Content-Type-Options', 'nosniff')
   })
 })
