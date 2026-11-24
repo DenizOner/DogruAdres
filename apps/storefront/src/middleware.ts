@@ -201,9 +201,19 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
-  // Sensitive auth and user identity paths: login, register, forgot-password, reset-password, invitations, account.
+  // A real public password-recovery route exists at both URL shapes.
+  // Avoid rewriting Server Action POST requests while preserving no-referrer
+  // and no-store on the one-time bearer landing page.
+  if (pathname === '/reset-password' || /^\/[a-z]{2}\/reset-password$/i.test(pathname)) {
+    const response = NextResponse.next();
+    response.headers.set('Referrer-Policy', 'no-referrer');
+    response.headers.set('Cache-Control', 'no-store');
+    return response;
+  }
+
+  // Sensitive auth and user identity paths: login, register, forgot-password, invitations, account.
   // Must never be cached by shared proxies or browsers, must not expose referrer, and must not be indexed by search bots.
-  if (/^\/(?:[a-z]{2}\/)?(?:login|register|forgot-password|reset-password|invitations|account)(?:\/|$)/i.test(pathname)) {
+  if (/^\/(?:[a-z]{2}\/)?(?:login|register|forgot-password|invitations|account)(?:\/|$)/i.test(pathname)) {
     const response = NextResponse.next();
     response.headers.set('Referrer-Policy', 'no-referrer');
     response.headers.set('Cache-Control', 'private, no-store');

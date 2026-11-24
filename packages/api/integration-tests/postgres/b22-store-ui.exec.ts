@@ -6262,13 +6262,13 @@ export default async function({container}:any){
     // workflow created SellerMember.is_owner for this Store.
     const ownerApprovalDenied=await browser.eval(`(async()=>{
       const session=await (await fetch('/personal/session')).json()
-      const response=await fetch('/personal/platform/stores',{
+      const response=await fetch('/platform/stores',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
         body:JSON.stringify(${JSON.stringify({application_id:applicationId,seller_id:ownerStoreId})})})
       return response.status
     })()`)
     assert.equal(ownerApprovalDenied,403)
-    assert.equal((await get("/personal/platform/stores")).status,403)
+    assert.equal((await get("/platform/stores")).status,403)
     assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
     // One isolated historical Origin fixture has a real native pending
     // Seller; 30 older records have no native Seller and convey no access.
@@ -12617,7 +12617,7 @@ export default async function({container}:any){
     assert.equal((await get('/personal/contexts?type=member&seller='+ownerStoreId)).status,400)
     const replayApprove=await reviewer.eval(`(async()=>{
       const session=await (await fetch('/personal/session')).json()
-      const response=await fetch('/personal/platform/stores',{
+      const response=await fetch('/platform/stores',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
         body:JSON.stringify(${JSON.stringify({application_id:applicationId,seller_id:ownerStoreId})})})
       return response.status
@@ -12626,7 +12626,7 @@ export default async function({container}:any){
     // Revoking a staff task immediately denies further platform approval
     // access; an Organization Owner cannot gain this permission implicitly.
     await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[grantId])
-    assert.equal(await reviewer.eval(`(async()=> (await fetch('/personal/platform/stores')).status)()`),403)
+    assert.equal(await reviewer.eval(`(async()=> (await fetch('/platform/stores')).status)()`),403)
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.wait("!document.getElementById('workspace').hidden")
