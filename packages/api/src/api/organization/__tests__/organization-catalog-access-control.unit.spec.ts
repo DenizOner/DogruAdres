@@ -8,15 +8,15 @@ jest.mock('../../personal/security', () => ({
   enabled: jest.fn(),
   sessionToken: jest.fn(),
 }))
-jest.mock('../../personal/catalog/native-try-list-price', () => ({
+jest.mock('../catalog/native-try-list-price', () => ({
   nativeDirectTryListPrice: jest.fn(),
 }))
-jest.mock('../../personal/catalog/native-group-try-reference', () => ({
+jest.mock('../catalog/native-group-try-reference', () => ({
   nativeBuyerGroupTryReference: jest.fn(),
 }))
 
-import { nativeDirectTryListPrice } from '../../personal/catalog/native-try-list-price'
-import { nativeBuyerGroupTryReference } from '../../personal/catalog/native-group-try-reference'
+import { nativeDirectTryListPrice } from '../catalog/native-try-list-price'
+import { nativeBuyerGroupTryReference } from '../catalog/native-group-try-reference'
 
 describe('organization catalog route — HTTP contract (moved from /personal/catalog)', () => {
   const token = 'da_test_session_token_12345678901234567890123'

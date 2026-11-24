@@ -64,7 +64,7 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
               return { ok: true, status: 200, json: async () =>
                 ({ csrf_token: "synthetic-csrf-token" }) };
             }
-            if (path === "/personal/platform/smtp" && method === "GET") {
+            if ((path === "/platform/smtp" || path === "/personal/platform/smtp") && method === "GET") {
               window.__daSmtpGets++;
               return { ok: true, status: 200, json: async () => ({
                 can_manage: true,
@@ -76,7 +76,7 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
                 }
               }) };
             }
-            if (path === "/personal/platform/smtp" && method === "POST") {
+            if ((path === "/platform/smtp" || path === "/personal/platform/smtp") && method === "POST") {
               window.__daSmtpPosts++;
               window.__daSmtpPostActions.push(JSON.parse(String(options.body || "{}")).action);
               throw Error("Synthetic SMTP POST intercepted; no network request");

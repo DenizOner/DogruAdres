@@ -9,8 +9,15 @@
  *  - POST/PATCH/DELETE return 503 (mutation gate closed pending Policy A)
  *  - GET /personal/vehicles returns 410 Gone (moved)
  */
+jest.mock("../../personal/security", () => ({
+  access: jest.fn(),
+  sessionToken: jest.fn(),
+  enabled: jest.fn(() => process.env.DOGRUADRES_IDENTITY_ENABLED === "true"),
+  csrf: jest.fn(),
+}))
+
 import { GET, POST, PATCH, DELETE } from "../vehicles/route"
-import { GET as PersonalVehiclesGET } from "../../personal/vehicles/route"
+import { access, sessionToken, enabled } from "../../personal/security"
 
 function makeRes() {
   const res: any = {
@@ -102,9 +109,8 @@ describe("GET /organization/vehicles — route handler access control", () => {
     const mockAccess = {
       personalOrganizations: jest.fn().mockResolvedValue({ organizations: [] }),
     }
-    const securityMod = require("../../personal/security")
-    jest.spyOn(securityMod, "sessionToken").mockReturnValue("tok_mock")
-    jest.spyOn(securityMod, "access").mockReturnValue(mockAccess)
+    ;(sessionToken as jest.Mock).mockReturnValue("tok_mock")
+    ;(access as jest.Mock).mockReturnValue(mockAccess)
 
     const req = makeReq({ query: { organization: "daorg_01JBMX1234567890ABCDEFGH0" } })
     const res = makeRes()
@@ -116,9 +122,8 @@ describe("GET /organization/vehicles — route handler access control", () => {
   it("returns 403 when personalOrganizations returns null (session expired or invalid token)", async () => {
     // personalOrganizations() returns null when the session token is invalid or expired.
     // This is distinct from the empty-organizations case — null means no session context at all.
-    const securityMod = require("../../personal/security")
-    jest.spyOn(securityMod, "sessionToken").mockReturnValue("tok_expired")
-    jest.spyOn(securityMod, "access").mockReturnValue({
+    ;(sessionToken as jest.Mock).mockReturnValue("tok_expired")
+    ;(access as jest.Mock).mockReturnValue({
       personalOrganizations: jest.fn().mockResolvedValue(null),
     })
 
@@ -133,9 +138,8 @@ describe("GET /organization/vehicles — route handler access control", () => {
     // An 'inactive' member's query returns [] (SQL filters them out).
     // The route handler sees [] → 403, proving the SQL gate is reflected correctly at the route layer.
     // Cross-reference: identity-session.ts:244 (o.status='active'), :247 (m.status='active')
-    const securityMod = require("../../personal/security")
-    jest.spyOn(securityMod, "sessionToken").mockReturnValue("tok_mock")
-    jest.spyOn(securityMod, "access").mockReturnValue({
+    ;(sessionToken as jest.Mock).mockReturnValue("tok_mock")
+    ;(access as jest.Mock).mockReturnValue({
       // Simulates SQL returning no rows for an inactive membership (as it would in production)
       personalOrganizations: jest.fn().mockResolvedValue({ organizations: [] }),
     })
@@ -148,9 +152,8 @@ describe("GET /organization/vehicles — route handler access control", () => {
   })
 
   it("returns 200 with vehicle list when organization membership is confirmed", async () => {
-    const securityMod = require("../../personal/security")
-    jest.spyOn(securityMod, "sessionToken").mockReturnValue("tok_mock")
-    jest.spyOn(securityMod, "access").mockReturnValue({
+    ;(sessionToken as jest.Mock).mockReturnValue("tok_mock")
+    ;(access as jest.Mock).mockReturnValue({
       personalOrganizations: jest.fn().mockResolvedValue({
         organizations: [{ id: "daorg_01JBMX1234567890ABCDEFGH0", role: "owner" }],
       }),
@@ -204,14 +207,5 @@ describe("POST|PATCH|DELETE /organization/vehicles — mutation gate closed (Pol
     const res = makeRes()
     await DELETE(makeReq(), res)
     expect(res._status).toBe(503)
-  })
-})
-
-describe("GET /personal/vehicles — 410 Gone (moved to /organization/vehicles)", () => {
-  it("returns 410 with redirect hint for all methods", async () => {
-    const res = makeRes()
-    await PersonalVehiclesGET(makeReq(), res)
-    expect(res._status).toBe(410)
-    expect(res._body).toMatchObject({ message: expect.stringContaining("/organization/vehicles") })
   })
 })

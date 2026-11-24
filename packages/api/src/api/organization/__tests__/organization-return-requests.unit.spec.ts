@@ -1,19 +1,16 @@
 /**
- * #486 / #377: Organization-scoped Return Requests read route — multi-tenant isolation tests.
- * Verifies that /organization/return-requests enforces strict multi-tenant isolation,
- * fails closed on cross-organization access attempts, redacts errors, and rejects forged contexts.
+ * #377 r12 — genuine GET handler with synthetic modules.
+ * These are source tests, NOT native PG16, HTTPS/Chrome, or tenant acceptance.
  */
 import { GET } from "../return-requests/route"
 import { access, enabled, sessionToken } from "../../personal/security"
 import { IdentityAccessDenied } from "../../../modules/dogruadres-access/identity-session"
 
 jest.mock("../../personal/security", () => ({
-  access: jest.fn(),
-  enabled: jest.fn(),
-  sessionToken: jest.fn(),
+  access: jest.fn(), enabled: jest.fn(), sessionToken: jest.fn(),
 }))
 
-describe("Organization Return Requests — Multi-tenant Isolation & Security Contract", () => {
+describe("Buyer Organization Returns read — fail closed, GET only", () => {
   const person = "daprs_person_a", customer = "cus_customer_shared"
   const orgA = "daorg_buyer_a", orgB = "daorg_buyer_b"
   const sellerA = "sel_store_a", sellerB = "sel_store_b"
@@ -153,6 +150,7 @@ describe("Organization Return Requests — Multi-tenant Isolation & Security Con
       () => (sessionToken as jest.Mock).mockReturnValue(""),
     ]) {
       jest.clearAllMocks()
+      // Reset to valid baseline before individual mutation.
       ;(sessionToken as jest.Mock).mockReturnValue("signed-synthetic-session")
       svc.personalBuyerOrganization.mockResolvedValue({ person_id: person, organization_id: orgA })
       svc.personalActorBinding.mockResolvedValue({ person_id: person, actor_id: customer, revoked_at: null })
@@ -180,7 +178,7 @@ describe("Organization Return Requests — Multi-tenant Isolation & Security Con
     }
   })
 
-  it("missing Cart attribution hides all foreign Org return rows (returns empty list)", async () => {
+  it("403: missing Cart attribution hides all foreign Org return rows", async () => {
     svc.personalBuyerCartAttribution.mockResolvedValue(false)
     await GET(req, res)
     expect(res.status).toHaveBeenLastCalledWith(200)
@@ -244,4 +242,78 @@ describe("Organization Return Requests — Multi-tenant Isolation & Security Con
     await GET(req, res)
     expect(res.status).toHaveBeenLastCalledWith(403)
   })
+
+  it("403: Store association changed while reading Return cannot leak stale Store data", async () => {
+    const original = graph.getMockImplementation()!
+    let checked = 0
+    graph.mockImplementation(async (q: any) => {
+      if (q.entity === "order_seller" && q.filters.order_id === "order_a") {
+        checked++
+        return { data: checked === 1
+          ? [{ order_id: "order_a", seller_id: sellerA }]
+          : [{ order_id: "order_a", seller_id: sellerB }] }
+      }
+      return original(q)
+    })
+    await GET(req, res)
+    expect(checked).toBeGreaterThanOrEqual(2)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("return_a")
+  })
+
+  it("403: Order-to-Cart relink after reading Return must reject stale attribution", async () => {
+    const original = graph.getMockImplementation()!
+    let checked = 0
+    graph.mockImplementation(async (q: any) => {
+      if (q.entity === "order_cart" && q.filters.order_id === "order_a") {
+        checked++
+        return { data: checked === 1
+          ? [{ order_id: "order_a", cart_id: "cart_a" }]
+          : [{ order_id: "order_a", cart_id: "cart_b" }] }
+      }
+      return original(q)
+    })
+    await GET(req, res)
+    expect(checked).toBeGreaterThanOrEqual(2)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("return_a")
+  })
+
+  it("403: an Order reassigned to a different Customer before response must not expose Return", async () => {
+    const original = graph.getMockImplementation()!
+    let checked = 0
+    graph.mockImplementation(async (q: any) => {
+      if (q.entity === "order" && q.filters.id === "order_a") {
+        checked++
+        return { data: [{ id: "order_a", customer_id: "cus_foreign", status: "completed" }] }
+      }
+      return original(q)
+    })
+    await GET(req, res)
+    expect(checked).toBeGreaterThanOrEqual(1)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith({ message: "Access denied" })
+    expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "private, no-store")
+    expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("return_a")
+  })
+
+  it("403: a Return moved to a foreign Order after private read must not be sent", async () => {
+    const original = graph.getMockImplementation()!
+    let checked = 0
+    graph.mockImplementation(async (q: any) => {
+      if (q.entity === "return" && q.filters.order_id === "order_a") {
+        checked++
+        // Native graph's real order_id filter excludes the relinked Return.
+        if (checked === 2) return { data: [] }
+      }
+      return original(q)
+    })
+    await GET(req, res)
+    expect(checked).toBeGreaterThanOrEqual(2)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith({ message: "Access denied" })
+    expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "private, no-store")
+    expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("return_a")
+  })
+
 })

@@ -8,10 +8,11 @@ describe("personal ingress (unit contract only)",()=>{
   it.each(["/admin/users/me","/vendor/products","/store/customers/me","/auth/token/refresh","/auth/session","/admin/workflows-executions/a/run"])("rejects unbound native actor credentials: %s",async path=>{const {next,res}=await probe(path,"GET","Bearer native-token");expect(next).not.toHaveBeenCalled();expect(res.status).toHaveBeenCalledWith(401)})
   it.each(["/store/regions","/personal","/personal/session"])("preserves allowed locale/auth surface %s",async path=>expect((await probe(path)).next).toHaveBeenCalled())
   it("admits only exact read-only Organization-scoped order-group route, not native customer reads",async()=>{
-    expect((await probe("/personal/order-groups","GET")).next).toHaveBeenCalledTimes(1)
+    expect((await probe("/organization/order-groups","GET")).next).toHaveBeenCalledTimes(1)
     for(const [path,method] of [
-      ["/personal/order-groups","POST"],["/personal/order-groups","DELETE"],
-      ["/personal/order-groups","OPTIONS"],["/personal/order-groups/og_foreign","GET"],
+      ["/organization/order-groups","POST"],["/organization/order-groups","DELETE"],
+      ["/organization/order-groups","OPTIONS"],["/organization/order-groups/og_foreign","GET"],
+      ["/personal/order-groups","GET"],["/personal/order-groups","POST"],
       ["/store/order-groups","GET"],["/store/order-groups/og_foreign","GET"],
     ]){
       const {next,res}=await probe(path,method,"Bearer current",true)
@@ -54,21 +55,21 @@ describe("personal ingress (unit contract only)",()=>{
   })
   it("admits only B22 scoped Store application GET/POST and Store read GET (not native Seller mutations)",async()=>{
     for(const method of ["GET","POST"]){
-      for(const path of ["/personal/store-applications","/personal/store-draft-permissions"]){
+      for(const path of ["/organization/store-applications","/organization/store-draft-permissions"]){
         const {next}=await probe(path,method)
         expect(next).toHaveBeenCalledTimes(1)
       }
     }
-    expect((await probe("/personal/organization-stores","GET")).next).toHaveBeenCalledTimes(1)
-    expect((await probe("/personal/catalog","GET")).next).toHaveBeenCalledTimes(1)
-    expect((await probe("/personal/catalog","POST")).res.status).toHaveBeenCalledWith(401)
+    expect((await probe("/organization/stores","GET")).next).toHaveBeenCalledTimes(1)
+    expect((await probe("/organization/catalog","GET")).next).toHaveBeenCalledTimes(1)
+    expect((await probe("/organization/catalog","POST")).res.status).toHaveBeenCalledWith(401)
     for(const [path,method] of [
-      ["/personal/store-draft-permissions","PATCH"],["/personal/store-draft-permissions","DELETE"],
-      ["/personal/store-draft-permissions","OPTIONS"],["/personal/store-draft-permissions/other","POST"],
-      ["/personal/store-applications","PATCH"],["/personal/store-applications","DELETE"],
-      ["/personal/store-applications","OPTIONS"],["/personal/store-applications","HEAD"],
-      ["/personal/store-applications/another","POST"],["/personal/store-applications/","PUT"],
-      ["/personal/organization-stores","POST"],["/personal/organization-stores","DELETE"],
+      ["/organization/store-draft-permissions","PATCH"],["/organization/store-draft-permissions","DELETE"],
+      ["/organization/store-draft-permissions","OPTIONS"],["/organization/store-draft-permissions/other","POST"],
+      ["/organization/store-applications","PATCH"],["/organization/store-applications","DELETE"],
+      ["/organization/store-applications","OPTIONS"],["/organization/store-applications","HEAD"],
+      ["/organization/store-applications/another","POST"],["/organization/store-applications/","PUT"],
+      ["/organization/stores","POST"],["/organization/stores","DELETE"],
       ["/vendor/sellers","POST"],["/admin/sellers/sel_synthetic/approve","POST"]
     ]){
       const {next,res}=await probe(path,method,"Bearer malicious")
@@ -78,14 +79,14 @@ describe("personal ingress (unit contract only)",()=>{
   })
   it("allows only the exact Staff name-transfer personal route, not native or nested bypasses",async()=>{
     for(const method of ["GET","POST"]){
-      const allowed=await probe("/personal/platform/store-name-transfers",method)
+      const allowed=await probe("/platform/store-name-transfers",method)
       expect(allowed.next).toHaveBeenCalledTimes(1)
     }
     for(const [path,method] of [
-      ["/personal/platform/store-name-transfers","DELETE"],
-      ["/personal/platform/store-name-transfers","PATCH"],
-      ["/personal/platform/store-name-transfers","OPTIONS"],
-      ["/personal/platform/store-name-transfers/sel_foreign","GET"],
+      ["/platform/store-name-transfers","DELETE"],
+      ["/platform/store-name-transfers","PATCH"],
+      ["/platform/store-name-transfers","OPTIONS"],
+      ["/platform/store-name-transfers/sel_foreign","GET"],
       ["/vendor/sellers/sel_foreign","POST"],
       ["/admin/sellers/sel_foreign","PATCH"]
     ]){
@@ -114,17 +115,17 @@ describe("personal ingress (unit contract only)",()=>{
   it("preserves an explicit native machine read, not arbitrary Basic mutations",async()=>{expect((await probe("/admin/api-keys","GET","Basic valid")).next).toHaveBeenCalled();expect((await probe("/admin/api-keys","POST","Basic valid")).res.status).toHaveBeenCalledWith(401)})
   it("permits only exact personal invitation GET/POST, leaving role/session and CSRF checks to the route",async()=>{
     for(const method of ["GET","POST"]){
-      const {next,res}=await probe("/personal/invitations",method)
+      const {next,res}=await probe("/organization/invitations",method)
       expect(next).toHaveBeenCalledTimes(1)
       expect(res.status).not.toHaveBeenCalled()
     }
     for(const [path,method] of [
-      ["/personal/invitations","PUT"],
-      ["/personal/invitations","DELETE"],
-      ["/personal/invitations","PATCH"],
-      ["/personal/invitations","OPTIONS"],
-      ["/personal/invitations/accept","POST"],
-      ["/personal/invitations/extra","GET"],
+      ["/organization/invitations","PUT"],
+      ["/organization/invitations","DELETE"],
+      ["/organization/invitations","PATCH"],
+      ["/organization/invitations","OPTIONS"],
+      ["/organization/invitations/accept","POST"],
+      ["/organization/invitations/extra","GET"],
     ]){
       const {next,res}=await probe(path,method)
       expect(next).not.toHaveBeenCalled()
@@ -155,9 +156,9 @@ describe("personal ingress (unit contract only)",()=>{
     for(const method of ["PUT","DELETE","OPTIONS"])expect((await probe("/auth/verify-email",method)).res.status).toHaveBeenCalledWith(401)
   })
   it("preserves platform SMTP management GET and POST", async () => {
-    expect((await probe("/personal/platform/smtp", "GET")).next).toHaveBeenCalled()
-    expect((await probe("/personal/platform/smtp", "POST")).next).toHaveBeenCalled()
-    expect((await probe("/personal/platform/smtp", "DELETE")).next).not.toHaveBeenCalled()
+    expect((await probe("/platform/smtp", "GET")).next).toHaveBeenCalled()
+    expect((await probe("/platform/smtp", "POST")).next).toHaveBeenCalled()
+    expect((await probe("/platform/smtp", "DELETE")).next).not.toHaveBeenCalled()
   })
   it("does not treat a native cookie session as anonymous verification",async()=>{
     const next=jest.fn(),res:any={status:jest.fn().mockReturnThis(),json:jest.fn()}
@@ -216,7 +217,7 @@ describe("personal ingress (unit contract only)",()=>{
   })
 
   it("admits only dedicated Staff review GET/POST, rejecting unsafe methods and nested routes",async()=>{
-    const path="/personal/platform/store-closing-reviews"
+    const path="/platform/store-closing-reviews"
     for(const method of ["GET","POST"])
       expect((await probe(path,method)).next).toHaveBeenCalledTimes(1)
     for(const [target,method] of [
@@ -231,7 +232,7 @@ describe("personal ingress (unit contract only)",()=>{
   })
 
   it("admits only second-stage private Owner review POST; all other verbs and nested paths stay closed",async()=>{
-    const path="/personal/store-platform-closing-final-review"
+    const path="/organization/store-platform-closing-final-review"
     expect((await probe(path,"POST")).next).toHaveBeenCalledTimes(1)
     for(const [target,method] of [
       [path,"GET"],[path,"PUT"],[path,"DELETE"],[path,"PATCH"],
@@ -244,7 +245,7 @@ describe("personal ingress (unit contract only)",()=>{
   })
 
   it("admits only authenticated Owner email-link POST ingress; GET scanners are blocked",async()=>{
-    const path="/personal/store-platform-closing-email-visit"
+    const path="/organization/store-platform-closing-email-visit"
     expect((await probe(path,"POST")).next).toHaveBeenCalledTimes(1)
     for(const [target,method] of [
       [path,"GET"],[path,"PUT"],[path,"DELETE"],[path,"PATCH"],
@@ -257,7 +258,7 @@ describe("personal ingress (unit contract only)",()=>{
   })
 
   it("restricts B22 private Owner email readiness to exact personal GET ingress",async()=>{
-    const path="/personal/platform/store-closing-email-readiness"
+    const path="/platform/store-closing-email-readiness"
     const allowed=await probe(path,"GET")
     expect(allowed.next).toHaveBeenCalledTimes(1)
     for(const [target,method] of [

@@ -3,7 +3,7 @@ import { z } from "@medusajs/framework/zod"
 import type { Context } from "@medusajs/framework/types"
 import { createProductsWorkflow } from "@mercurjs/core/workflows"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
-import { access,csrf,enabled,sessionToken } from "../security"
+import { access,csrf,enabled,sessionToken } from "../../personal/security"
 import { IdentityAccessDenied } from "../../../modules/dogruadres-access/identity-session"
 
 export const AUTHENTICATE=false
@@ -238,3 +238,4 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     return res.status(503).json({message:"Outcome uncertain; do not retry this operation"})
   }
 }
+

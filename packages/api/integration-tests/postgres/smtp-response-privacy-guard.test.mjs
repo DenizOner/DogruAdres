@@ -6,7 +6,7 @@ import {SmtpResponsePrivacyGuard} from './smtp-response-privacy-guard.ts'
 
 const secret='b22-smtp-'+'a'.repeat(48)
 const cipher='v1:'+'b'.repeat(80)
-const route='/personal/platform/smtp'
+const route='/platform/smtp'
 async function expectPrivacyFailure(guard){
   try { guard.bindCiphertext(cipher) }
   catch(error) { assert.match(String(error?.message),/SMTP HTTPS egress privacy violations/) }
