@@ -26,6 +26,8 @@ describe('Storefront security headers configuration', () => {
       '/:locale/forgot-password',
       '/auth/:path*',
       '/:locale/auth/:path*',
+      '/verify-email',
+      '/:locale/verify-email',
       '/invitations/:path*',
       '/:locale/invitations/:path*',
       '/account/:path*',

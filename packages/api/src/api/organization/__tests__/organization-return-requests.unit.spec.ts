@@ -180,7 +180,7 @@ describe("Organization Return Requests — Multi-tenant Isolation & Security Con
     }
   })
 
-  it("403: missing Cart attribution hides all foreign Org return rows", async () => {
+  it("missing Cart attribution hides all foreign Org return rows (returns empty list)", async () => {
     svc.personalBuyerCartAttribution.mockResolvedValue(false)
     await GET(req, res)
     expect(res.status).toHaveBeenLastCalledWith(200)

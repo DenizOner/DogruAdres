@@ -78,6 +78,8 @@ const nextConfig: NextConfig = {
       { source: '/:locale/forgot-password', headers: sensitiveRouteHeaders },
       { source: '/auth/:path*', headers: sensitiveRouteHeaders },
       { source: '/:locale/auth/:path*', headers: sensitiveRouteHeaders },
+      { source: '/verify-email', headers: sensitiveRouteHeaders },
+      { source: '/:locale/verify-email', headers: sensitiveRouteHeaders },
       { source: '/invitations/:path*', headers: sensitiveRouteHeaders },
       { source: '/:locale/invitations/:path*', headers: sensitiveRouteHeaders },
       { source: '/account/:path*', headers: sensitiveRouteHeaders },

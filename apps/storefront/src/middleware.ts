@@ -204,11 +204,15 @@ export async function middleware(request: NextRequest) {
       const response = NextResponse.rewrite(rewriteUrl);
       response.headers.set('Referrer-Policy', 'no-referrer');
       response.headers.set('Cache-Control', 'private, no-store');
+      response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+      response.headers.set('X-Content-Type-Options', 'nosniff');
       return response;
     }
     const response = NextResponse.next();
     response.headers.set('Referrer-Policy', 'no-referrer');
     response.headers.set('Cache-Control', 'private, no-store');
+    response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+    response.headers.set('X-Content-Type-Options', 'nosniff');
     return response;
   }
 
@@ -227,7 +231,7 @@ export async function middleware(request: NextRequest) {
 
   if (looksLikeLocale && cacheIdCookie) {
     const response = NextResponse.next();
-    if (isSensitiveAuthRoute(pathname)) {
+    if (isSensitiveAuthRoute(decodedPath)) {
       applySensitiveHeaders(response);
     }
     return response;
@@ -250,13 +254,13 @@ export async function middleware(request: NextRequest) {
     const queryString = request.nextUrl.search ? request.nextUrl.search : '';
     const redirectUrl = `${request.nextUrl.origin}/${countryCode}${redirectPath}${queryString}`;
     const redirectResponse = NextResponse.redirect(redirectUrl, 307);
-    if (isSensitiveAuthRoute(pathname)) {
+    if (isSensitiveAuthRoute(decodedPath)) {
       applySensitiveHeaders(redirectResponse);
     }
     return redirectResponse;
   }
 
-  if (isSensitiveAuthRoute(pathname)) {
+  if (isSensitiveAuthRoute(decodedPath)) {
     applySensitiveHeaders(response);
   }
 
