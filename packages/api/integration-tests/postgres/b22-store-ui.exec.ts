@@ -8051,11 +8051,11 @@ export default async function({container}:any){
     await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
     await browser.wait("!document.getElementById('buyer-grants-panel').hidden")
-    const buyerBefore=await get('/personal/buyer-permissions?organization_id='+organizations[0].id)
+    const buyerBefore=await get('/organization/buyer-permissions?organization_id='+organizations[0].id)
     assert.equal(buyerBefore.status,200)
     assert.deepEqual(buyerBefore.body.grants,[],"Inherent Owner authority is not an issued grant")
     // Protected Owner is allowed to purchase without any separate grant.
-    const ownerBuyerContext=await get('/personal/buyer-context?organization_id='+
+    const ownerBuyerContext=await get('/organization/buyer-context?organization_id='+
       encodeURIComponent(organizations[0].id))
     assert.equal(ownerBuyerContext.status,200)
 
@@ -8091,7 +8091,7 @@ export default async function({container}:any){
       membership_id:alphaMember.id}
     const repeatBuyer=await browser.eval(`(async()=>{
       const s=await(await fetch('/personal/session')).json()
-      const response=await fetch('/personal/buyer-permissions',{
+      const response=await fetch('/organization/buyer-permissions',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
         body:JSON.stringify(${JSON.stringify(buyerRequest)})
       });return {status:response.status,body:await response.json()}
@@ -8105,7 +8105,7 @@ export default async function({container}:any){
     await reviewer.wait("document.visibilityState==='visible'")
     const rejectedBuyer=await reviewer.eval(`(async()=>{
       const s=await(await fetch('/personal/session')).json()
-      const response=await fetch('/personal/buyer-permissions',{
+      const response=await fetch('/organization/buyer-permissions',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
         body:JSON.stringify(${JSON.stringify(buyerRequest)})
       });return response.status
@@ -8113,13 +8113,13 @@ export default async function({container}:any){
     assert.equal(rejectedBuyer,403,
       "Other Org Owner / platform staff cannot issue buyer.purchase in Alpha")
     const foreignBuyer=await reviewer.eval(`(async()=>{
-      const response=await fetch('/personal/buyer-permissions?organization_id=${encodeURIComponent(organizations[0].id)}')
+      const response=await fetch('/organization/buyer-permissions?organization_id=${encodeURIComponent(organizations[0].id)}')
       return response.status
     })()`)
     assert.equal(foreignBuyer,403,"Non-Owner cannot enumerate buyer grants")
     // Before secondary dual proof the Alpha buyer grant is not sufficient
     // to establish which current native Customer belongs to Person B.
-    const customerContext=(org:string)=>'/personal/buyer-context?organization_id='+
+    const customerContext=(org:string)=>'/organization/buyer-context?organization_id='+
       encodeURIComponent(org)+'&customer=verified'
     const unlinkedCustomer=await reviewer.eval(`(async()=>{
       const r=await fetch(${JSON.stringify(customerContext(organizations[0].id))})
@@ -8189,7 +8189,7 @@ export default async function({container}:any){
     const absentCartCheck=await readNativeCart(buyerCart(organizations[0].id,
       "cart_absent_"+rand))
     assert.equal(absentCartCheck.status,403)
-    const noCustomerProof=await readNativeCart("/personal/buyer-context?organization_id="+
+    const noCustomerProof=await readNativeCart("/organization/buyer-context?organization_id="+
       encodeURIComponent(organizations[0].id)+"&cart_id="+encodeURIComponent(customerCart.id))
     assert.equal(noCustomerProof.status,400)
     const foreignOrganizationCart=await readNativeCart(
@@ -8206,7 +8206,7 @@ export default async function({container}:any){
     const claimCart=async(organization_id:string,cart_id:string)=>{
       return reviewer.eval(`(async()=>{
         const s=await(await fetch('/personal/session')).json()
-        const r=await fetch('/personal/buyer-context',{
+        const r=await fetch('/organization/buyer-context',{
           method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
           body:JSON.stringify(${JSON.stringify({action:"attribute",organization_id,cart_id})})
         })
@@ -8251,7 +8251,7 @@ export default async function({container}:any){
       where cart_id=$1 and organization_id=$2`,
       [customerCart.id,organizations[0].id]))[0].n,1)
     const noCsrf=await reviewer.eval(`(async()=>{
-      const r=await fetch('/personal/buyer-context',{
+      const r=await fetch('/organization/buyer-context',{
         method:'POST',headers:{'content-type':'application/json'},
         body:JSON.stringify(${JSON.stringify({action:"attribute",
           organization_id:organizations[0].id,cart_id:customerCart.id})})
@@ -8272,7 +8272,7 @@ export default async function({container}:any){
     assert.equal((await readNativeCart(buyerCart(organizations[1].id,
       customerCart.id)+"&seller_scope=inspect")).status,403)
     assert.equal((await readNativeCart(
-      "/personal/buyer-context?organization_id="+
+      "/organization/buyer-context?organization_id="+
       encodeURIComponent(organizations[0].id)+"&seller_scope=inspect")).status,400)
 
     // The second participating Store uses the SAME real Owner application
@@ -8810,7 +8810,7 @@ export default async function({container}:any){
     // Buyer Organization Beta was granted Seller Alpha's native CustomerGroup.
     // Same native Customer and same shared variant never imply entitlement.
     const privateCatalogBeta=async()=>reviewer.eval("(async()=>{"+
-      "const r=await fetch('/personal/catalog?organization_id="+encodeURIComponent(organizations[1].id)+"');"+
+      "const r=await fetch('/organization/catalog?organization_id="+encodeURIComponent(organizations[1].id)+"');"+
       "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')};})()")
     const privateReadAuditStart=Number((await q(
       "select count(*)::int n from da_audit_event"))[0].n)
@@ -8831,7 +8831,7 @@ export default async function({container}:any){
     assert.equal(beforeRevoke.body.checkout_ready,false)
     assert.equal(beforeRevoke.body.prices_available,false)
     const buyerAWithoutGroup=await get(
-      "/personal/catalog?organization_id="+encodeURIComponent(organizations[0].id))
+      "/organization/catalog?organization_id="+encodeURIComponent(organizations[0].id))
     assert.equal(buyerAWithoutGroup.status,200)
     const noGroupAlpha=buyerAWithoutGroup.body.stores.find((st:any)=>st.id===ownerStoreId)
       ?.products.find((x:any)=>x.offer_id===directTryOffers[0].id)
@@ -8866,7 +8866,7 @@ export default async function({container}:any){
     // exposed to the Buyer merely because a later page was queried.
     // This real Chrome/HTTPS test checks page switching with disposable PG16.
     // The separate deterministic service test covers the twenty-first Store.
-    const buyerPageUrl="/personal/catalog?organization_id="+
+    const buyerPageUrl="/organization/catalog?organization_id="+
       encodeURIComponent(organizations[1].id)
     const laterWindow=await reviewer.eval("(async()=>{"+
       "const r=await fetch("+JSON.stringify(buyerPageUrl+"&page=1")+");"+
@@ -9079,7 +9079,7 @@ export default async function({container}:any){
       "Malformed browser reply, duplicate guard and read cannot create an extra audit")
     process.stdout.write("PASS B22 Chrome: F-02 native HTTPS/PG16 idempotent revoke, browser-only malformed 200 JSON remains uncertain; same-key POST blocked and authorized GET does not guess settlement; no extra audit\n")
 
-    const catalogUrl=(org:string)=>"/personal/catalog?organization_id="+
+    const catalogUrl=(org:string)=>"/organization/catalog?organization_id="+
       encodeURIComponent(org)
     const catalogAuditBefore=await q("select count(*)::int n from da_audit_event")
     await verifyB22ScheduledSellerWindow({q,get,catalogUrl,
@@ -9628,7 +9628,7 @@ export default async function({container}:any){
     // B is Alpha Member with a scoped explicit grant and independently Beta
     // protected Owner. Both may be eligible; an attributed Cart cannot switch.
     const verifiedBuyer=await reviewer.eval(`(async()=>{
-      const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}')
+      const r=await fetch('/organization/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}')
       return {status:r.status,body:await r.json()}
     })()`)
     assert.equal(verifiedBuyer.status,200)
@@ -9637,7 +9637,7 @@ export default async function({container}:any){
       status:"buyer_permission_verified",checkout_ready:false
     })
     const wrongBuyer=await reviewer.eval(`(async()=>{
-      const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[1].id)}')
+      const r=await fetch('/organization/buyer-context?organization_id=${encodeURIComponent(organizations[1].id)}')
       return r.status
     })()`)
     assert.equal(wrongBuyer,200,
@@ -9649,7 +9649,7 @@ export default async function({container}:any){
     const ownBetaMembership=memberships[1]
     const betaPermission=async(action:"grant"|"revoke")=>reviewer.eval(`(async()=>{
       const s=await(await fetch('/personal/session')).json()
-      const r=await fetch('/personal/buyer-permissions',{
+      const r=await fetch('/organization/buyer-permissions',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
         body:JSON.stringify(${JSON.stringify({
           action,organization_id:organizations[1].id,
@@ -11098,7 +11098,7 @@ export default async function({container}:any){
     await browser.wait("!document.getElementById('buyer-grants-panel').hidden")
 
     const forgedBuyer=await reviewer.eval(`(async()=>{
-      const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}&actor_id=cus_forged')
+      const r=await fetch('/organization/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}&actor_id=cus_forged')
       return r.status
     })()`)
     assert.equal(forgedBuyer,400,"Forged Customer context rejected")
@@ -11134,7 +11134,7 @@ export default async function({container}:any){
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
     const deniedAfterRevoke=await reviewer.eval(`(async()=>{
-      const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}')
+      const r=await fetch('/organization/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}')
       return r.status
     })()`)
     assert.equal(deniedAfterRevoke,403,"Server rechecks revoked buyer.purchase")
@@ -11463,7 +11463,7 @@ export default async function({container}:any){
         const session=await sessionResponse.json()
         const result={session:sessionResponse.status}
         const targets=[
-          ['Buyer','/personal/buyer-permissions',{organization_id:org,membership_id:member}],
+          ['Buyer','/organization/buyer-permissions',{organization_id:org,membership_id:member}],
           ['Product','/organization/store-product-permissions',
             {organization_id:org,membership_id:member,seller_id:seller}]
         ]
@@ -11636,10 +11636,10 @@ export default async function({container}:any){
         "const org="+JSON.stringify(organizations[0].id)+";"+
         "const member="+JSON.stringify(alphaMember.id)+";"+
         "const seller="+JSON.stringify(ownerStoreId)+";"+
-        "return {buyerList:(await fetch('/personal/buyer-permissions?organization_id='+org)).status,"+
+        "return {buyerList:(await fetch('/organization/buyer-permissions?organization_id='+org)).status,"+
         "productList:(await fetch('/organization/store-product-permissions?organization_id='+org)).status,"+
-        "buyerGrant:await send('/personal/buyer-permissions',{action:'grant',organization_id:org,membership_id:member}),"+
-        "buyerRevoke:await send('/personal/buyer-permissions',{action:'revoke',organization_id:org,membership_id:member}),"+
+        "buyerGrant:await send('/organization/buyer-permissions',{action:'grant',organization_id:org,membership_id:member}),"+
+        "buyerRevoke:await send('/organization/buyer-permissions',{action:'revoke',organization_id:org,membership_id:member}),"+
         "productGrant:await send('/organization/store-product-permissions',{action:'grant',organization_id:org,seller_id:seller,membership_id:member}),"+
         "productRevoke:await send('/organization/store-product-permissions',{action:'revoke',organization_id:org,seller_id:seller,membership_id:member})"+
         "}})()"

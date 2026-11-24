@@ -1,4 +1,4 @@
-import {GET} from "../order-groups/route"
+import {GET} from "../../organization/order-groups/route"
 import {access,enabled,sessionToken} from "../security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 

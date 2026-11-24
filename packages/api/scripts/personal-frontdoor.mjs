@@ -71,6 +71,12 @@ export function allowedPublicRequest(method,path){
     '/organization/store-price-groups':['GET','POST'],
     '/organization/store-product-permissions':['GET','POST'],
     '/organization/stores':['GET'],
+    // #482 Aşama 4: Buyer/catalog routes moved from /personal/ to /organization/
+    '/organization/catalog':['GET'],
+    '/organization/buyer-context':['GET','POST'],
+    '/organization/buyer-permissions':['GET','POST'],
+    '/organization/order-groups':['GET'],
+    '/organization/return-requests':['GET'],
   }
   if(organization[path]?.includes(method))return true
   // #217 closed B4B: no unscoped catalog or seller/offer/search relay.
@@ -143,8 +149,11 @@ export function startFrontdoor(env=process.env){
       // Both private B4B catalogue and historical order summary need
       // their own fixed privacy metadata at the public HTTPS boundary.
       // Never blindly forward arbitrary upstream Vary or X-Robots-Tag.
+      // #482 Aşama 4: /organization/catalog and /organization/order-groups carry the same
+      // privacy contract as their /personal/ predecessors (410 stubs).
       if(req.method==='GET'&&
-         ['/personal/catalog','/personal/order-groups'].includes(url.pathname)){
+         ['/personal/catalog','/personal/order-groups',
+          '/organization/catalog','/organization/order-groups'].includes(url.pathname)){
         res.setHeader('Vary','Cookie')
         res.setHeader('X-Robots-Tag','noindex, nofollow, noarchive')
       }

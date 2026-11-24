@@ -91,7 +91,7 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/organization-applications" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/contexts" && req.method==="GET") ||
       (path==="/personal/organization-stores" && req.method==="GET") || // 410 Gone — moved to /organization/stores (#482)
-      (path==="/personal/catalog" && req.method==="GET") ||
+      (path==="/personal/catalog" && req.method==="GET") || // 410 Gone — moved to /organization/catalog (#482)
       (path==="/personal/store-follows" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-follows (#482)
       (path==="/personal/store-applications" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-applications (#482)
       (path==="/personal/store-rename-requests" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-rename-requests (#482)
@@ -106,12 +106,12 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/store-draft-permissions" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-draft-permissions (#482)
       (path==="/personal/store-product-permissions" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-product-permissions (#482)
       (path==="/personal/store-member-connections" && req.method==="POST") || // 410 Gone — moved to /organization/store-member-connections (#482)
-      (path==="/personal/buyer-permissions" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/buyer-permissions" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/buyer-permissions (#482)
       (path==="/personal/store-buyer-blocks" && req.method==="POST") || // 410 Gone — moved to /organization/store-buyer-blocks (#482)
       (path==="/personal/store-price-groups" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/store-price-groups (#482)
-      (path==="/personal/buyer-context" && ["GET","POST"].includes(req.method)) ||
-      (path==="/personal/order-groups" && req.method==="GET") ||
-      (path==="/personal/return-requests" && req.method==="GET") ||
+      (path==="/personal/buyer-context" && ["GET","POST"].includes(req.method)) || // 410 Gone — moved to /organization/buyer-context (#482)
+      (path==="/personal/order-groups" && req.method==="GET") || // 410 Gone — moved to /organization/order-groups (#482)
+      (path==="/personal/return-requests" && req.method==="GET") || // 410 Gone — moved to /organization/return-requests (#482)
       (path==="/personal/product-drafts" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/platform/stores" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/platform/store-renames" && ["GET","POST"].includes(req.method)) ||
@@ -146,6 +146,12 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/organization/store-price-groups" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/store-product-permissions" && ["GET","POST"].includes(req.method)) ||
       (path==="/organization/stores" && req.method==="GET") ||
+      // #482 Aşama 4: Buyer/catalog routes moved from /personal/ to /organization/
+      (path==="/organization/catalog" && req.method==="GET") ||
+      (path==="/organization/buyer-context" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/buyer-permissions" && ["GET","POST"].includes(req.method)) ||
+      (path==="/organization/order-groups" && req.method==="GET") ||
+      (path==="/organization/return-requests" && req.method==="GET") ||
       ((path==="/personal/platform" || path==="/personal/platform/smtp" || path==="/personal/platform/launcher") && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/mfa" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/mfa/enroll" && req.method==="POST") ||

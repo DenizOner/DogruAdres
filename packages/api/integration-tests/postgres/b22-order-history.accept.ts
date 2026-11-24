@@ -12,7 +12,7 @@ type DbRows=(sql:string,values?:unknown[])=>Promise<any[]>
 const readOnlyScript=
   "async function(org,id){"+
   "const p=new URLSearchParams({organization_id:org,order_group_id:id});"+
-  "const r=await fetch('/personal/order-groups?'+p.toString(),{cache:'no-store'});"+
+  "const r=await fetch('/organization/order-groups?'+p.toString(),{cache:'no-store'});"+
   "return {status:r.status,body:await r.json(),"+
   "cache:r.headers.get('cache-control'),vary:r.headers.get('vary'),"+
   "robots:r.headers.get('x-robots-tag')};}"
@@ -104,7 +104,7 @@ export async function verifyB22OwnedHistoricalOrder(input:{
         formValid:input?.checkValidity()===true,
         rendered:document.querySelectorAll('#buyer-order-items li').length>0};
     })()`)
-    const httpStatuses=buyer.http.filter((r:any)=>r.path==="/personal/order-groups")
+    const httpStatuses=buyer.http.filter((r:any)=>r.path==="/organization/order-groups")
       .slice(-3).map((r:any)=>r.status)
     throw Error("B22 order UI did not show private result: "+
       JSON.stringify({status:phase.status,formValid:phase.formValid,

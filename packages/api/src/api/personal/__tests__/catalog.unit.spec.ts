@@ -2,7 +2,7 @@
 // scoped historic order security cases inside that existing test boundary
 // without editing the shared workflow used by PR #263.
 import "./order-groups.unit.spec"
-import {GET} from "../catalog/route"
+import {GET} from "../../organization/catalog/route"
 import {access,enabled,sessionToken} from "../security"
 import {MercurModules} from "@mercurjs/types"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
