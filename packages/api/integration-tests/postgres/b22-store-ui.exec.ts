@@ -1522,7 +1522,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     assert.equal(await b.eval("location.pathname"),path)
   }
   const read=async(b:B06Chrome)=>{
-    const response=await b.eval(`(async()=>{const r=await fetch('/personal/platform/smtp');return {status:r.status,body:await r.json()}})()`)
+    const response=await b.eval(`(async()=>{const r=await fetch('/platform/smtp');return {status:r.status,body:await r.json()}})()`)
     // Inspect while this document still owns the completed response body.
     assertPrivateResponses()
     return response
@@ -1533,7 +1533,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     assertPrivateResponses()
     const start=b.http.length
     await b.send("Page.reload",{ignoreCache:true})
-    await until(async()=>b.http.slice(start).some(r=>r.path==='/personal/platform/smtp'&&r.method==='GET'&&r.status===status),
+    await until(async()=>b.http.slice(start).some(r=>r.path==='/platform/smtp'&&r.method==='GET'&&r.status===status),
       20000,'New document SMTP GET '+status)
   }
   const digest=()=>q("select id,enabled,host,port,security,username,password_encrypted,from_email,from_name,version from da_platform_smtp_settings order by id")
@@ -1605,7 +1605,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   catch(error){
     // Read back this one ambiguous attempt before the dedicated DB is retired.
     // Never retry its submit; retain no request payload or password/ciphertext.
-    const posts=browser.http.slice(saveStart).filter(r=>r.path==='/personal/platform/smtp'&&r.method==='POST')
+    const posts=browser.http.slice(saveStart).filter(r=>r.path==='/platform/smtp'&&r.method==='POST')
     // Diagnostic metadata only: never depend on a stale CDP response body.
     const responses=posts.map(post=>({status:post.status}))
     const state=await browser.eval(`({
@@ -1639,7 +1639,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   mark("New document refresh GET200 and persisted settings rendered; password input empty")
   // A stale real HTTP writer must not overwrite the newer browser save.
   const stale=await browser.eval(`(async()=>{const s=await(await fetch('/personal/session')).json();
-    const r=await fetch('/personal/platform/smtp',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+    const r=await fetch('/platform/smtp',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
     body:JSON.stringify({action:'save',enabled:false,host:'stale.example.invalid',port:465,security:'ssl',from_email:'b22@example.invalid',expected_version:0})});
     return {status:r.status,body:await r.json()}})()`)
   assert.equal(stale.status,409);assertPrivateResponses();assert.deepEqual(await digest(),saved)
@@ -1688,7 +1688,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     assert.equal(b.secretLeaks,false,"Secret in Chrome protocol/console")
   }
   assert.ok(browser.http.some(r=>r.path===path&&r.status===200&&r.tls))
-  assert.ok(browser.http.some(r=>r.path==='/personal/platform/smtp'&&r.method==='POST'&&r.status===200))
+  assert.ok(browser.http.some(r=>r.path==='/platform/smtp'&&r.method==='POST'&&r.status===200))
   writeFileSync(join(evidence,"acceptance.json"),JSON.stringify({
     source:process.env.GITHUB_SHA,sameOrigin:true,nativeModule:"admin_ui",servingMode:"static",
     syntheticOnly:true,smtpEnabled:false,versionBefore:0,versionAfter:1,
@@ -2301,14 +2301,14 @@ async function verifyOwnerStoreRenameRequest(
   process.stdout.write("PASS B22 Chrome/PG16: Owner Store name+URL change request with explicit risk acknowledgement, one private pending record and audit/outbox; foreign/CSRF/invalid/duplicate denied; native Seller unchanged\n")
   // Platform Store approver is a distinct current Person. An ordinary Owner
   // may not even see the pending name-change queue.
-  assert.equal(await browser.eval("(async()=>{return (await fetch('/personal/platform/store-renames')).status})()"),
+  assert.equal(await browser.eval("(async()=>{return (await fetch('/platform/store-renames')).status})()"),
     403,"Organization Owner may not inspect platform rename queue")
   await reviewer.send("Page.bringToFront")
   await reviewer.wait("document.visibilityState==='visible' && "+
     "!document.getElementById('workspace').hidden")
   // Distinguish a server-side authorization/SQL error from asynchronous
   // visibility-driven refresh. Never treat a hidden panel as proof of 403.
-  const reviewQueue=await reviewer.eval("(async()=>{const r=await fetch('/personal/platform/store-renames?page=0');"+
+  const reviewQueue=await reviewer.eval("(async()=>{const r=await fetch('/platform/store-renames?page=0');"+
     "return {status:r.status,body:await r.json()}})()")
   assert.equal(reviewQueue.status,200,"Current Store approver GET must succeed")
   assert.equal(reviewQueue.body.page,0)
@@ -2330,7 +2330,7 @@ async function verifyOwnerStoreRenameRequest(
     const original=globalThis.fetch;let failOnce=true;
     globalThis.fetch=function(input,options){
       if(failOnce&&typeof input==='string'&&
-         input.startsWith('/personal/platform/store-renames?')){
+         input.startsWith('/platform/store-renames?')){
         failOnce=false;globalThis.fetch=original;
         return Promise.resolve(new Response(
           JSON.stringify({message:'Disposable staff queue fault'}),
@@ -2360,7 +2360,7 @@ async function verifyOwnerStoreRenameRequest(
   ]){
     const deniedInvisible=await reviewer.eval(`(async()=>{
       const sess=await(await fetch('/personal/session')).json();
-      const r=await fetch('/personal/platform/store-renames',{method:'POST',
+      const r=await fetch('/platform/store-renames',{method:'POST',
         headers:{'content-type':'application/json','x-csrf-token':sess.csrf_token},
         body:JSON.stringify(${JSON.stringify({action:"reject",request_id:id,seller_id:storeId,reason:invalidReason})})
       });return r.status;
@@ -2391,7 +2391,7 @@ async function verifyOwnerStoreRenameRequest(
   process.stdout.write("PASS B22 Chrome/PG16: visible Staff form rejects readable-letter + nine invisible padding without changing pending decision\n")
   const refusalReason="B22 disposable platform review rejected a proposed public Store name"
   const csrfDenied=await reviewer.eval(`(async()=>{
-    const r=await fetch('/personal/platform/store-renames',{method:'POST',
+    const r=await fetch('/platform/store-renames',{method:'POST',
       headers:{'content-type':'application/json','x-csrf-token':'bad'},
       body:JSON.stringify(${JSON.stringify({
         action:"reject",request_id:id,seller_id:storeId,
@@ -2431,7 +2431,7 @@ async function verifyOwnerStoreRenameRequest(
   assert.ok(decision[0].updated_at&&decision[0].outbox_id)
   const repeat=await reviewer.eval(`(async()=>{
     const s=await(await fetch('/personal/session')).json()
-    const r=await fetch('/personal/platform/store-renames',{
+    const r=await fetch('/platform/store-renames',{
       method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
       body:JSON.stringify(${JSON.stringify({
         action:"reject",request_id:id,seller_id:storeId,reason:refusalReason
@@ -2550,7 +2550,7 @@ async function verifyPlatformStoreRenameApproval(
   // A business Owner never inherits platform Store approval authority.
   const ownerDenied=await owner.eval(`(async()=>{
     const s=await(await fetch('/personal/session')).json()
-    const r=await fetch('/personal/platform/store-renames',{
+    const r=await fetch('/platform/store-renames',{
       method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
       body:JSON.stringify(${JSON.stringify(proposal)})
     });return r.status
@@ -2559,7 +2559,7 @@ async function verifyPlatformStoreRenameApproval(
   await reviewer.send("Page.bringToFront")
   await reviewer.wait("document.visibilityState==='visible'")
   const csrfDenied=await reviewer.eval(`(async()=>{
-    const r=await fetch('/personal/platform/store-renames',{
+    const r=await fetch('/platform/store-renames',{
       method:'POST',headers:{'content-type':'application/json','x-csrf-token':'wrong'},
       body:JSON.stringify(${JSON.stringify(proposal)})
     });return r.status
@@ -2627,7 +2627,7 @@ async function verifyPlatformStoreRenameApproval(
       "Competing Owner POST must reject pending request or unchanged approved name")
     await reviewer.wait("document.getElementById('store-rename-review-status').textContent.includes('etkinleşti')")
     assert.ok(reviewer.http.some((x:any)=>x.method==='POST'&&
-      x.path==='/personal/platform/store-renames'&&x.status===200),
+      x.path==='/platform/store-renames'&&x.status===200),
       "Staff native approval must produce real HTTPS 200")
     const [extraRequest]=await q("select count(*)::int n from da_store_rename_request where id=$1",
       [competing.request_id])
@@ -2711,7 +2711,7 @@ async function verifyPlatformStoreRenameApproval(
   await reviewer.wait("document.visibilityState==='visible'")
   const again=await reviewer.eval(`(async()=>{
     const s=await(await fetch('/personal/session')).json()
-    const r=await fetch('/personal/platform/store-renames',{
+    const r=await fetch('/platform/store-renames',{
       method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
       body:JSON.stringify(${JSON.stringify(proposal)})
     });return r.status
@@ -2719,7 +2719,7 @@ async function verifyPlatformStoreRenameApproval(
   assert.equal(again,409,"Second approval must not repeat native name change")
   const ret=await reviewer.eval(`(async()=>{
     const s=await(await fetch('/personal/session')).json()
-    const r=await fetch('/personal/platform/store-renames',{
+    const r=await fetch('/platform/store-renames',{
       method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
       body:JSON.stringify(${JSON.stringify({...proposal,action:"reject",
         reason:"Previously approved Store cannot also be rejected"})})
@@ -2877,20 +2877,20 @@ async function verifySuspendedStoreRenameBeforeReopen(
   const decision={action:"approve",request_id:requestId,seller_id:sellerId}
   const unauthorized=await owner.callFunction(
     "async function(payload){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+    "const r=await fetch('/platform/store-renames',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:payload});return r.status}",JSON.stringify(decision))
   assert.equal(unauthorized,403,"An Owner cannot approve even a suspended Store rename")
   await reviewer.send("Page.bringToFront")
   await reviewer.wait("document.visibilityState==='visible'")
   const invalidCsrf=await reviewer.callFunction(
-    "async function(payload){const r=await fetch('/personal/platform/store-renames',"+
+    "async function(payload){const r=await fetch('/platform/store-renames',"+
     "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':'invalid'},"+
     "body:payload});return r.status}",JSON.stringify(decision))
   assert.equal(invalidCsrf,403)
   const forged=await reviewer.callFunction(
     "async function(payload){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+    "const r=await fetch('/platform/store-renames',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:payload});return r.status}",JSON.stringify({...decision,organization_id:organizationId}))
   assert.equal(forged,400,"Staff request may not fabricate Organization authority")
@@ -2898,7 +2898,7 @@ async function verifySuspendedStoreRenameBeforeReopen(
   await reviewer.wait("Array.from(document.querySelectorAll('#store-rename-review-list > div')).some("+
     "e=>e.textContent.includes("+JSON.stringify(name)+") && e.textContent.includes('Askıda'))")
   const queue=await reviewer.callFunction(
-    "async function(id){const r=await fetch('/personal/platform/store-renames?page=0');"+
+    "async function(id){const r=await fetch('/platform/store-renames?page=0');"+
     "const b=await r.json();return {status:r.status,row:b.pending?.find(x=>x.request_id===id)}}",
     requestId)
   assert.equal(queue.status,200)
@@ -2931,7 +2931,7 @@ async function verifySuspendedStoreRenameBeforeReopen(
   assert.ok(proof[0].approved_at&&proof[0].audit_id&&proof[0].outbox_id)
   assert.equal(await reviewer.callFunction(
     "async function(payload){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+    "const r=await fetch('/platform/store-renames',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:payload});return r.status}",JSON.stringify(decision)),409,
     "The same approval cannot be replayed")
@@ -2940,13 +2940,13 @@ async function verifySuspendedStoreRenameBeforeReopen(
   const openAction={action:"unsuspend",application_id:application.id,seller_id:sellerId}
   const ownerOpen=await owner.callFunction(
     "async function(payload){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+    "const r=await fetch('/platform/stores',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:payload});return r.status}",JSON.stringify(openAction))
   assert.equal(ownerOpen,403,"Owner still cannot self-approve an open Store")
   const staffOpened=await reviewer.callFunction(
     "async function(payload){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+    "const r=await fetch('/platform/stores',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:payload});return {status:r.status,body:await r.json()}}",
     JSON.stringify(openAction))
@@ -2961,7 +2961,7 @@ async function verifySuspendedStoreRenameBeforeReopen(
   assert.equal(String(reopened.approved_at),String(before.approved_at))
   assert.equal((await reviewer.callFunction(
     "async function(payload){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+    "const r=await fetch('/platform/stores',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:payload});return r.status}",JSON.stringify(openAction))),409)
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: suspended Store Owner requests new name, Staff approves unchanged Store ID and suspended status with one audit/outbox, explicit later Staff unsuspend succeeds; Owner/CSRF/forged/replay denied\n")
@@ -3007,7 +3007,7 @@ async function verifyStaffReopensSuspendedStore(
   const post=async(actor:B06Chrome,payload:Record<string,unknown>,csrfValid=true,
     forgedHeader=false)=>actor.eval(`(async()=>{
       const sess=await(await fetch('/personal/session')).json()
-      const r=await fetch('/personal/platform/stores',{
+      const r=await fetch('/platform/stores',{
         method:'POST',headers:{'content-type':'application/json',
           'x-csrf-token':${csrfValid?"sess.csrf_token":"'forged'"},
           ${forgedHeader?"'x-seller-id':'"+sellerId+"',":""}},
@@ -3045,7 +3045,7 @@ async function verifyStaffReopensSuspendedStore(
     await assertWcag22AxeInChrome(reviewer,"#store-approval-panel",
       "staff-reactivation-review-only")
     const wcagKeyboardBefore=reviewer.http.filter(r=>
-      r.path==="/personal/platform/stores" && r.method==="GET").length
+      r.path==="/platform/stores" && r.method==="GET").length
     await reviewer.eval("document.getElementById('store-approval-refresh').focus()")
     assert.equal(await reviewer.eval(
       "document.activeElement?.id==='store-approval-refresh'"),true,
@@ -3055,7 +3055,7 @@ async function verifyStaffReopensSuspendedStore(
     await reviewer.send("Input.dispatchKeyEvent",{
       type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
     await until(async()=>reviewer.http.filter(r=>
-      r.path==="/personal/platform/stores" && r.method==="GET").length>
+      r.path==="/platform/stores" && r.method==="GET").length>
       wcagKeyboardBefore,12000,"real Space refresh GET")
     await reviewer.wait("Array.from(document.querySelectorAll('#store-reactivation-list p'))"+
       ".some(e=>e.textContent.includes("+JSON.stringify(sellerId)+") && "+
@@ -3063,7 +3063,7 @@ async function verifyStaffReopensSuspendedStore(
       "e.querySelector('button')?.disabled===true)")
     process.stdout.write("PASS WCAG 2.2 partial keyboard: live Staff refresh Space invokes authorized GET, unsafe reopen remains disabled\n")
     const preflight=await reviewer.callFunction(
-      "async function(id){const r=await fetch('/personal/platform/stores?page=0');"+
+      "async function(id){const r=await fetch('/platform/stores?page=0');"+
       "return {status:r.status,body:await r.json(),id}}",sellerId)
     assert.equal(preflight.status,200)
     assert.equal(preflight.body.suspended.find((s:any)=>s.seller_id===sellerId)
@@ -3428,7 +3428,7 @@ async function verifyOwnerWithdrawPendingStoreRename(
   await reviewer.send("Page.bringToFront")
   const approval=await reviewer.eval(`(async()=>{
     const sess=await(await fetch('/personal/session')).json()
-    const r=await fetch('/personal/platform/store-renames',{
+    const r=await fetch('/platform/store-renames',{
       method:'POST',headers:{'content-type':'application/json',
         'x-csrf-token':sess.csrf_token},
       body:JSON.stringify(${JSON.stringify({
@@ -4141,7 +4141,7 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
   const direct=async(client:B06Chrome,body:object,invalidCsrf=false)=>
     client.callFunction("async function(body,invalid){"+
       "const session=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+      "const r=await fetch('/platform/stores',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':"+
       "(invalid==='true'?'invalid':session.csrf_token)},body:body});"+
       "return {status:r.status,body:await r.json()}}",
@@ -4168,7 +4168,7 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
     window.__b22RejectPostCount=0;
     window.fetch=async(...args)=>{
       const url=String(args[0]),method=args[1]?.method;
-      if(url!=='/personal/platform/stores'||method!=='POST')
+      if(url!=='/platform/stores'||method!=='POST')
         return original(...args);
       window.__b22RejectPostCount++;
       const response=await original(...args);
@@ -4836,7 +4836,7 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
     const ownerPairDenied=await browser.callFunction(
       "async function(app,seller){"+
       "const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+      "const r=await fetch('/platform/stores',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify({application_id:app,seller_id:seller})});"+
       "return r.status;}",pair[0].application_id,pair[0].seller_id)
@@ -4862,7 +4862,7 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
       const mismatch=await reviewChrome.callFunction(
         "async function(app,seller){"+
         "const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+        "const r=await fetch('/platform/stores',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify({application_id:app,seller_id:seller})});"+
         "return r.status;}",pair[0].application_id,pair[1].seller_id)
@@ -4877,7 +4877,7 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
           (i===0?"true":
           "!Array.from(document.querySelectorAll('#store-approval-list p')).some(p=>p.textContent.includes("+JSON.stringify(pairNames[0])+"))"))
         const postsBefore=reviewChrome.http.filter(
-          (h:any)=>h.path==="/personal/platform/stores"&&h.method==="POST").length
+          (h:any)=>h.path==="/platform/stores"&&h.method==="POST").length
         // Resolve the CURRENT row by Store name immediately before native CDP
         // click; never carry an old nth-child index across async refreshes.
         const point=await reviewChrome.eval(`(()=>{
@@ -4896,7 +4896,7 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
         await until(async()=>{
           const sellers=await native.listSellers({id:pair[i].seller_id})
           const posts=reviewChrome.http.filter((h:any)=>
-            h.path==="/personal/platform/stores"&&h.method==="POST")
+            h.path==="/platform/stores"&&h.method==="POST")
           return sellers.length===1&&sellers[0].status==="open"&&
             !!sellers[0].approved_at&&posts.length>postsBefore&&
             posts[posts.length-1].status===200
@@ -4911,7 +4911,7 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
       const replay=await reviewChrome.callFunction(
         "async function(app,seller){"+
         "const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+        "const r=await fetch('/platform/stores',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify({application_id:app,seller_id:seller})});"+
         "return r.status;}",pair[0].application_id,pair[0].seller_id)
@@ -4969,7 +4969,7 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
     await reviewChrome.send("Page.bringToFront")
     await reviewChrome.wait("document.visibilityState==='visible'")
     assert.equal(await reviewChrome.eval(
-      "(async()=> (await fetch('/personal/platform/stores')).status)()"),403,
+      "(async()=> (await fetch('/platform/stores')).status)()"),403,
       "Revoked platform Staff grant must deny further Store decisions")
     process.stdout.write("PASS B22-02 real Chrome/HTTPS/PG16: one authorized Organization creates two distinct native pending Sellers, actual independent Staff UI clicks open A then B; cross-target 403, Owner 403, replay 409, grant revoke 403, two current Organization links and canonical audit/outbox, Owner UI sees both\n")
 
@@ -6262,13 +6262,13 @@ export default async function({container}:any){
     // workflow created SellerMember.is_owner for this Store.
     const ownerApprovalDenied=await browser.eval(`(async()=>{
       const session=await (await fetch('/personal/session')).json()
-      const response=await fetch('/personal/platform/stores',{
+      const response=await fetch('/platform/stores',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
         body:JSON.stringify(${JSON.stringify({application_id:applicationId,seller_id:ownerStoreId})})})
       return response.status
     })()`)
     assert.equal(ownerApprovalDenied,403)
-    assert.equal((await get("/personal/platform/stores")).status,403)
+    assert.equal((await get("/platform/stores")).status,403)
     assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
     // One isolated historical Origin fixture has a real native pending
     // Seller; 30 older records have no native Seller and convey no access.
@@ -6332,21 +6332,21 @@ export default async function({container}:any){
     // user/Person binding. Its canonical audit/outbox producer must emit the
     // exact Staff role accepted by the strict Index projection contract.
     // This is task-owned CI data; no real company approval is performed.
-    assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/platform')).status)()"),403,
+    assert.equal(await reviewer.eval("(async()=> (await fetch('/platform')).status)()"),403,
       "Native sign-in and Store approval grant do not confer Organization provisioning")
     const staffOrgGrantId="da_staff_org_"+rand
     await q(`insert into da_platform_staff_grant
       (id,person_id,task,resource,granted_by_person_id,reason)
       values($1,$2,'organization.provision','platform',$2,'B22 isolated Staff provision fixture')`,
       [staffOrgGrantId,B.person])
-    assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/platform')).status)()"),200)
-    assert.equal((await get("/personal/platform")).status,403,
+    assert.equal(await reviewer.eval("(async()=> (await fetch('/platform')).status)()"),200)
+    assert.equal((await get("/platform")).status,403,
       "Organization Owner cannot acquire separate Staff provision permission")
     const provisionName="B22 Staff provision "+rand
     const provisionBody={name:provisionName,initial_owners:[{actor_type:"user",actor_id:B.actor}]}
     const provision=async(body:unknown, csrfOverride?:string)=>reviewer.eval(`(async()=>{
       const s=await (await fetch('/personal/session')).json()
-      const response=await fetch('/personal/platform',{
+      const response=await fetch('/platform',{
         method:'POST',headers:{'content-type':'application/json',
           'x-csrf-token':${JSON.stringify(csrfOverride??"")}||s.csrf_token},
         body:JSON.stringify(${JSON.stringify(body)})
@@ -6405,7 +6405,7 @@ export default async function({container}:any){
     }
     // Existing organization-provision and store-approve grants confer no
     // company application-policy authority without an additional explicit grant.
-    const companyPolicyPath='/personal/platform/store-application-policy?organization_id='+
+    const companyPolicyPath='/platform/store-application-policy?organization_id='+
       encodeURIComponent(organizations[0].id)
     assert.equal(await reviewer.callFunction("async function(path){return (await fetch(path)).status}",companyPolicyPath),403,
       "Organization provision and Store approve grants must not authorize policy changes")
@@ -6452,7 +6452,7 @@ export default async function({container}:any){
       return actingBrowser.callFunction(
         "async function(org,e,x,reason,valid,version){"+
           "const s=await(await fetch('/personal/session')).json();"+
-          "const r=await fetch('/personal/platform/store-application-policy',{method:'POST',"+
+          "const r=await fetch('/platform/store-application-policy',{method:'POST',"+
             "headers:{'content-type':'application/json','x-csrf-token':valid==='true'?s.csrf_token:'bad'},"+
             "body:JSON.stringify({organization_id:org,expected_enabled:x==='true',expected_version:Number(version),enabled:e==='true',reason})});"+
           "return {status:r.status,body:await r.json()};}",
@@ -6465,7 +6465,7 @@ export default async function({container}:any){
       "select store_application_version from da_organization where id=$1",
       [organizations[0].id])
     assert.equal(initialPolicyRevision.store_application_version,0)
-    assert.equal((await get("/personal/platform/store-application-policy?organization_id="+
+    assert.equal((await get("/platform/store-application-policy?organization_id="+
       encodeURIComponent(organizations[0].id))).status,403,
       "Owner cannot read platform-only policy administration")
     assert.equal((await companyRight(false,true,"B22 synthetic suspension",false)).status,403)
@@ -6706,7 +6706,7 @@ export default async function({container}:any){
     assert.equal(await reviewer.eval("document.querySelector('#store-approval-list button').disabled"),true)
     const blockedApproval=await reviewer.callFunction(
       "async function(id,seller){const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+      "const r=await fetch('/platform/stores',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify({application_id:id,seller_id:seller})});return r.status;}",
       applicationId,ownerStoreId)
@@ -6833,7 +6833,7 @@ export default async function({container}:any){
 
     await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",
       [staffOrgGrantId])
-    assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/platform')).status)()"),403)
+    assert.equal(await reviewer.eval("(async()=> (await fetch('/platform')).status)()"),403)
     assert.equal((await provision({...provisionBody,name:provisionName+" revoked"})).status,403)
     assert.equal((await q("select count(*)::int n from da_organization where name=$1",
       [provisionName+" revoked"]))[0].n,0)
@@ -6917,7 +6917,7 @@ export default async function({container}:any){
           "olderHidden:document.getElementById('store-approval-older').hidden,"+
           "newerHidden:document.getElementById('store-approval-newer').hidden})")
         const statuses=reviewer.http.filter((h:any)=>
-          ['/personal','/personal/session','/personal/platform/stores'].includes(h.path))
+          ['/personal','/personal/session','/platform/stores'].includes(h.path))
           .slice(-10).map((h:any)=>({path:h.path,status:h.status}))
         throw Error("B22 Store first page could not revalidate: "+
           JSON.stringify({safeState,statuses}))
@@ -6938,7 +6938,7 @@ export default async function({container}:any){
     let companyPolicySwitchDone=false
     let companyPolicySwitch:Promise<{value?:{status:number};error?:string}>|undefined
     const beforeStoreApprovals=reviewer.http.filter(
-      (x:any)=>x.path==="/personal/platform/stores"&&x.method==="POST").length
+      (x:any)=>x.path==="/platform/stores"&&x.method==="POST").length
     try{
       const tables=await q("select count(*)::int n from pg_class where oid=to_regclass('public.seller') and relkind='r'")
       assert.equal(tables[0].n,1,"Installed Mercur native Seller persistence must be a real PG16 relation")
@@ -6967,7 +6967,7 @@ export default async function({container}:any){
       }catch{
         const state=await reviewer.eval("({documentHidden:document.hidden,workspaceHidden:document.getElementById('workspace').hidden,loginHidden:document.getElementById('login').hidden,panelHidden:document.getElementById('store-approval-panel').hidden,visibleButton:!!document.querySelector('#store-approval-list button')?.getClientRects().length})")
         const http=reviewer.http.filter((h:any)=>
-          ['/personal','/personal/session','/personal/platform/stores'].includes(h.path))
+          ['/personal','/personal/session','/platform/stores'].includes(h.path))
           .slice(-10).map((h:any)=>({path:h.path,status:h.status}))
         throw Error("B22 Staff Store approval UI restore failed: "+
           JSON.stringify({state,http}))
@@ -6978,7 +6978,7 @@ export default async function({container}:any){
         return w.n===1
       },19000,"Actual Mercur Seller UPDATE waits on independent PG16 barrier")
       assert.equal(reviewer.http.filter(
-        (x:any)=>x.path==="/personal/platform/stores"&&x.method==="POST").length,
+        (x:any)=>x.path==="/platform/stores"&&x.method==="POST").length,
         beforeStoreApprovals,"Staff approval HTTP has not returned before native write")
       const revokePending=staffRevoker.query(
         "update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1 and revoked_at is null returning revoked_at",
@@ -7040,7 +7040,7 @@ export default async function({container}:any){
       staffBarrierHeld=false
       await until(async()=>{
         const http=reviewer.http.filter(
-          (x:any)=>x.path==="/personal/platform/stores"&&x.method==="POST")
+          (x:any)=>x.path==="/platform/stores"&&x.method==="POST")
         const rows=await native.listSellers({id:ownerStoreId})
         return http.length===beforeStoreApprovals+1&&http[http.length-1].status===200&&
           rows.length===1&&rows[0].status==="open"&&!!rows[0].approved_at
@@ -7085,7 +7085,7 @@ export default async function({container}:any){
       assert.equal(revoked.rows.length,1)
       assert.ok(revoked.rows[0].revoked_at)
       assert.equal((await q("select count(*)::int n from da_platform_staff_grant where id=$1 and revoked_at is not null",[grantId]))[0].n,1)
-      assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/platform/stores')).status)()"),403,
+      assert.equal(await reviewer.eval("(async()=> (await fetch('/platform/stores')).status)()"),403,
         "Current platform Staff revoke must deny all subsequent Store approvals")
       assert.equal((await q("select count(*)::int n from da_store_application where id=$1 and seller_id=$2 and status='created'",[applicationId,ownerStoreId]))[0].n,1)
       assert.equal((await q("select count(*)::int n from da_organization_seller_ownership where organization_id=$1 and seller_id=$2 and revoked_at is null",[organizations[0].id,ownerStoreId]))[0].n,1)
@@ -7109,7 +7109,7 @@ export default async function({container}:any){
     // A temporary status message is not a durable success contract: the
     // privacy epoch may conceal an inactive browser while the POST completes.
     await until(async()=>{
-      const http=reviewer.http.filter((x:any)=>x.path==="/personal/platform/stores"&&x.method==="POST")
+      const http=reviewer.http.filter((x:any)=>x.path==="/platform/stores"&&x.method==="POST")
       const current=await native.listSellers({id:ownerStoreId})
       return http.some((x:any)=>x.status===200)&&current.length===1&&
         current[0].status==="open"&&!!current[0].approved_at
@@ -8312,7 +8312,7 @@ export default async function({container}:any){
     await reviewer.wait("document.visibilityState==='visible'")
     const secondApproval=await reviewer.eval(`(async()=>{
       const session=await(await fetch('/personal/session')).json()
-      const response=await fetch('/personal/platform/stores',{
+      const response=await fetch('/platform/stores',{
         method:'POST',headers:{'content-type':'application/json',
           'x-csrf-token':session.csrf_token},
         body:JSON.stringify(${JSON.stringify({
@@ -9740,7 +9740,7 @@ export default async function({container}:any){
       "Gamma Store must be denied before separate platform approval")
     const wrongGammaApproval=await browser.eval(`(async()=>{
       const session=await(await fetch('/personal/session')).json()
-      return (await fetch('/personal/platform/stores',{
+      return (await fetch('/platform/stores',{
         method:'POST',headers:{'content-type':'application/json',
           'x-csrf-token':session.csrf_token},
         body:JSON.stringify(${JSON.stringify({
@@ -9755,7 +9755,7 @@ export default async function({container}:any){
     await reviewer.wait("document.visibilityState==='visible'")
     const gammaApproved=await reviewer.eval(`(async()=>{
       const session=await(await fetch('/personal/session')).json()
-      const response=await fetch('/personal/platform/stores',{
+      const response=await fetch('/platform/stores',{
         method:'POST',headers:{'content-type':'application/json',
           'x-csrf-token':session.csrf_token},
         body:JSON.stringify(${JSON.stringify({
@@ -11915,14 +11915,14 @@ export default async function({container}:any){
       ownerPersonId:A.person,ownerActorId:A.actor,browser,foundation,q,
     })
     // Protected Owner writes a draft for their approved Store without grant.
-    const ownerDraftAccess=await get('/personal/product-drafts?organization_id='+organizations[0].id)
+    const ownerDraftAccess=await get('/organization/product-drafts?organization_id='+organizations[0].id)
     assert.equal(ownerDraftAccess.status,200)
     assert.ok(ownerDraftAccess.body.stores.some((row:any)=>row.id===ownerStoreId))
     assert.equal((await q("select count(*)::int n from da_store_product_permission where person_id=$1 and organization_id=$2 and seller_id=$3",[A.person,organizations[0].id,ownerStoreId]))[0].n,0)
     const priorProductOwnerActions=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     try{
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase"
-      const deniedRead=await get('/personal/product-drafts?organization_id='+organizations[0].id)
+      const deniedRead=await get('/organization/product-drafts?organization_id='+organizations[0].id)
       assert.equal(deniedRead.status,200)
       assert.ok(deniedRead.body.stores.some((row:any)=>row.id===ownerStoreId),
         "Immutable protected Owner products.edit keeps its approved Store visible")
@@ -11930,7 +11930,7 @@ export default async function({container}:any){
       if(priorProductOwnerActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=priorProductOwnerActions
     }
-    const restoredOwnerDraft=await get('/personal/product-drafts?organization_id='+organizations[0].id)
+    const restoredOwnerDraft=await get('/organization/product-drafts?organization_id='+organizations[0].id)
     assert.equal(restoredOwnerDraft.status,200)
     assert.ok(restoredOwnerDraft.body.stores.some((row:any)=>row.id===ownerStoreId))
     process.stdout.write("PASS B22 Owner role policy: fixed products.edit keeps approved Store visible via HTTP with legacy setting; no product intent write\n")
@@ -11973,7 +11973,7 @@ export default async function({container}:any){
       seller_id:ownerStoreId,title:draftTitle}
     const draftPost=async(payload:Record<string,string>)=>browser.eval(`(async()=>{
       const session=await(await fetch('/personal/session')).json();
-      const response=await fetch('/personal/product-drafts',{
+      const response=await fetch('/organization/product-drafts',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
         body:JSON.stringify(${JSON.stringify(payload)})
       });return {status:response.status,body:await response.json()}
@@ -11981,7 +11981,7 @@ export default async function({container}:any){
     const replayProduct=await draftPost(productRequest)
     assert.equal(replayProduct.status,200)
     assert.equal(replayProduct.body.product_id,written.id)
-    const receiptProduct=await get('/personal/product-drafts?organization_id='+
+    const receiptProduct=await get('/organization/product-drafts?organization_id='+
       encodeURIComponent(organizations[0].id)+'&seller_id='+
       encodeURIComponent(ownerStoreId)+'&request_id='+encodeURIComponent(requestId))
     assert.equal(receiptProduct.status,200)
@@ -12008,7 +12008,7 @@ export default async function({container}:any){
     })
     assert.equal(recoveredNative.length,1)
     assert.equal(recoveredNative[0].id,recoveryId,"Installed Mercur must preserve caller ID")
-    const recoveryBefore=await get('/personal/product-drafts?organization_id='+
+    const recoveryBefore=await get('/organization/product-drafts?organization_id='+
       encodeURIComponent(organizations[0].id)+'&seller_id='+
       encodeURIComponent(ownerStoreId)+'&request_id='+encodeURIComponent(recoveryKey))
     assert.equal(recoveryBefore.status,200)
@@ -12016,7 +12016,7 @@ export default async function({container}:any){
       "Native draft alone must not fabricate Foundation completion")
     const reconcile=async(payload:Record<string,string>)=>browser.eval(`(async()=>{
       const session=await(await fetch('/personal/session')).json()
-      const r=await fetch('/personal/product-drafts',{
+      const r=await fetch('/organization/product-drafts',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
         body:JSON.stringify(${JSON.stringify(payload)})
       });return {status:r.status,body:await r.json()}
@@ -12069,7 +12069,7 @@ export default async function({container}:any){
     await reviewer.wait("document.visibilityState==='visible'")
     const memberCannotWrite=await reviewer.eval(`(async()=>{
       const session=await(await fetch('/personal/session')).json();
-      const response=await fetch('/personal/product-drafts',{
+      const response=await fetch('/organization/product-drafts',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
         body:JSON.stringify(${JSON.stringify({...productRequest,request_id:"dapd_"+randomBytes(16).toString("hex")})})
       });return response.status
@@ -12080,7 +12080,7 @@ export default async function({container}:any){
     assert.equal((await q("select count(*)::int n from da_store_product_permission where person_id=$1 and organization_id=$2 and seller_id=$3 and revoked_at is null",[A.person,organizations[0].id,ownerStoreId]))[0].n,0)
     assert.equal((await draftPost(productRequest)).status,200,
       "Protected Owner's completed draft remains available without an explicit grant")
-    assert.equal((await get('/personal/product-drafts?organization_id='+
+    assert.equal((await get('/organization/product-drafts?organization_id='+
       encodeURIComponent(organizations[0].id)+'&seller_id='+
       encodeURIComponent(ownerStoreId)+'&request_id='+encodeURIComponent(requestId))).status,200)
     assert.equal((await q("select count(*)::int n from product where title=$1",[draftTitle]))[0].n,1)
@@ -12124,7 +12124,7 @@ export default async function({container}:any){
       await reviewer.wait("document.getElementById('workspace').hidden===false")
       await reviewer.select(organizations[0].name,"member")
       const memberDraftStores=()=>reviewer.eval(`(async()=>{
-        const r=await fetch('/personal/product-drafts?organization_id='+${JSON.stringify(organizations[0].id)})
+        const r=await fetch('/organization/product-drafts?organization_id='+${JSON.stringify(organizations[0].id)})
         if(r.status!==200)return {status:r.status,stores:[]}
         const body=await r.json()
         return {status:r.status,stores:(body.stores||[]).map(x=>x.id)}
@@ -12276,7 +12276,7 @@ export default async function({container}:any){
       // B06Chrome.ready() waits for the Owner-only membership panel.
       // This actor is an ordinary Member; verify the actual product scope instead.
       const memberScope=await reviewer.eval(`(async()=>{
-        const r=await fetch('/personal/product-drafts?organization_id='+${JSON.stringify(organizations[0].id)})
+        const r=await fetch('/organization/product-drafts?organization_id='+${JSON.stringify(organizations[0].id)})
         if(r.status!==200)return {status:r.status,stores:[]}
         const body=await r.json()
         return {status:r.status,stores:(body.stores||[]).map(x=>x.id)}
@@ -12299,7 +12299,7 @@ export default async function({container}:any){
       await reviewer.wait("document.visibilityState==='visible'")
       let createDone=false
       const createPending=reviewer.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/product-drafts',{method:'POST',"+
+        "const r=await fetch('/organization/product-drafts',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify("+JSON.stringify(racePayload)+")});"+
         "return {status:r.status,body:await r.json()}})()"
@@ -12356,7 +12356,7 @@ export default async function({container}:any){
       const deniedPayload={...racePayload,request_id:"dapd_"+randomBytes(16).toString("hex"),title:"B22 denied after revoke "+rand}
       const memberDraftPost=async(payload:Record<string,string>)=>reviewer.eval(`(async()=>{
         const session=await(await fetch('/personal/session')).json()
-        const r=await fetch('/personal/product-drafts',{method:'POST',
+        const r=await fetch('/organization/product-drafts',{method:'POST',
           headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
           body:JSON.stringify(${JSON.stringify(payload)})})
         return {status:r.status}
@@ -12617,7 +12617,7 @@ export default async function({container}:any){
     assert.equal((await get('/personal/contexts?type=member&seller='+ownerStoreId)).status,400)
     const replayApprove=await reviewer.eval(`(async()=>{
       const session=await (await fetch('/personal/session')).json()
-      const response=await fetch('/personal/platform/stores',{
+      const response=await fetch('/platform/stores',{
         method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
         body:JSON.stringify(${JSON.stringify({application_id:applicationId,seller_id:ownerStoreId})})})
       return response.status
@@ -12626,7 +12626,7 @@ export default async function({container}:any){
     // Revoking a staff task immediately denies further platform approval
     // access; an Organization Owner cannot gain this permission implicitly.
     await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[grantId])
-    assert.equal(await reviewer.eval(`(async()=> (await fetch('/personal/platform/stores')).status)()`),403)
+    assert.equal(await reviewer.eval(`(async()=> (await fetch('/platform/stores')).status)()`),403)
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.wait("!document.getElementById('workspace').hidden")
@@ -13969,7 +13969,7 @@ export default async function({container}:any){
       otherCustomerId:registered[0].actor_id,
       ownerCustomerId:nativeCustomer.id,q
     })
-    const primaryPolicyUrl="/personal/platform/store-application-policy?organization_id="+
+    const primaryPolicyUrl="/platform/store-application-policy?organization_id="+
       encodeURIComponent(organizations[0].id)
     const customerReadPolicy=()=>signupChrome.callFunction(
       "async function(url){return (await fetch(url)).status}",primaryPolicyUrl)
@@ -14893,7 +14893,7 @@ export default async function({container}:any){
 
     try {
       const reviewQueue = await reviewChrome.eval(`(async()=>{`+
-        `const r=await fetch('/personal/organization-applications?action=review_queue');`+
+        `const r=await fetch('/platform/organization-applications?action=review_queue');`+
         `return {status:r.status,body:await r.json()};`+
       `})()`)
       assert.equal(reviewQueue.status, 200)
@@ -14958,7 +14958,7 @@ export default async function({container}:any){
       // without either, the same real HTTP request MUST fail closed.
       const scanEnabled=process.env.DOGRUADRES_B22_SAFE_REVIEW_TEST==="true"
       const reviewPreview = await reviewChrome.eval(`(async()=>{
-        const r=await fetch('/personal/organization-applications?action=review_preview&application_id='+
+        const r=await fetch('/platform/organization-applications?action=review_preview&application_id='+
           encodeURIComponent(${JSON.stringify(b22TaxAppId)}));
         const raw=new Uint8Array(await r.arrayBuffer());
         return {status:r.status,type:r.headers.get('content-type'),
@@ -15056,7 +15056,7 @@ export default async function({container}:any){
 
         // The daemon stays genuine. Only this disposable task-only PostgreSQL
         // row simulates evidence previously recorded under an old signature.
-        const signedPreviewUrl='/personal/organization-applications?action=review_preview&application_id='+encodeURIComponent(foreignAppId);
+        const signedPreviewUrl='/platform/organization-applications?action=review_preview&application_id='+encodeURIComponent(foreignAppId);
         const fetchSignedPreview=()=>reviewChrome.eval(
           "(async()=>{const r=await fetch("+JSON.stringify(signedPreviewUrl)+");return {status:r.status,type:r.headers.get('content-type')}})()");
         const beforeRenewal=(await q(
@@ -15108,7 +15108,7 @@ export default async function({container}:any){
 
       const correctionRes = await reviewChrome.eval(`(async()=>{`+
         `const s=await (await fetch('/personal/session')).json();`+
-        `const r=await fetch('/personal/organization-applications',{`+
+        `const r=await fetch('/platform/organization-applications',{`+
           `method:'POST',`+
           `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
           `body:JSON.stringify({`+
@@ -15306,7 +15306,7 @@ export default async function({container}:any){
       const deniedAfterWithdraw=await reviewChrome.callFunction(
         `async function(applicationId){
           const s=await (await fetch('/personal/session')).json();
-          const r=await fetch('/personal/organization-applications',{
+          const r=await fetch('/platform/organization-applications',{
             method:'POST',
             headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
             body:JSON.stringify({
@@ -15332,7 +15332,7 @@ export default async function({container}:any){
           `application_id:${JSON.stringify(b22TaxAppId)},`+
           `expected_version:3,decision:'approve',`+
           `notes:'Vergi levhası doğrulandı, kuruluş onaylandı.'});`+
-        `const responses=await Promise.all([0,1].map(()=>fetch('/personal/organization-applications',{`+
+        `const responses=await Promise.all([0,1].map(()=>fetch('/platform/organization-applications',{`+
           `method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},body})));`+
         `return Promise.all(responses.map(async r=>({status:r.status,body:await r.json()})));`+
       `})()`)
@@ -15427,7 +15427,7 @@ export default async function({container}:any){
       const individualBefore=Number((await q("select count(*)::int n from da_organization"))[0].n)
       const individualDecision=await reviewChrome.eval(`(async()=>{
         const csrf=(await (await fetch('/personal/session')).json()).csrf_token;
-        const r=await fetch('/personal/organization-applications',{method:'POST',
+        const r=await fetch('/platform/organization-applications',{method:'POST',
           headers:{'content-type':'application/json','x-csrf-token':csrf},
           body:JSON.stringify({action:'review_decision',
             application_id:${JSON.stringify(individualAppId)},expected_version:4,decision:'approve'})});
@@ -15642,14 +15642,14 @@ export default async function({container}:any){
           [{status:'submitted',version:4}])
         process.stdout.write("PASS B22 Chrome/HTTP/PG16: details-only edit preserves scanned document, submit UI and one private revision\\n")
         const firstReviewPage=await reviewChrome.eval(`(async()=>{
-          const r=await fetch('/personal/organization-applications?action=review_queue');
+          const r=await fetch('/platform/organization-applications?action=review_queue');
           const body=await r.json();
           return {status:r.status,count:body.applications?.length,more:!!body.next_cursor};
         })()`)
         assert.deepEqual(firstReviewPage,{status:200,count:100,more:true},
           "Authorized reviewer must get a real bounded first page and cursor")
         const unauthorizedReview=await signupChrome.eval(`(async()=>{
-          const r=await fetch('/personal/organization-applications?action=review_queue');
+          const r=await fetch('/platform/organization-applications?action=review_queue');
           return r.status;
         })()`)
         assert.equal(unauthorizedReview,403,
@@ -15725,14 +15725,14 @@ export default async function({container}:any){
 
         const replayReview=await reviewChrome.eval(
           "(async()=>{const s=await(await fetch('/personal/session')).json();"+
-          "const r=await fetch('/personal/organization-applications',{method:'POST',"+
+          "const r=await fetch('/platform/organization-applications',{method:'POST',"+
           "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
           "body:JSON.stringify({action:'review_decision',application_id:"+JSON.stringify(stagedId)+
           ",expected_version:2,decision:'start_review'})});return r.status})()")
         assert.equal(replayReview,409,"Already in review cannot be started twice")
         const foreignReview=await foreignDraftChrome.eval(
           "(async()=>{const s=await(await fetch('/personal/session')).json();"+
-          "const r=await fetch('/personal/organization-applications',{method:'POST',"+
+          "const r=await fetch('/platform/organization-applications',{method:'POST',"+
           "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
           "body:JSON.stringify({action:'review_decision',application_id:"+JSON.stringify(stagedId)+
           ",expected_version:2,decision:'reject',notes:'not authorized'})});return r.status})()")

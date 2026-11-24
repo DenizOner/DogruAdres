@@ -130,7 +130,7 @@ export default function PlatformSmtpSettingsPage() {
         if (cancelled) return
 
         // 2. Fetch platform SMTP settings
-        const res = await fetch(`${backendUrl}/personal/platform/smtp`, {
+        const res = await fetch(`${backendUrl}/platform/smtp`, {
           method: "GET",
           headers: {
 
@@ -212,7 +212,7 @@ export default function PlatformSmtpSettingsPage() {
         headers["x-csrf-token"] = csrfToken
       }
 
-      const res = await fetch(`${backendUrl}/personal/platform/smtp`, {
+      const res = await fetch(`${backendUrl}/platform/smtp`, {
         method: "POST",
         headers,
         credentials: "include",
@@ -288,7 +288,7 @@ export default function PlatformSmtpSettingsPage() {
         headers["x-csrf-token"] = csrfToken
       }
 
-      const res = await fetch(`${backendUrl}/personal/platform/smtp`, {
+      const res = await fetch(`${backendUrl}/platform/smtp`, {
         method: "POST",
         headers,
         credentials: "include",

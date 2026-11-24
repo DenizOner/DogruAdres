@@ -1,4 +1,4 @@
-import {nativeBuyerGroupTryReference} from "../catalog/native-group-try-reference"
+import {nativeBuyerGroupTryReference} from "../../organization/catalog/native-group-try-reference"
 import {ContainerRegistrationKeys,Modules} from "@medusajs/framework/utils"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 

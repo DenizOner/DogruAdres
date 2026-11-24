@@ -88,7 +88,7 @@ export async function verifyReactivationClaimFreezesRenames(input:{
   await staff.wait("document.visibilityState==='visible'")
   const staffDecision=await staff.callFunction(
     "async function(body){const session=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+    "const r=await fetch('/platform/store-renames',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
     "body});return r.status}",
     JSON.stringify({action:"approve",request_id:request.request_id,seller_id:request.seller_id}))

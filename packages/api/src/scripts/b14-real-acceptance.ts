@@ -378,7 +378,13 @@ export default async function b14RealAcceptance({ container }: { container: Medu
   // STEP 9: Client UI (/personal) DOM Integrity & Organization-Switch Privacy
   // ---------------------------------------------------------------------------
   console.log("\n--- [STEP 9] UI (/personal) Privacy & DOM Clearing Verification ---")
-  const personalRouteFile = fs.existsSync("src/api/personal/route.ts") ? "src/api/personal/route.ts" : "packages/api/src/api/personal/route.ts"
+  const personalRouteFile = fs.existsSync("src/api/personal/console-view.ts")
+    ? "src/api/personal/console-view.ts"
+    : fs.existsSync("packages/api/src/api/personal/console-view.ts")
+    ? "packages/api/src/api/personal/console-view.ts"
+    : fs.existsSync("src/api/personal/route.ts")
+    ? "src/api/personal/route.ts"
+    : "packages/api/src/api/personal/route.ts"
 
   const routeContent = fs.readFileSync(personalRouteFile, "utf8")
 

@@ -5,7 +5,7 @@ import { createContext, runInContext } from 'node:vm'
 // Execute the shipped UI functions, with controlled response scheduling only.
 // This is a UI race regression, not browser/HTTP/database authorization proof.
 function harness() {
-  const source=readFileSync(join(__dirname,'../route.ts'),'utf8')
+  const source=readFileSync(join(__dirname,'../console-view.ts'),'utf8')
   const begin=source.indexOf("let currentOrg=''")
   const end=source.indexOf('  async function load()',begin)
   const nodes=new Map<string,any>()

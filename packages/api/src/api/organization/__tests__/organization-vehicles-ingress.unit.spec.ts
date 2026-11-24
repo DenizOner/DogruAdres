@@ -89,17 +89,9 @@ describe("organization/vehicles — ingress access control", () => {
     expect(next).toHaveBeenCalledTimes(1)
   })
 
-  it("passes GET /personal/vehicles through ingress so the route handler can return 410 Gone", async () => {
-    // /personal/vehicles GET is deliberately kept in the nativeIngress allow-list (#482, security.ts:127).
-    // This allows the 410 Gone response from the route handler to reach clients rather than
-    // being replaced by a 401 from ingress. The path is intentionally left in the allow-list;
-    // it was removed only from personal-frontdoor.mjs (the public proxy layer), not from nativeIngress.
-    // This distinction is intentional: frontdoor blocks public access, but nativeIngress lets
-    // through so session-authenticated clients get the informative 410 instead of 401.
+  it("rejects removed /personal/vehicles route at ingress", async () => {
     const { next, res } = await probe("/personal/vehicles", "GET")
-    // Either next is called (passes through) OR route handles 410 — both are acceptable.
-    // The critical invariant: the client must NOT receive 401 from ingress for this path.
-    const statusCode = res.status.mock.calls[0]?.[0]
-    expect(statusCode).not.toBe(401)
+    expect(next).not.toHaveBeenCalled()
+    expect(res.status).toHaveBeenCalledWith(401)
   })
 })

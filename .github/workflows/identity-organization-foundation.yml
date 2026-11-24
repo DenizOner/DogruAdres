@@ -396,7 +396,7 @@ jobs:
         working-directory: packages/api
         env:
           TEST_TYPE: unit
-        run: bun run jest --runInBand --forceExit --runTestsByPath src/modules/dogruadres-access/__tests__/identity-session.unit.spec.ts src/modules/dogruadres-access/__tests__/person-mobile.unit.spec.ts src/modules/dogruadres-access/__tests__/person-registration.unit.spec.ts src/modules/dogruadres-access/__tests__/legal-store-ownership.unit.spec.ts src/modules/dogruadres-access/__tests__/memberships-service.unit.spec.ts src/modules/dogruadres-access/__tests__/invitation-resend-service.unit.spec.ts src/modules/dogruadres-access/__tests__/actor-delegation.unit.spec.ts src/modules/dogruadres-access/__tests__/account-linking.unit.spec.ts src/utils/__tests__/ingress-config.unit.spec.ts src/api/personal/__tests__/ingress.unit.spec.ts src/api/personal/__tests__/profile.unit.spec.ts src/api/personal/__tests__/register.unit.spec.ts src/api/personal/__tests__/organization-applications.unit.spec.ts src/modules/dogruadres-access/__tests__/tax-certificate-policy.unit.spec.ts src/modules/dogruadres-access/__tests__/tax-certificate-scanner.unit.spec.ts src/api/personal/__tests__/organization-selection.unit.spec.ts src/api/personal/__tests__/organization-stores.unit.spec.ts src/api/personal/__tests__/store-owner-pause.unit.spec.ts src/api/personal/__tests__/store-owner-closing.unit.spec.ts src/api/personal/__tests__/store-approvals.unit.spec.ts src/api/personal/__tests__/store-product-permissions.unit.spec.ts src/api/personal/__tests__/store-member-connections.unit.spec.ts src/api/personal/__tests__/buyer-permissions.unit.spec.ts src/api/personal/__tests__/buyer-context.unit.spec.ts src/api/personal/__tests__/catalog.unit.spec.ts src/api/personal/__tests__/native-try-list-price.unit.spec.ts src/api/personal/__tests__/native-group-try-reference.unit.spec.ts src/api/personal/__tests__/store-price-groups.unit.spec.ts src/api/personal/__tests__/product-drafts.unit.spec.ts src/api/personal/__tests__/launcher-b22.unit.spec.ts src/api/personal/__tests__/workspace-lifetime.unit.spec.ts src/api/personal/__tests__/notifications.unit.spec.ts src/api/personal/__tests__/memberships.unit.spec.ts src/api/personal/__tests__/invitations.unit.spec.ts src/api/dogruadres/__tests__/audit-timeline.unit.spec.ts src/api/personal/__tests__/audit-timeline.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-policy.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-login-decision.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-persistence.unit.spec.ts src/modules/dogruadres-access/__tests__/audit-persistence.unit.spec.ts src/modules/dogruadres-audit-index/__tests__/envelope.unit.spec.ts src/workflows/dogruadres-audit-relay/__tests__/relay.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-settings-service.unit.spec.ts src/modules/dogruadres-access/__tests__/native-mfa-summary.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-enrollment-ticket.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-session-scope.unit.spec.ts src/api/personal/__tests__/mfa-settings.unit.spec.ts src/api/personal/__tests__/mfa-management.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-management.unit.spec.ts src/api/personal/__tests__/mfa-shell.unit.spec.ts src/api/personal/__tests__/mfa-enrollment.unit.spec.ts src/api/personal/__tests__/mfa-login-runtime.unit.spec.ts src/api/personal/__tests__/mfa-challenge-recovery.unit.spec.ts src/modules/dogruadres-access/__tests__/provision-personal-organization.unit.spec.ts src/api/personal/__tests__/platform.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-client.unit.spec.ts src/api/personal/__tests__/platform-smtp.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-settings.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-crypto.unit.spec.ts src/api/personal/__tests__/store-applications.unit.spec.ts src/api/personal/__tests__/store-rename-requests.unit.spec.ts src/api/personal/__tests__/platform-store-renames.unit.spec.ts
+        run: bun run jest --runInBand --forceExit --runTestsByPath src/modules/dogruadres-access/__tests__/identity-session.unit.spec.ts src/modules/dogruadres-access/__tests__/person-mobile.unit.spec.ts src/modules/dogruadres-access/__tests__/person-registration.unit.spec.ts src/modules/dogruadres-access/__tests__/legal-store-ownership.unit.spec.ts src/modules/dogruadres-access/__tests__/memberships-service.unit.spec.ts src/modules/dogruadres-access/__tests__/invitation-resend-service.unit.spec.ts src/modules/dogruadres-access/__tests__/actor-delegation.unit.spec.ts src/modules/dogruadres-access/__tests__/account-linking.unit.spec.ts src/utils/__tests__/ingress-config.unit.spec.ts src/api/personal/__tests__/ingress.unit.spec.ts src/api/personal/__tests__/profile.unit.spec.ts src/api/personal/__tests__/register.unit.spec.ts src/api/personal/__tests__/organization-applications.unit.spec.ts src/api/platform/__tests__/platform-organization-applications.unit.spec.ts src/api/organization/__tests__/organization-return-requests.unit.spec.ts src/modules/dogruadres-access/__tests__/tax-certificate-policy.unit.spec.ts src/modules/dogruadres-access/__tests__/tax-certificate-scanner.unit.spec.ts src/api/personal/__tests__/organization-selection.unit.spec.ts src/api/personal/__tests__/organization-stores.unit.spec.ts src/api/personal/__tests__/store-owner-pause.unit.spec.ts src/api/personal/__tests__/store-owner-closing.unit.spec.ts src/api/personal/__tests__/store-approvals.unit.spec.ts src/api/personal/__tests__/store-product-permissions.unit.spec.ts src/api/personal/__tests__/store-member-connections.unit.spec.ts src/api/personal/__tests__/buyer-permissions.unit.spec.ts src/api/personal/__tests__/buyer-context.unit.spec.ts src/api/personal/__tests__/catalog.unit.spec.ts src/api/personal/__tests__/native-try-list-price.unit.spec.ts src/api/personal/__tests__/native-group-try-reference.unit.spec.ts src/api/personal/__tests__/store-price-groups.unit.spec.ts src/api/personal/__tests__/product-drafts.unit.spec.ts src/api/personal/__tests__/launcher-b22.unit.spec.ts src/api/personal/__tests__/workspace-lifetime.unit.spec.ts src/api/personal/__tests__/notifications.unit.spec.ts src/api/personal/__tests__/memberships.unit.spec.ts src/api/personal/__tests__/invitations.unit.spec.ts src/api/dogruadres/__tests__/audit-timeline.unit.spec.ts src/api/personal/__tests__/audit-timeline.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-policy.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-login-decision.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-persistence.unit.spec.ts src/modules/dogruadres-access/__tests__/audit-persistence.unit.spec.ts src/modules/dogruadres-audit-index/__tests__/envelope.unit.spec.ts src/workflows/dogruadres-audit-relay/__tests__/relay.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-settings-service.unit.spec.ts src/modules/dogruadres-access/__tests__/native-mfa-summary.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-enrollment-ticket.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-session-scope.unit.spec.ts src/api/personal/__tests__/mfa-settings.unit.spec.ts src/api/personal/__tests__/mfa-management.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-management.unit.spec.ts src/api/personal/__tests__/mfa-shell.unit.spec.ts src/api/personal/__tests__/mfa-enrollment.unit.spec.ts src/api/personal/__tests__/mfa-login-runtime.unit.spec.ts src/api/personal/__tests__/mfa-challenge-recovery.unit.spec.ts src/modules/dogruadres-access/__tests__/provision-personal-organization.unit.spec.ts src/api/personal/__tests__/platform.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-client.unit.spec.ts src/api/personal/__tests__/platform-smtp.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-settings.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-crypto.unit.spec.ts src/api/personal/__tests__/store-applications.unit.spec.ts src/api/personal/__tests__/store-rename-requests.unit.spec.ts src/api/personal/__tests__/platform-store-renames.unit.spec.ts
       - name: Closed public front door unit contract
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
@@ -554,7 +554,119 @@ jobs:
     if: ${{ always() && !cancelled() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && (needs.static.result != 'success' || needs.static.outputs.docs_only != 'true'))) }}
     name: MFA migration and transaction — isolated PostgreSQL 16
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_USER: mfa_test
+          POSTGRES_PASSWORD: ci-disposable-only-not-a-real-secret
+          POSTGRES_DB: mfa_ci_ephemeral
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mfa_test -d mfa_ci_ephemeral"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout exact PR merge ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - name: Setup Bun
+        id: setup_bun
+        continue-on-error: true
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+          no-cache: true
+      # Fallback is only for GitHub release download errors. Never skip tests.
+      - name: Fallback to official pinned Bun from npm
+        if: steps.setup_bun.outcome == 'failure'
+        run: npm install -g --no-audit --no-fund bun@1.4.2
+      - name: Verify exact Bun runtime
+        run: test "$(bun --version)" = "1.4.2"
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Exercise MFA transactions and real migration ledger on same disposable PG16
+        if: github.event_name != 'workflow_dispatch'
+        working-directory: packages/api
+        env:
+          CI: 'true'
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
+        run: |
+          bun integration-tests/postgres/mfa-persistence.pg16.test.ts
+          bun integration-tests/postgres/mfa-migrator-ledger.pg16.test.ts
+          bun integration-tests/postgres/foundation-membership-transaction.pg16.test.ts
+          # Focused B22 delivery-clock PG16 acceptance is independent of the
+          # later, still-MANDATORY ClamAV/Chrome gates. An upstream APT mirror
+          # outage must not erase the evidence for this isolated user risk.
+          bun integration-tests/postgres/b22-platform-closing-email.pg16.test.ts
+      - name: Foundation native Medusa module / ORM transaction on disposable PG16
+        if: github.event_name != 'workflow_dispatch'
+        working-directory: packages/api
+        env:
+          CI: 'true'
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_USERNAME: mfa_test
+          DB_PASSWORD: ci-disposable-only-not-a-real-secret
+          TEST_TYPE: integration:modules
+        run: bun run test:integration:modules --runTestsByPath src/modules/dogruadres-access/__tests__/foundation-native.integration.spec.ts
+      - name: B02-only native HTTP and SQL negatives
+        if: github.event_name == 'workflow_dispatch' && inputs.scope == 'b02'
+        working-directory: packages/api
+        timeout-minutes: 7
+        env:
+          CI: 'true'
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
+          PG_MFA_TEST_SCOPE: b02
+        run: |
+          set -o pipefail
+          bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts | tee "$RUNNER_TEMP/b02-evidence.log"
+      - name: Preserve sanitized B02 execution evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.scope == 'b02'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: b02-native-http-sql
+          path: ${{ runner.temp }}/b02-evidence.log
+          if-no-files-found: error
+      - name: B04-only native HTTP and SQL acceptance
+        if: github.event_name == 'workflow_dispatch' && inputs.scope == 'b04'
+        working-directory: packages/api
+        timeout-minutes: 7
+        env:
+          CI: 'true'
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
+          PG_MFA_TEST_SCOPE: b04
+        run: |
+          set -o pipefail
+          bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts | tee "$RUNNER_TEMP/b04-evidence.log"
+      - name: Preserve sanitized B04 execution evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.scope == 'b04'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: b04-native-http-sql
+          path: ${{ runner.temp }}/b04-evidence.log
+          if-no-files-found: error
+
+  b22-browser-acceptance:
+    # Dedicated parallel job for real Chrome, WCAG axe-core, ClamAV and UI acceptance.
+    needs: static
+    if: ${{ always() && !cancelled() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && (needs.static.result != 'success' || needs.static.outputs.docs_only != 'true'))) }}
+    name: B22 browser acceptance and document scanner — Chrome and ClamAV
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
     services:
       postgres:
         image: postgres:16.15
@@ -604,21 +716,16 @@ jobs:
         run: test "$(bun --version)" = "1.4.2"
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
-      - name: Exercise MFA transactions and real migration ledger on same disposable PG16
-        if: github.event_name != 'workflow_dispatch'
-        working-directory: packages/api
-        env:
-          CI: 'true'
-          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
-          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
-        run: |
-          bun integration-tests/postgres/mfa-persistence.pg16.test.ts
-          bun integration-tests/postgres/mfa-migrator-ledger.pg16.test.ts
-          bun integration-tests/postgres/foundation-membership-transaction.pg16.test.ts
-          # Focused B22 delivery-clock PG16 acceptance is independent of the
-          # later, still-MANDATORY ClamAV/Chrome gates. An upstream APT mirror
-          # outage must not erase the evidence for this isolated user risk.
-          bun integration-tests/postgres/b22-platform-closing-email.pg16.test.ts
+      - name: Get current date for ClamAV cache
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+      - name: Cache ClamAV virus signatures
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: /home/runner/.clamav-cache
+          key: clamav-signatures-${{ runner.os }}-${{ steps.date.outputs.date }}
+          restore-keys: |
+            clamav-signatures-${{ runner.os }}-
       - name: Existing Chrome task CA support for B22 scoped browser acceptance
         if: github.event_name != 'workflow_dispatch'
         run: |
@@ -635,12 +742,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # These packages are free and confined to this disposable CI runner.
-          # A blocked signature download or unavailable sandbox MUST fail;
-          # never downgrade the document review to header/magic-byte checks.
-          # Two real PR runs stalled resolving the GitHub runner's Azure mirror.
-          # Prefer the official Ubuntu archive on this throwaway runner only;
-          # keep genuine distro package signatures, FreshClam and sandbox gates.
+          # Restore cached signatures if present to avoid redundant 200MB download
+          sudo mkdir -p /var/lib/clamav
+          if [ -d /home/runner/.clamav-cache ] && [ "$(ls -A /home/runner/.clamav-cache 2>/dev/null)" ]; then
+            echo "Restoring cached ClamAV signatures..."
+            sudo cp -r /home/runner/.clamav-cache/* /var/lib/clamav/ || true
+            sudo chown -R clamav:clamav /var/lib/clamav || true
+          fi
           if [ -f /etc/apt/apt-mirrors.txt ]; then
             sudo sed -i \
               -e 's#http://azure.archive.ubuntu.com/ubuntu/#https://archive.ubuntu.com/ubuntu/#g' \
@@ -654,26 +762,20 @@ jobs:
             -o Acquire::https::Timeout=20 install -y -qq --no-install-recommends \
             clamav-daemon clamav-freshclam bubblewrap poppler-utils imagemagick \
             apparmor-profiles apparmor-utils acl
-          # Ubuntu 24.04 blocks unprivileged bwrap namespaces by default.
-          # Load ONLY its distribution-supplied restrictive bwrap profile in
-          # this throwaway CI VM. Never disable global AppArmor or userns rules.
           test -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
           sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
             /etc/apparmor.d/bwrap-userns-restrict
           sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
           test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = "1"
           sudo systemctl stop clamav-freshclam.service >/dev/null 2>&1 || true
-          # This CI task starts its own private clamd AFTER the official
-          # signatures are installed. Suppress only FreshClam's notification
-          # to the unrelated distro daemon, not database verification.
-          # FreshClam switches to the restricted clamav account; its
-          # configuration must stay readable after privilege drop. This
-          # modifies only this disposable CI runner, never a host install.
           sudo sed -i '/^NotifyClamd[[:space:]]/d' /etc/clamav/freshclam.conf
           sudo freshclam --config-file=/etc/clamav/freshclam.conf --stdout
           test -s /var/lib/clamav/daily.cvd || test -s /var/lib/clamav/daily.cld
           test -s /var/lib/clamav/main.cvd || test -s /var/lib/clamav/main.cld
           echo "PASS B22: genuine updated ClamAV database installed"
+          mkdir -p /home/runner/.clamav-cache
+          sudo cp -f /var/lib/clamav/* /home/runner/.clamav-cache/ 2>/dev/null || true
+          sudo chown -R runner:docker /home/runner/.clamav-cache 2>/dev/null || true
 
           # Probe unprivileged namespaces. Never change host sysctl, AppArmor,
           # service privileges or Docker access to force a test to pass.
@@ -706,14 +808,9 @@ jobs:
             sudo systemctl status clamav-daemon.service --no-pager --lines=18 || true
             exit 1
           fi
-          # Grant ONLY this ephemeral CI process-user socket access. Keep the
-          # distro's restrictive AppArmor profile, socket mode and TCP denial.
           sudo setfacl -m "u:$(id -un):rw" "$sock"
           test -r "$sock"
           echo "PASS B22: official local-only ClamAV daemon and scoped socket ACL"
-          # This uses only safe, in-memory synthetic fixtures. It isolates
-          # scanner protocol, live EICAR detection and sandboxed PNG rendering
-          # before the longer real Chrome acceptance. No real document paths.
           DOGRUADRES_CLAMD_SOCKET="$sock" bun -e '
             import { verifyTaxCertificateWithClamd, TaxCertificateScannerUnavailable } from "./packages/api/src/modules/dogruadres-access/tax-certificate-scanner.ts";
             import { makeSafeTaxCertificatePreview } from "./packages/api/src/modules/dogruadres-access/tax-certificate-safe-preview.ts";
@@ -744,14 +841,9 @@ jobs:
           '
           echo "DOGRUADRES_CLAMD_SOCKET=$sock" >> "$GITHUB_ENV"
           echo "DOGRUADRES_B22_SAFE_REVIEW_TEST=true" >> "$GITHUB_ENV"
-      # This existing job also performs focused WCAG 2.2 axe-core A/AA and Staff
-      # keyboard checks on real authenticated Chrome UI (not full WCAG conformance).
-      # Keep heavyweight testing on ready PRs; do not add a second scanner/job.
       - name: B22 real Chrome after signed R1 activation on separate disposable database
         if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api
-        # Includes a genuine native Redis Cart 120-second post-crash lease,
-        # plus isolated migrations and signed R1 activation. Keep all checks.
         timeout-minutes: 13
         env:
           CI: 'true'
@@ -760,8 +852,6 @@ jobs:
           PG_MFA_TEST_SCOPE: b22-ui
           B22_UI_AUTO_SCOPE: b22-ui
         run: bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts
-      # Existing native UI modules serve these two real build artifacts
-      # from the same isolated HTTPS test runtime. No new service/deployment.
       - name: Prepare existing Admin and Vendor assets for browser privacy acceptance
         if: github.event_name != 'workflow_dispatch'
         working-directory: .
@@ -824,44 +914,6 @@ jobs:
           PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
           PG_MFA_TEST_SCOPE: verification
         run: bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts
-      - name: B02-only native HTTP and SQL negatives
-        if: github.event_name == 'workflow_dispatch' && inputs.scope == 'b02'
-        working-directory: packages/api
-        timeout-minutes: 7
-        env:
-          CI: 'true'
-          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
-          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
-          PG_MFA_TEST_SCOPE: b02
-        run: |
-          set -o pipefail
-          bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts | tee "$RUNNER_TEMP/b02-evidence.log"
-      - name: Preserve sanitized B02 execution evidence
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.scope == 'b02'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: b02-native-http-sql
-          path: ${{ runner.temp }}/b02-evidence.log
-          if-no-files-found: error
-      - name: B04-only native HTTP and SQL acceptance
-        if: github.event_name == 'workflow_dispatch' && inputs.scope == 'b04'
-        working-directory: packages/api
-        timeout-minutes: 7
-        env:
-          CI: 'true'
-          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
-          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
-          PG_MFA_TEST_SCOPE: b04
-        run: |
-          set -o pipefail
-          bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts | tee "$RUNNER_TEMP/b04-evidence.log"
-      - name: Preserve sanitized B04 execution evidence
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.scope == 'b04'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: b04-native-http-sql
-          path: ${{ runner.temp }}/b04-evidence.log
-          if-no-files-found: error
       - name: B04-UI-only real Chrome and native HTTP/SQL acceptance
         if: github.event_name == 'workflow_dispatch' && inputs.scope == 'b04-ui'
         working-directory: packages/api
@@ -1000,18 +1052,4 @@ jobs:
             ${{ runner.temp }}/b08-ui-evidence.log
             ${{ runner.temp }}/b08-ui-evidence/
           if-no-files-found: error
-      - name: Foundation native Medusa module / ORM transaction on disposable PG16
-        if: github.event_name != 'workflow_dispatch'
-        working-directory: packages/api
-        env:
-          CI: 'true'
-          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
-          DB_HOST: 127.0.0.1
-          DB_PORT: '5432'
-          DB_USERNAME: mfa_test
-          DB_PASSWORD: ci-disposable-only-not-a-real-secret
-          TEST_TYPE: integration:modules
-        run: bun run test:integration:modules --runTestsByPath src/modules/dogruadres-access/__tests__/foundation-native.integration.spec.ts
-      # The test erases its own schema in finally. GitHub Actions terminates and
-      # removes this ephemeral PostgreSQL service on job exit/cancel. There is
-      # no repository volume, persistent fixture or access to the M0 task DB.
+

@@ -69,7 +69,7 @@ export class SmtpResponsePrivacyGuard {
       this.fail("unsupported SMTP response content type or charset")
   }
   observe(req:IncomingMessage,res:ServerResponse){
-    if((req.url??"").split("?")[0]!=="/personal/platform/smtp")return
+    if((req.url??"").split("?")[0]!=="/platform/smtp")return
     const record:Tracked={chunks:[],size:0,ended:false,finished:false,directHeaders:new Map()}
     this.started++
     if(this.started>MAX_RESPONSES){

@@ -1,4 +1,4 @@
-import {nativeDirectTryListPrice} from "../catalog/native-try-list-price"
+import {nativeDirectTryListPrice} from "../../organization/catalog/native-try-list-price"
 import {ContainerRegistrationKeys,Modules} from "@medusajs/framework/utils"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 
