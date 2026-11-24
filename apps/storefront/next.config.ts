@@ -74,12 +74,16 @@ const nextConfig: NextConfig = {
       { source: '/:locale/login', headers: sensitiveRouteHeaders },
       { source: '/register', headers: sensitiveRouteHeaders },
       { source: '/:locale/register', headers: sensitiveRouteHeaders },
+      { source: '/forgot-password', headers: sensitiveRouteHeaders },
+      { source: '/:locale/forgot-password', headers: sensitiveRouteHeaders },
       { source: '/auth/:path*', headers: sensitiveRouteHeaders },
       { source: '/:locale/auth/:path*', headers: sensitiveRouteHeaders },
       { source: '/invitations/:path*', headers: sensitiveRouteHeaders },
       { source: '/:locale/invitations/:path*', headers: sensitiveRouteHeaders },
       { source: '/account/:path*', headers: sensitiveRouteHeaders },
       { source: '/:locale/account/:path*', headers: sensitiveRouteHeaders },
+      { source: '/user/:path*', headers: sensitiveRouteHeaders },
+      { source: '/:locale/user/:path*', headers: sensitiveRouteHeaders },
     ];
   },
   logging: {

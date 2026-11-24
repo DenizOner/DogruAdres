@@ -8,6 +8,17 @@ const BACKEND_URL = process.env.MEDUSA_BACKEND_URL;
 const PUBLISHABLE_API_KEY = process.env.NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY;
 const DEFAULT_REGION = process.env.NEXT_PUBLIC_DEFAULT_REGION || 'us';
 
+const isSensitiveAuthRoute = (path: string) =>
+  /^\/(?:[a-z]{2}\/)?(?:login|register|forgot-password|invitations|account|user)(?:\/|$)/i.test(path);
+
+function applySensitiveHeaders(response: NextResponse) {
+  response.headers.set('Referrer-Policy', 'no-referrer');
+  response.headers.set('Cache-Control', 'private, no-store');
+  response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+  response.headers.set('X-Content-Type-Options', 'nosniff');
+  return response;
+}
+
 const makeAuthRedirect = (
   req: NextRequest,
   locale: string,
@@ -211,22 +222,15 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
-  // Sensitive auth and user identity paths: login, register, forgot-password, invitations, account.
-  // Must never be cached by shared proxies or browsers, must not expose referrer, and must not be indexed by search bots.
-  if (/^\/(?:[a-z]{2}\/)?(?:login|register|forgot-password|invitations|account)(?:\/|$)/i.test(pathname)) {
-    const response = NextResponse.next();
-    response.headers.set('Referrer-Policy', 'no-referrer');
-    response.headers.set('Cache-Control', 'private, no-store');
-    response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
-    response.headers.set('X-Content-Type-Options', 'nosniff');
-    return response;
-  }
-
   const cacheIdCookie = request.cookies.get('_medusa_cache_id');
   const cacheId = cacheIdCookie?.value || crypto.randomUUID();
 
   if (looksLikeLocale && cacheIdCookie) {
-    return NextResponse.next();
+    const response = NextResponse.next();
+    if (isSensitiveAuthRoute(pathname)) {
+      applySensitiveHeaders(response);
+    }
+    return response;
   }
 
   const response = NextResponse.next();
@@ -245,7 +249,15 @@ export async function middleware(request: NextRequest) {
     const redirectPath = pathname === '/' ? '' : pathname;
     const queryString = request.nextUrl.search ? request.nextUrl.search : '';
     const redirectUrl = `${request.nextUrl.origin}/${countryCode}${redirectPath}${queryString}`;
-    return NextResponse.redirect(redirectUrl, 307);
+    const redirectResponse = NextResponse.redirect(redirectUrl, 307);
+    if (isSensitiveAuthRoute(pathname)) {
+      applySensitiveHeaders(redirectResponse);
+    }
+    return redirectResponse;
+  }
+
+  if (isSensitiveAuthRoute(pathname)) {
+    applySensitiveHeaders(response);
   }
 
   return response;

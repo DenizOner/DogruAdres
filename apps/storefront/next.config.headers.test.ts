@@ -22,12 +22,16 @@ describe('Storefront security headers configuration', () => {
       '/:locale/login',
       '/register',
       '/:locale/register',
+      '/forgot-password',
+      '/:locale/forgot-password',
       '/auth/:path*',
       '/:locale/auth/:path*',
       '/invitations/:path*',
       '/:locale/invitations/:path*',
       '/account/:path*',
       '/:locale/account/:path*',
+      '/user/:path*',
+      '/:locale/user/:path*',
     ];
 
     for (const source of sensitiveSources) {
