@@ -60,6 +60,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   #company-launcher-list>li{padding:.75rem 1rem;border:1px solid var(--line);border-radius:.6rem;background:#f9fafb;display:grid;gap:.5rem}
   #company-launcher-list>li>div{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;justify-content:space-between}
   #company-launcher-list>li button{min-height:2.25rem;padding:.35rem .7rem;font-size:.875rem}
+  #platform-launcher-panel{grid-column:1/-1;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
+  #platform-launcher-list{list-style:none;padding:0;margin:1rem 0;display:grid;gap:.75rem}
+  #platform-launcher-list>li{padding:.75rem 1rem;border:1px solid var(--line);border-radius:.6rem;background:#f9fafb;display:grid;gap:.5rem}
+  #platform-launcher-list>li>div{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;justify-content:space-between}
+  #platform-launcher-list>li button{min-height:2.25rem;padding:.35rem .7rem;font-size:.875rem}
   #organization-document-section{margin-top:1rem;padding:1rem;border:1px solid var(--line);border-radius:.6rem;background:#fff}
   #organization-document-dropzone{padding:1rem;border:2px dashed #9aa9bd;border-radius:.5rem;background:#f8fafc;text-align:center}
   #organization-document-dropzone:focus-within{border-color:var(--focus-ring)}
@@ -254,6 +259,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button type="button" id="organization-draft-refresh">Taslaklarımı yenile</button>
     <div id="organization-draft-list"></div>
     <button id="organization-draft-more" type="button" hidden>Daha eski taslakları göster</button>
+  </section>
+  <section id="platform-launcher-panel" hidden aria-labelledby="platform-launcher-title">
+    <h2 id="platform-launcher-title">Platform çalışma alanı başlatıcısı</h2>
+    <p>Yalnız yetkili olduğunuz platform işlevlerini sıralayın ve katlayın. Bu tercih yeni yetki vermez.</p>
+    <p id="platform-launcher-status" role="status" aria-live="polite"></p>
+    <ol id="platform-launcher-list"></ol>
+    <button id="platform-launcher-reset" type="button">Standart düzeni geri yükle</button>
   </section>
   <section id="organization-review-panel" hidden>
     <h2>İncelenecek işletme başvuruları</h2>
@@ -599,7 +611,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const grantWrite=path==='/organization/store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
     const closingWrite=['/organization/store-owner-closing','/organization/store-platform-closing','/organization/store-platform-closing-final-review','platform/store-closings','platform/store-closing-reviews','/organization/store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
-    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite||ownerPauseWrite||(path==='/organization/launcher'&&options.method==='POST');
+    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite||ownerPauseWrite||((path==='/organization/launcher'||path==='platform/launcher')&&options.method==='POST');
     let data;
     try{
       data=await r.json();
@@ -1860,6 +1872,193 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!data||companyLauncherBusy)return;
     void saveCompanyLauncher(data.available_ids.slice(),[],
       'Standart düzen yalnız bu şirkette kaydedildi.');
+  };
+  // Platform admin launcher: navigation only among server-verified platform functions
+  let platformLauncherData=null,platformLauncherRequest=0,platformLauncherBusy=false;
+  const platformLauncherTargets={
+    'organization-review':{label:'İşletme başvuruları incelemesi',target:'organization-review-panel'},
+    'store-approvals':{label:'Platform mağaza onayları',target:'store-approval-panel'},
+    'store-renames':{label:'Mağaza ad/bağlantı değişiklikleri',target:'store-rename-review-panel'},
+    'store-closings':{label:'Platform mağaza kapatma süreci',target:'platform-closing-panel'},
+    'store-closing-reviews':{label:'Bağımsız mağaza kapatma incelemesi',target:'platform-closing-review-panel'},
+    'platform-mfa':{label:'Platform için MFA politikası',target:'mfa-platform'},
+    'platform-smtp':{label:'Platform SMTP ve bildirim ayarları',target:'smtp-platform'},
+    'store-policy':{label:'Şirket mağaza başvuru hakkı yönetimi',target:'platform-store-policy-panel'}
+  };
+  function clearPlatformLauncher(){
+    ++platformLauncherRequest;platformLauncherData=null;platformLauncherBusy=false;
+    el('platform-launcher-panel').hidden=true;
+    el('platform-launcher-list').replaceChildren();
+    el('platform-launcher-status').textContent='';
+    el('platform-launcher-reset').disabled=true;
+  }
+  function validPlatformLauncherResponse(data){
+    return data &&
+      Number.isSafeInteger(data.version) && data.version>=0 &&
+      Array.isArray(data.available_ids) && data.available_ids.length>=1 &&
+      data.available_ids.length<=8 &&
+      Array.isArray(data.app_ids) &&
+      data.app_ids.length===data.available_ids.length &&
+      Array.isArray(data.collapsed_ids) &&
+      data.collapsed_ids.length<=data.app_ids.length &&
+      new Set(data.available_ids).size===data.available_ids.length &&
+      data.available_ids.every(id=>Object.hasOwn(platformLauncherTargets,id)) &&
+      new Set(data.app_ids).size===data.app_ids.length &&
+      data.app_ids.every(id=>data.available_ids.includes(id)) &&
+      new Set(data.collapsed_ids).size===data.collapsed_ids.length &&
+      data.collapsed_ids.every(id=>data.app_ids.includes(id));
+  }
+  async function loadPlatformLauncher(){
+    if(typeof viewEpoch!=='number'||typeof currentPersonId!=='string')return;
+    const seq=++platformLauncherRequest,epoch=viewEpoch,person=currentPersonId;
+    platformLauncherData=null;platformLauncherBusy=false;
+    el('platform-launcher-panel').hidden=true;
+    el('platform-launcher-list').replaceChildren();
+    if(!person||document.hidden)return;
+    try{
+      const data=await api('platform/launcher');
+      if(seq!==platformLauncherRequest||epoch!==viewEpoch||person!==currentPersonId||
+         document.hidden||el('workspace').hidden)return;
+      if(!validPlatformLauncherResponse(data))throw Error('Geçersiz platform başlatıcısı');
+      platformLauncherData=data;el('platform-launcher-panel').hidden=false;
+      el('platform-launcher-status').textContent='Yalnız bu platform yöneticisi için kayıtlı düzen.';
+      renderPlatformLauncher();
+    }catch{
+      if(seq!==platformLauncherRequest||epoch!==viewEpoch||person!==currentPersonId)return;
+      platformLauncherData=null;el('platform-launcher-panel').hidden=true;
+      el('platform-launcher-list').replaceChildren();
+    }
+  }
+  async function savePlatformLauncher(apps,collapsed,notice){
+    const current=platformLauncherData;
+    const epoch=viewEpoch,person=currentPersonId,seq=platformLauncherRequest;
+    if(!current||platformLauncherBusy||document.hidden||el('workspace').hidden)return;
+    platformLauncherBusy=true;
+    el('platform-launcher-reset').disabled=true;
+    try{
+      const saved=await api('platform/launcher',{method:'POST',body:JSON.stringify({
+        app_ids:apps,collapsed_ids:collapsed,expected_version:current.version
+      })});
+      if(seq!==platformLauncherRequest||epoch!==viewEpoch||person!==currentPersonId||
+         document.hidden||el('workspace').hidden)return;
+      if(!validPlatformLauncherResponse(saved))throw Error('Geçersiz kayıt yanıtı');
+      platformLauncherData=saved;
+      el('platform-launcher-status').textContent=notice;
+    }catch(error){
+      if(seq!==platformLauncherRequest||epoch!==viewEpoch||person!==currentPersonId)return;
+      el('platform-launcher-status').textContent=error.uncertain
+        ?'Kayıt sonucu belirsiz. Yeniden göndermeden önce güncel düzeni okuyun.'
+        :'Düzen kaydedilemedi: '+error.message;
+    }finally{
+      if(seq===platformLauncherRequest&&epoch===viewEpoch){
+        platformLauncherBusy=false;renderPlatformLauncher();
+      }
+    }
+  }
+  function renderPlatformLauncher(){
+    const list=el('platform-launcher-list');
+    const active=document.activeElement;
+    const oldCard=active&&typeof active.closest==='function'?
+      active.closest('#platform-launcher-list > li'):null;
+    const focusApp=oldCard&&oldCard.dataset.platformApp;
+    const focusAction=active&&active.dataset&&active.dataset.platformAction;
+    list.replaceChildren();
+    const data=platformLauncherData;
+    if(!data)return;
+    el('platform-launcher-reset').disabled=platformLauncherBusy;
+    for(let idx=0;idx<data.app_ids.length;idx++){
+      const id=data.app_ids[idx],meta=platformLauncherTargets[id];
+      if(!meta)continue;
+      const card=document.createElement('li'),row=document.createElement('div');
+      card.draggable=!platformLauncherBusy;
+      card.dataset.platformApp=id;
+      card.setAttribute('aria-label',meta.label);
+      const heading=document.createElement('strong');
+      heading.textContent=meta.label;
+      row.append(heading);
+      for(const direction of [-1,1]){
+        const control=document.createElement('button');
+        control.type='button';
+        control.dataset.platformAction=direction<0?'up':'down';
+        control.textContent=direction<0?'Yukarı':'Aşağı';
+        control.setAttribute('aria-label',meta.label+' — '+control.textContent);
+        control.disabled=platformLauncherBusy||idx+direction<0||
+          idx+direction>=data.app_ids.length;
+        control.onclick=()=>{
+          const next=data.app_ids.slice(),other=idx+direction;
+          [next[idx],next[other]]=[next[other],next[idx]];
+          void savePlatformLauncher(next,data.collapsed_ids,'Sıra platform yöneticisinde kaydedildi.');
+        };
+        row.append(control);
+      }
+      const toggle=document.createElement('button');
+      toggle.type='button';
+      toggle.dataset.platformAction='toggle';
+      const hidden=data.collapsed_ids.includes(id);
+      toggle.textContent=hidden?'Bölümü aç':'Bölümü katla';
+      toggle.setAttribute('aria-expanded',String(!hidden));
+      toggle.setAttribute('aria-label',meta.label+' — '+toggle.textContent);
+      toggle.disabled=platformLauncherBusy;
+      toggle.onclick=()=>{
+        const next=hidden?data.collapsed_ids.filter(item=>item!==id):
+          [...data.collapsed_ids,id];
+        void savePlatformLauncher(data.app_ids,next,'Görünüm platform yöneticisinde kaydedildi.');
+      };
+      row.append(toggle);card.append(row);
+      const link=document.createElement('button');
+      link.type='button';link.dataset.platformAction='open';
+      link.textContent=meta.label+' bölümüne git';
+      link.hidden=hidden;link.disabled=platformLauncherBusy;
+      link.onclick=()=>{
+        if(id==='store-policy'&&el('platform-store-policy-panel')?.hidden){
+          el('platform-store-policy-open')?.click();
+        }
+        const target=document.getElementById(meta.target);
+        if(!target||target.hidden){
+          el('platform-launcher-status').textContent=
+            'Bu işlem şu anda kullanılamıyor. Güncel yetkinizi ve sayfayı yenileyin.';
+          return;
+        }
+        target.setAttribute('tabindex','-1');
+        if(typeof target.scrollIntoView==='function')target.scrollIntoView({block:'start'});
+        if(typeof target.focus==='function')target.focus();
+      };
+      card.append(link);
+      card.ondragstart=event=>{
+        if(platformLauncherBusy||!event.dataTransfer){event.preventDefault();return}
+        event.dataTransfer.setData('text/plain',id);
+        event.dataTransfer.effectAllowed='move';
+      };
+      card.ondragover=event=>{if(!platformLauncherBusy)event.preventDefault()};
+      card.ondrop=event=>{
+        event.preventDefault();
+        if(platformLauncherBusy||!event.dataTransfer)return;
+        const moving=event.dataTransfer.getData('text/plain');
+        if(!data.app_ids.includes(moving)||moving===id)return;
+        const next=data.app_ids.filter(item=>item!==moving);
+        next.splice(next.indexOf(id),0,moving);
+        void savePlatformLauncher(next,data.collapsed_ids,
+          'Sürükle-bırak sırası platform yöneticisinde kaydedildi.');
+      };
+      list.append(card);
+    }
+    if(focusApp&&focusAction){
+      const matching=Array.from(list.children).find(item=>
+        item.dataset.platformApp===focusApp);
+      const buttons=matching&&Array.from(matching.querySelectorAll('button'));
+      const intended=buttons&&buttons.find(button=>
+        button.dataset.platformAction===focusAction && !button.disabled && !button.hidden);
+      const fallback=buttons&&buttons.find(button=>
+        button.dataset.platformAction==='toggle' && !button.disabled);
+      const target=intended||fallback;
+      if(target&&typeof target.focus==='function')target.focus();
+    }
+  }
+  el('platform-launcher-reset').onclick=()=>{
+    const data=platformLauncherData;
+    if(!data||platformLauncherBusy)return;
+    void savePlatformLauncher(data.available_ids.slice(),[],
+      'Standart düzen platform yöneticisinde kaydedildi.');
   };
   async function selectOrg(id){
     // Preserve an unread first-login email link, but never a displayed old
@@ -4727,11 +4926,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(platformMailLinkToken&&!document.hidden&&
        (!platformMailLinkPreservedPerson||platformMailLinkPreservedPerson===me.person_id))
       el('platform-closing-email-link-panel').hidden=false;
-    el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshPlatformClosings();void refreshPlatformClosingReviews();void refreshStoreRenameReviews();void refreshOrganizationReviews();
+    el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshPlatformClosings();void refreshPlatformClosingReviews();void refreshStoreRenameReviews();void refreshOrganizationReviews();void loadPlatformLauncher();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
-    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;if(currentPersonId)clearPrivateClosingEmailLink();clearNotifications();clearCompanyLauncher();organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('register-details').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPersonMobile();clearOrganizationDrafts();clearPendingInvitations();el('invite-result').textContent='';
+    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;if(currentPersonId)clearPrivateClosingEmailLink();clearNotifications();clearCompanyLauncher();clearPlatformLauncher();organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('register-details').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPersonMobile();clearOrganizationDrafts();clearPendingInvitations();el('invite-result').textContent='';
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}
@@ -5095,7 +5294,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // Conceal before browser history or hidden-page restoration; pending reads
   // belong to a view epoch and cannot repopulate a concealed private workspace.
   function concealPrivateView(preserveUnopenedClosingLink=false){
-    clearNotifications();clearCompanyLauncher();
+    clearNotifications();clearCompanyLauncher();clearPlatformLauncher();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
     clearPlatformStorePolicy();
     clearPrivateClosingEmailLink(preserveUnopenedClosingLink);
