@@ -37,7 +37,7 @@ export async function verifyTwoIndependentStaffNameRightRace(input:{
   await reviewer.send("Page.bringToFront")
   const approved=await reviewer.callFunction(
     "async function(body){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+    "const r=await fetch('/platform/stores',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body});return {status:r.status,body:await r.json()}}",
     JSON.stringify({application_id,seller_id:sourceSeller}))

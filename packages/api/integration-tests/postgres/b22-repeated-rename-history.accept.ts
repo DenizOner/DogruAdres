@@ -136,7 +136,7 @@ export async function verifyRepeatedApprovedStoreRenameHistory(input:{
     const reopenTarget={action:"unsuspend",application_id:applications[0].id,seller_id:sellerId}
     const reopen=async(actor:B06Chrome)=>actor.callFunction(
       "async function(json){const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+      "const r=await fetch('/platform/stores',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:json});return {status:r.status,body:await r.json()}}",
       JSON.stringify(reopenTarget))
@@ -159,7 +159,7 @@ export async function verifyRepeatedApprovedStoreRenameHistory(input:{
       assert.equal((await reopen(reviewer)).status,409,
         "An unproven latest handle must prevent any native reopening")
       const blocked=await reviewer.callFunction(
-        "async function(id){const r=await fetch('/personal/platform/stores?page=0');"+
+        "async function(id){const r=await fetch('/platform/stores?page=0');"+
         "const b=await r.json();return {status:r.status,"+
         "row:b.suspended?.find(x=>x.seller_id===id)}}",sellerId)
       assert.equal(blocked.status,200)
@@ -177,7 +177,7 @@ export async function verifyRepeatedApprovedStoreRenameHistory(input:{
         "Restore the task-owned latest approval without deleting history")
     }
     const available=await reviewer.callFunction(
-      "async function(id){const r=await fetch('/personal/platform/stores?page=0');"+
+      "async function(id){const r=await fetch('/platform/stores?page=0');"+
       "const b=await r.json();return {status:r.status,"+
       "row:b.suspended?.find(x=>x.seller_id===id)}}",sellerId)
     assert.equal(available.status,200)

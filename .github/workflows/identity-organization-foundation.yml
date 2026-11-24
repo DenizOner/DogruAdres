@@ -609,16 +609,6 @@ jobs:
           # later, still-MANDATORY ClamAV/Chrome gates. An upstream APT mirror
           # outage must not erase the evidence for this isolated user risk.
           bun integration-tests/postgres/b22-platform-closing-email.pg16.test.ts
-      - name: Full Medusa CLI module migration on disposable PG16
-        if: github.event_name != 'workflow_dispatch'
-        working-directory: packages/api
-        timeout-minutes: 7
-        env:
-          CI: 'true'
-          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
-          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
-          PG_MFA_TEST_SCOPE: verification
-        run: bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts
       - name: Foundation native Medusa module / ORM transaction on disposable PG16
         if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api
@@ -914,6 +904,16 @@ jobs:
           path: ${{ runner.temp }}/b22-admin-smtp-evidence
           if-no-files-found: warn
           retention-days: 7
+      - name: Full Medusa CLI module migration on disposable PG16
+        if: github.event_name != 'workflow_dispatch'
+        working-directory: packages/api
+        timeout-minutes: 7
+        env:
+          CI: 'true'
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
+          PG_MFA_TEST_SCOPE: verification
+        run: bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts
       - name: B04-UI-only real Chrome and native HTTP/SQL acceptance
         if: github.event_name == 'workflow_dispatch' && inputs.scope == 'b04-ui'
         working-directory: packages/api

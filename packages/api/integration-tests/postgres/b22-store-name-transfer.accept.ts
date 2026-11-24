@@ -571,7 +571,7 @@ export async function verifyB22ExceptionalNameRight(input:{
   // The Staff Stores endpoint (different URL) must refuse the vacated right.
   const blocked=await reviewer.callFunction(
     "async function(payload){const s=await(await fetch('/personal/session')).json();"+
-    "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+    "const r=await fetch('/platform/stores',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:payload});return r.status}",
     JSON.stringify({action:"unsuspend",application_id:source.application_id,
@@ -863,13 +863,13 @@ export async function verifyAssignedRecipientUse(input:{
     const beforeIds=new Set(beforeEvents.map((r:any)=>r.id))
     const postReopen=(actor:B06Chrome)=>actor.callFunction(
       "async function(body){const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+      "const r=await fetch('/platform/stores',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body});return {status:r.status,body:await r.json()}}",
       JSON.stringify({action:"unsuspend",application_id:target.application_id,
         seller_id:target.seller_id}))
     const staffList=()=>reviewer.callFunction(
-      "async function(id){const r=await fetch('/personal/platform/stores?page=0');"+
+      "async function(id){const r=await fetch('/platform/stores?page=0');"+
       "const body=await r.json();return {status:r.status,"+
       "row:body.suspended?.find(x=>x.seller_id===id)}}",target.seller_id)
     const suspend=input.suspend

@@ -599,14 +599,14 @@ export function renderPersonalConsole(nonce: string): string {
     const draftWrite=path==='organization-applications'&&options.method==='POST';
     const platformOrgAppWrite=path==='/platform/organization-applications'&&options.method==='POST';
     const followWrite=path==='/organization/store-follows'&&options.method==='POST';
-    const policyWrite=path==='platform/store-application-policy'&&options.method==='POST';
+    const policyWrite=(path==='/platform/store-application-policy'||path==='platform/store-application-policy')&&options.method==='POST';
     const storeApplicationWrite=path==='/organization/store-applications'&&options.method==='POST';
     const renameWrite=path==='/organization/store-rename-requests'&&options.method==='POST';
     const ownerPauseWrite=path==='/organization/store-owner-pause'&&options.method==='POST';
     const grantWrite=path==='/organization/store-draft-permissions'&&options.method==='POST';
-    const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
-    const closingWrite=['/organization/store-owner-closing','/organization/store-platform-closing','/organization/store-platform-closing-final-review','platform/store-closings','platform/store-closing-reviews','/organization/store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
-    const write=groupWrite||draftWrite||platformOrgAppWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite||ownerPauseWrite||((path==='/organization/launcher'||path==='platform/launcher')&&options.method==='POST');
+    const platformStoreWrite=(path==='/platform/stores'||path==='platform/stores')&&options.method==='POST';
+    const closingWrite=['/organization/store-owner-closing','/organization/store-platform-closing','/organization/store-platform-closing-final-review','/platform/store-closings','platform/store-closings','/platform/store-closing-reviews','platform/store-closing-reviews','/organization/store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
+    const write=groupWrite||draftWrite||platformOrgAppWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite||ownerPauseWrite||((path==='/organization/launcher'||path==='/platform/launcher'||path==='platform/launcher')&&options.method==='POST');
     let data;
     try{
       data=await r.json();
