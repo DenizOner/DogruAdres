@@ -213,7 +213,12 @@ export default function VehiclesPage() {
     setFormErrors({})
     // Return focus to the trigger button for keyboard users (WCAG 2.1 SC 2.4.3)
     setTimeout(() => {
-      triggerButtonRef.current?.focus()
+      if (triggerButtonRef.current && triggerButtonRef.current.isConnected) {
+        triggerButtonRef.current.focus()
+      } else {
+        const addBtn = document.getElementById("add-vehicle-btn")
+        addBtn?.focus()
+      }
       triggerButtonRef.current = null
     }, 0)
   }, [])
@@ -502,7 +507,7 @@ export default function VehiclesPage() {
                 if (found) setActiveOrg(found)
               }}
               className="px-3 py-1.5 border rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              aria-label={t("vehicles.changeActiveOrg")}
+              aria-label={`${t("vehicles.orgLabel")} - ${t("vehicles.changeActiveOrg")}`}
             >
               {organizations.map((org) => (
                 <option key={org.id} value={org.id}>
@@ -581,6 +586,7 @@ export default function VehiclesPage() {
         </div>
 
         <Button
+          id="add-vehicle-btn"
           variant="primary"
           onClick={(e) => openCreateModal(e)}
           disabled={!activeOrg || loadingVehicles}

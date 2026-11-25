@@ -54,7 +54,7 @@ export function Input({
 
   return (
     <div className="flex flex-col">
-      <label className="label-md">{label}</label>
+      {Boolean(label) && <label className="label-md">{label}</label>}
       <div className="relative mt-2">
         {icon && onIconClick && (
           <button
@@ -101,6 +101,7 @@ export function Input({
             type="button"
             onClick={() => setShowPassword(!showPassword)}
             className="text-ui-fg-subtle px-4 focus:outline-none transition-all duration-150 outline-none focus:text-ui-fg-base absolute right-0 top-4"
+            aria-label={showPassword ? "Hide password" : "Show password"}
             data-testid={dataTestId ? `${dataTestId}-password-button` : 'input-password-button'}
           >
             {showPassword ? <EyeMini /> : <EyeSlashMini />}
