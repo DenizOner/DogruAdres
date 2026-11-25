@@ -29,7 +29,7 @@ import {
 } from "./smtp-settings"
 import { sendSmtpEmail } from "./smtp-client"
 import { PersonalNotifications } from "./personal-notifications"
-import { PersonalNotificationPreferences } from "./notification-preferences"
+import { PersonalNotificationPreferences, queueDigestIfEligible } from "./notification-preferences"
 import { CompanyLauncherConflict, companyLauncherAvailable, companyLauncherProject, companyLauncherValidate } from "./company-launcher"
 import { PlatformLauncherConflict, platformLauncherAvailable, platformLauncherProject, platformLauncherValidate } from "./platform-launcher"
 import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedSellerIds, verifiedStoreProductEditGrant } from "./legal-store-ownership"
@@ -2092,6 +2092,14 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         [grantId,personId,input.organization_id,input.membership_id,actor.person_id,audit.id])
       await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
         values (?,?,?)`,["danot_"+randomUUID(),personId,audit.id])
+      await queueDigestIfEligible(db, {
+        person_id: personId,
+        organization_id: input.organization_id,
+        category: "store_operations",
+        event_action: audit.action,
+        audit_event_id: audit.id,
+        summary_key: "store_draft_permission",
+      })
       return {status:"active" as const,grant_id:grantId}
     }
     if(!active.length)return {status:"revoked" as const,grant_id:null}
@@ -2157,6 +2165,14 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(result.length!==1)throw new IdentityAccessDenied()
     await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
       values (?,?,?)`,["danot_"+randomUUID(),personId,audit.id])
+    await queueDigestIfEligible(db, {
+      person_id: personId,
+      organization_id: active[0].organization_id,
+      category: "store_operations",
+      event_action: audit.action,
+      audit_event_id: audit.id,
+      summary_key: "store_draft_permission",
+    })
     return {status:"revoked" as const,grant_id:grantId}
   }
 

@@ -30,6 +30,25 @@ export class PersonalNotifications {
       join da_audit_event a on a.id=n.audit_event_id
       left join da_organization o on o.id=a.organization_id
       where n.person_id=? and a.deleted_at is null and a.module='dogruadres-access'
+      and not exists (
+        select 1 from da_person_notification_preference pref
+        where pref.person_id = n.person_id
+          and (
+            (a.action in ('organization.store_application_right_enabled',
+                          'organization.store_application_right_disabled',
+                          'organization.store_application_rejected',
+                          'organization.store_reactivated',
+                          'organization.store_draft_permission_granted',
+                          'organization.store_draft_permission_revoked')
+             and (pref.preferences->'store_operations'->>'platform')::boolean = false)
+            or
+            (a.action in ('organization.membership_invited',
+                          'organization.membership_joined',
+                          'organization.membership_role_changed',
+                          'organization.membership_revoked')
+             and (pref.preferences->'organization_membership'->>'platform')::boolean = false)
+          )
+      )
       and (
         (a.action='session.locked' and a.actor_person_id=n.person_id
           and a.resource='identity-session' and a.organization_id is null
@@ -221,6 +240,25 @@ export class PersonalNotifications {
       left join da_organization o on o.id=a.organization_id
       where n.id=? and n.person_id=? and a.deleted_at is null
         and a.module='dogruadres-access'
+        and not exists (
+          select 1 from da_person_notification_preference pref
+          where pref.person_id = n.person_id
+            and (
+              (a.action in ('organization.store_application_right_enabled',
+                            'organization.store_application_right_disabled',
+                            'organization.store_application_rejected',
+                            'organization.store_reactivated',
+                            'organization.store_draft_permission_granted',
+                            'organization.store_draft_permission_revoked')
+               and (pref.preferences->'store_operations'->>'platform')::boolean = false)
+              or
+              (a.action in ('organization.membership_invited',
+                            'organization.membership_joined',
+                            'organization.membership_role_changed',
+                            'organization.membership_revoked')
+               and (pref.preferences->'organization_membership'->>'platform')::boolean = false)
+            )
+        )
         and (
           (a.action='session.locked' and a.actor_person_id=n.person_id
             and a.resource='identity-session' and a.organization_id is null

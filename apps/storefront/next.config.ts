@@ -88,6 +88,15 @@ const nextConfig: NextConfig = {
       { source: '/:locale/user/:path*', headers: sensitiveRouteHeaders },
     ];
   },
+  async rewrites() {
+    const backendUrl = process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
+    return [
+      {
+        source: "/personal/:path*",
+        destination: `${backendUrl}/personal/:path*`,
+      },
+    ]
+  },
   logging: {
     fetches: {
       fullUrl: true

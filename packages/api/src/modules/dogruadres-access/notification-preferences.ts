@@ -373,3 +373,42 @@ export class PersonalNotificationPreferences {
     return { queued: true as const }
   }
 }
+
+export async function queueDigestIfEligible(
+  db: SecuritySql,
+  input: {
+    person_id: string
+    organization_id?: string | null
+    category: NotificationCategoryId
+    event_action: string
+    audit_event_id?: string | null
+    summary_key: string
+  }
+) {
+  const meta = CATEGORY_MAP.get(input.category)
+  if (!meta || meta.critical) return
+  const rows = await db.execute(
+    `select preferences from da_person_notification_preference where person_id = ?`,
+    [input.person_id]
+  )
+  if (rows.length === 0) return
+  const hydrated = hydrateStoredPreferences(rows[0].preferences)
+  if (hydrated[input.category]?.email === "daily_digest") {
+    const id = "dadig_" + randomUUID()
+    await db.execute(
+      `insert into da_notification_digest_queue
+        (id, person_id, organization_id, category, event_action, audit_event_id, summary_key)
+       values (?, ?, ?, ?, ?, ?, ?)
+       on conflict (person_id, audit_event_id) do nothing`,
+      [
+        id,
+        input.person_id,
+        input.organization_id ?? null,
+        input.category,
+        input.event_action,
+        input.audit_event_id ?? null,
+        input.summary_key,
+      ]
+    )
+  }
+}

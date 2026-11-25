@@ -220,8 +220,16 @@ export async function runNotificationDigestTick(container: MedusaContainer) {
   return { processed }
 }
 
+const MAX_DIGEST_TICKS = 40
+
 export default async function dogruadresNotificationDigestJob(container: MedusaContainer) {
-  await runNotificationDigestTick(container)
+  let totalProcessed = 0
+  for (let tick = 0; tick < MAX_DIGEST_TICKS; tick++) {
+    const result = await runNotificationDigestTick(container)
+    totalProcessed += result.processed
+    if (result.processed === 0) break
+  }
+  return { processed: totalProcessed }
 }
 
 export const config = {

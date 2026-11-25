@@ -7,6 +7,7 @@ import {
   NotificationPreferenceConflictError,
   NotificationPreferenceValidationError,
   PersonalNotificationPreferences,
+  queueDigestIfEligible,
   validatePreferenceMap,
 } from "../../../modules/dogruadres-access/notification-preferences"
 
@@ -232,5 +233,46 @@ describe("PersonalNotificationPreferences domain invariants & isolation", () => 
     expect(html).toContain('id="notification-settings-link"')
     expect(html).toContain('id="notification-preferences-section"')
     expect(html).toContain('id="notif-pref-advanced"')
+  })
+
+  it("queues digest via queueDigestIfEligible only when user preferred daily_digest", async () => {
+    const execute = jest.fn(async (sql: string) => {
+      if (sql.includes("select preferences from da_person_notification_preference")) {
+        return [
+          {
+            preferences: {
+              ...defaultNotificationPreferences(),
+              store_operations: { platform: true, email: "daily_digest", mobile: false },
+            },
+          },
+        ]
+      }
+      return []
+    })
+    await queueDigestIfEligible({ execute } as any, {
+      person_id: "daprs_a",
+      category: "store_operations",
+      event_action: "organization.store_draft_permission_granted",
+      audit_event_id: "daud_1",
+      summary_key: "draft_perm",
+    })
+    expect(execute).toHaveBeenCalledTimes(2)
+    expect(execute.mock.calls[1][0]).toContain("insert into da_notification_digest_queue")
+  })
+
+  it("renderPersonalConsole generates accessible names for all preference controls", async () => {
+    const htmlRes = {
+      setHeader: jest.fn(),
+      type: jest.fn().mockReturnThis(),
+      send: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    }
+    ;(enabled as jest.Mock).mockReturnValue(true)
+    await personalPageGET({} as any, htmlRes as any)
+    const html = htmlRes.send.mock.calls[0]?.[0] as string
+    expect(html).toContain("catLabel+' — Platform içi'")
+    expect(html).toContain("catLabel+' — E-posta'")
+    expect(html).toContain("catLabel+' — Mobil'")
   })
 })
