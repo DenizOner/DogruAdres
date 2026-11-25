@@ -54,6 +54,8 @@ function isSmtpSettings(value: unknown): value is SmtpSettings {
 
 export default function PlatformSmtpSettingsPage() {
   const { t } = useTranslation()
+  const tRef = useRef(t)
+  tRef.current = t
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -143,7 +145,7 @@ export default function PlatformSmtpSettingsPage() {
         if (res.status !== 200) {
           if (res.status === 401 || res.status === 403) {
             clearSettings()
-            setAuthError(t("smtp.authError"))
+            setAuthError(tRef.current("smtp.authError"))
             return
           }
           throw new Error("HTTP " + res.status)
@@ -169,7 +171,7 @@ export default function PlatformSmtpSettingsPage() {
       } catch {
         if (!cancelled) {
           clearSettings()
-          setLoadError(t("smtp.loadError"))
+          setLoadError(tRef.current("smtp.loadError"))
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -178,7 +180,7 @@ export default function PlatformSmtpSettingsPage() {
 
     loadSettings()
     return () => { cancelled = true }
-  }, [backendUrl, t])
+  }, [backendUrl])
 
   // Save Settings handler
   async function handleSave(e: React.FormEvent) {

@@ -68,6 +68,8 @@ const reauthenticate = "/personal"
 
 export default function PlatformMfaSettingsPage() {
   const { t } = useTranslation()
+  const tRef = useRef(t)
+  tRef.current = t
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [policy, setPolicy] = useState<PlatformRead | null>(null)
@@ -145,21 +147,21 @@ export default function PlatformMfaSettingsPage() {
         setConfirmed(verified)
         if (!verified) {
           setLocked(true)
-          setMessage(t("mfa.warnUnverifiedVersion"))
+          setMessage(tRef.current("mfa.warnUnverifiedVersion"))
           return
         }
-        setMessage(t("mfa.successVersion"))
+        setMessage(tRef.current("mfa.successVersion"))
       }
       setLocked(false)
     } catch {
       if (seq === sequence.current) {
         setLocked(true)
-        setMessage(t("mfa.errVerifyFailed"))
+        setMessage(tRef.current("mfa.errVerifyFailed"))
       }
     } finally {
       if (seq === sequence.current) setLoading(false)
     }
-  }, [t])
+  }, [])
 
   useEffect(() => {
     void refresh()

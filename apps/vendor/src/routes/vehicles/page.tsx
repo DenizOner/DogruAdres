@@ -39,6 +39,8 @@ export type { VehicleItem, OrgInfo, VehicleFormValues }
 
 export default function VehiclesPage() {
   const { t } = useTranslation()
+  const tRef = useRef(t)
+  tRef.current = t
   const [loadingOrgs, setLoadingOrgs] = useState(true)
   const [loadingVehicles, setLoadingVehicles] = useState(false)
   const [organizations, setOrganizations] = useState<OrgInfo[]>([])
@@ -92,9 +94,9 @@ export default function VehiclesPage() {
       })
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
-          setErrorMessage(t("vehicles.errorSessionExpired"))
+          setErrorMessage(tRef.current("vehicles.errorSessionExpired"))
         } else {
-          setErrorMessage(t("vehicles.errorOrgFetchFailed"))
+          setErrorMessage(tRef.current("vehicles.errorOrgFetchFailed"))
         }
         return
       }
@@ -111,11 +113,11 @@ export default function VehiclesPage() {
         setActiveOrg(orgList[0])
       }
     } catch {
-      setErrorMessage(t("vehicles.errorOrgConnection"))
+      setErrorMessage(tRef.current("vehicles.errorOrgConnection"))
     } finally {
       setLoadingOrgs(false)
     }
-  }, [t])
+  }, [])
 
   useEffect(() => {
     void fetchOrganizations()
@@ -152,12 +154,12 @@ export default function VehiclesPage() {
       if (activeOrgFetchRef.current !== orgId) return
 
       if (res.status === 403) {
-        setErrorMessage(t("vehicles.errorForbidden"))
+        setErrorMessage(tRef.current("vehicles.errorForbidden"))
         setVehicles([])
         return
       }
       if (!res.ok) {
-        setErrorMessage(t("vehicles.errorVehicleFetchFailed"))
+        setErrorMessage(tRef.current("vehicles.errorVehicleFetchFailed"))
         return
       }
       const data = await res.json()
@@ -168,14 +170,14 @@ export default function VehiclesPage() {
       const error = err as { name?: string }
       if (error?.name === "AbortError") return // Intentional cancellation — not an error
       if (activeOrgFetchRef.current === orgId) {
-        setErrorMessage(t("vehicles.errorVehicleConnection"))
+        setErrorMessage(tRef.current("vehicles.errorVehicleConnection"))
       }
     } finally {
       if (activeOrgFetchRef.current === orgId) {
         setLoadingVehicles(false)
       }
     }
-  }, [t])
+  }, [])
 
   useEffect(() => {
     if (activeOrg) {
