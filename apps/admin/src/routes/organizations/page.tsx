@@ -75,6 +75,52 @@ export default function OrganizationsPage() {
   const [modalError, setModalError] = useState<string | null>(null)
   const activePreviewAppId = useRef<string | null>(null)
   const previewSeq = useRef(0)
+  const modalRef = useRef<HTMLDivElement | null>(null)
+  const triggerRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    if (selectedApp) {
+      triggerRef.current = document.activeElement as HTMLElement
+      const timer = setTimeout(() => {
+        modalRef.current?.focus()
+      }, 30)
+      return () => clearTimeout(timer)
+    } else {
+      triggerRef.current?.focus()
+    }
+  }, [selectedApp])
+
+  const handleModalKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      if (!inFlight) {
+        e.preventDefault()
+        closeReviewModal()
+      }
+      return
+    }
+
+    if (e.key === "Tab" && modalRef.current) {
+      const focusable = modalRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+      if (focusable.length === 0) return
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+
+      if (e.shiftKey) {
+        if (document.activeElement === first || document.activeElement === modalRef.current) {
+          e.preventDefault()
+          last.focus()
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
+    }
+  }
 
   const activeSeq = useRef(0)
 
@@ -474,13 +520,13 @@ export default function OrganizationsPage() {
       {/* Review & Decision Modal */}
       {selectedApp && (
         <div
-          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 overflow-y-auto"
+          ref={modalRef}
+          tabIndex={-1}
+          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 overflow-y-auto outline-none"
           role="dialog"
           aria-modal="true"
           aria-labelledby="review-modal-title"
-          onKeyDown={(e) => {
-            if (e.key === "Escape" && !inFlight) closeReviewModal()
-          }}
+          onKeyDown={handleModalKeyDown}
         >
           <div className="bg-ui-bg-base border border-ui-border-base rounded-lg max-w-3xl w-full p-6 shadow-xl space-y-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-ui-border-base pb-4">

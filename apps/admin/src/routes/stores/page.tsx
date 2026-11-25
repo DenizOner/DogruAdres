@@ -154,6 +154,53 @@ export default function StoresPage() {
     setSelectedClosingSellerId("")
   }
 
+  const reasonModalRef = useRef<HTMLDivElement | null>(null)
+  const reasonTriggerRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    if (reasonModal) {
+      reasonTriggerRef.current = document.activeElement as HTMLElement
+      const timer = setTimeout(() => {
+        reasonModalRef.current?.focus()
+      }, 30)
+      return () => clearTimeout(timer)
+    } else {
+      reasonTriggerRef.current?.focus()
+    }
+  }, [reasonModal])
+
+  const handleReasonModalKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      if (!inFlight) {
+        e.preventDefault()
+        closeReasonModal()
+      }
+      return
+    }
+
+    if (e.key === "Tab" && reasonModalRef.current) {
+      const focusable = reasonModalRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+      if (focusable.length === 0) return
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+
+      if (e.shiftKey) {
+        if (document.activeElement === first || document.activeElement === reasonModalRef.current) {
+          e.preventDefault()
+          last.focus()
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
+    }
+  }
+
   // Independent sequence refs per source to avoid cross-tab loading lockups
   const storesSeq = useRef(0)
   const renamesSeq = useRef(0)
@@ -1021,13 +1068,13 @@ export default function StoresPage() {
       {/* Generic Reason & Confirmation Modal */}
       {reasonModal && (
         <div
-          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+          ref={reasonModalRef}
+          tabIndex={-1}
+          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 outline-none"
           role="dialog"
           aria-modal="true"
           aria-labelledby="reason-modal-title"
-          onKeyDown={(e) => {
-            if (e.key === "Escape" && !inFlight) closeReasonModal()
-          }}
+          onKeyDown={handleReasonModalKeyDown}
         >
           <div className="bg-ui-bg-base border border-ui-border-base rounded-lg max-w-lg w-full p-6 shadow-xl space-y-4">
             <div className="flex items-center gap-2 border-b border-ui-border-base pb-3">
