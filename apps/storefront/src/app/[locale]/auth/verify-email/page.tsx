@@ -353,7 +353,7 @@ export default function VerifyEmailPage() {
               >
                 {state === "submitting" ? (
                   <span role="status" aria-live="polite" className="flex items-center justify-center gap-2">
-                    <div aria-hidden="true" className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span aria-hidden="true" className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin inline-block" />
                     <span>{t.verifyingBtn}</span>
                   </span>
                 ) : (

@@ -54,7 +54,11 @@ export function Input({
 
   return (
     <div className="flex flex-col">
-      {Boolean(label) && <label className="label-md">{label}</label>}
+      {Boolean(label) && (
+        <label htmlFor={props.id} className="label-md">
+          {label}
+        </label>
+      )}
       <div className="relative mt-2">
         {icon && onIconClick && (
           <button
@@ -75,8 +79,8 @@ export function Input({
 
         <input
           className={cn(
-            "w-full px-[16px] py-[12px] border rounded-sm bg-component-secondary focus:border-primary focus:outline-none focus:ring-0",
-            error && "border-negative focus:border-negative",
+            "w-full px-[16px] py-[12px] border rounded-sm bg-component-secondary focus:border-action focus:outline-none focus:ring-2 focus:ring-action/20",
+            error && "border-negative focus:border-negative focus:ring-negative/20",
             props.disabled && "bg-disabled cursor-not-allowed",
             paddingY,
             className
@@ -100,8 +104,8 @@ export function Input({
           <button
             type="button"
             onClick={() => setShowPassword(!showPassword)}
-            className="text-ui-fg-subtle px-4 focus:outline-none transition-all duration-150 outline-none focus:text-ui-fg-base absolute right-0 top-4"
-            aria-label={showPassword ? "Hide password" : "Show password"}
+            className="text-ui-fg-subtle px-4 rounded-sm transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action focus:text-ui-fg-base absolute right-0 top-4"
+            aria-label={showPassword ? "Şifreyi gizle / Hide password" : "Şifreyi göster / Show password"}
             data-testid={dataTestId ? `${dataTestId}-password-button` : 'input-password-button'}
           >
             {showPassword ? <EyeMini /> : <EyeSlashMini />}
