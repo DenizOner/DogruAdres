@@ -74,19 +74,22 @@ export function renderPersonalConsole(nonce: string): string {
   .da-invitation-btn{min-height:2.75rem;padding:.625rem 1.25rem;background:var(--inv-btn-bg);color:#fff;border:none;border-radius:.375rem;font-weight:600;cursor:pointer;font:inherit}
   .da-invitation-btn:hover:not(:disabled){background:#0a52a3}
   .da-invitation-btn:focus-visible{outline:3px solid var(--focus-ring);outline-offset:var(--focus-offset)}
+  .da-skip-link{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden}
+  .da-skip-link:focus{position:fixed;left:1rem;top:1rem;width:auto;height:auto;padding:.65rem 1rem;background:#0e66c2;color:#fff;font-weight:600;border-radius:.5rem;z-index:100;text-decoration:none}
   @media(max-width:700px){body{padding:0 .75rem 2rem}#personal-header{margin-top:1.5rem}#workspace{grid-template-columns:minmax(0,1fr)}}
   @media(max-width:320px){body{padding:0 .5rem 2rem}}
   @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto;transition:none!important;animation:none!important}}
   </style>
+  <a class="da-skip-link" href="#main-content">Ana içeriğe geç</a>
   <header id="personal-header"><h1>DoğruAdres</h1><div><button id="notification-bell" type="button" aria-expanded="false" aria-controls="notification-panel" hidden><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg> Bildirimler <span id="notification-count"></span></button> <button id="session-lock" type="button" hidden>Oturumu kilitle</button></div></header>
   <section id="notification-panel" aria-labelledby="notification-heading" hidden>
-    <h2 id="notification-heading">Bildirimler</h2><p>Kişisel hesabınıza ait oturum bildirimleri</p>
+    <h2 id="notification-heading" tabindex="-1">Bildirimler</h2><p>Kişisel hesabınıza ait oturum bildirimleri</p>
     <p id="notification-status" role="status" aria-live="polite"></p>
     <ul id="notification-list"></ul>
     <button id="notification-refresh" type="button">Bildirimleri yenile</button>
     <button id="notification-next" type="button" hidden>Sonraki bildirimler</button>
     <button id="notification-close" type="button">Bildirimleri kapat</button>
-  </section><p>Kişisel çalışma alanı</p><p id="status" role="status" aria-live="polite"></p>
+  </section><main id="main-content" tabindex="-1"><p>Kişisel çalışma alanı</p><p id="status" role="status" aria-live="polite"></p>
   <section id="invitation-section" class="da-invitation-section" hidden>
     <h2>Kuruluş Üyelik Daveti</h2>
     <div id="invitation-mismatch-banner" class="da-mismatch-banner" hidden role="alert">
@@ -583,7 +586,7 @@ export function renderPersonalConsole(nonce: string): string {
   <div id="bindings"></div>
   <form id="link-account"><label>Bağlanacak hesap türü<select name="actor_type"><option>member</option><option>customer</option></select></label><label>İkincil hesap e-postası<input name="email" type="email" autocomplete="off" required></label><label>İkincil hesap parolası<input name="password" type="password" autocomplete="off" required></label><button>İkincil hesabı doğrula</button></form>
   <form id="link-confirm" hidden><p>İki hesap sahipliği sunucuda doğrulanır; kuruluş veya platform yetkisi verilmez.</p><label>İkincil hesap TOTP kodu<input name="code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code"></label><button>Hesap bağlantısını tamamla</button></form>
-  <button id="logout">Bu cihazdan çık</button><button id="logout-all">Tüm cihazlardan çık</button></section>
+  <button id="logout">Bu cihazdan çık</button><button id="logout-all">Tüm cihazlardan çık</button></section></main>
   <script nonce="${nonce}">
   let viewEpoch=0,loadedScope='',observing=false,selectedStoreOwner=false;
   let csrf=''; const el=id=>document.getElementById(id); const status=t=>el('status').textContent=t;
@@ -1410,7 +1413,7 @@ export function renderPersonalConsole(nonce: string): string {
   function closeNotifications(){el('notification-panel').hidden=true;el('notification-bell').setAttribute('aria-expanded','false');el('notification-bell').focus()}
   el('notification-bell').onclick=()=>{
     if(!el('notification-panel').hidden){closeNotifications();return}
-    el('notification-panel').hidden=false;el('notification-bell').setAttribute('aria-expanded','true');void notifications();
+    el('notification-panel').hidden=false;el('notification-bell').setAttribute('aria-expanded','true');el('notification-heading').focus();void notifications();
   };
   el('notification-refresh').onclick=()=>notifications();
   el('notification-next').onclick=()=>{if(notificationNext!==null)void notifications(notificationNext)};

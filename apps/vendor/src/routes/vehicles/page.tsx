@@ -76,6 +76,11 @@ export default function VehiclesPage() {
 
   const modalRef = useRef<HTMLDivElement>(null)
   const firstInputRef = useRef<HTMLInputElement>(null)
+  const vinInputRef = useRef<HTMLInputElement>(null)
+  const makeInputRef = useRef<HTMLInputElement>(null)
+  const modelInputRef = useRef<HTMLInputElement>(null)
+  const yearInputRef = useRef<HTMLInputElement>(null)
+  const labelInputRef = useRef<HTMLInputElement>(null)
   const cancelDeleteRef = useRef<HTMLButtonElement>(null)
   const triggerButtonRef = useRef<HTMLElement | null>(null)
   const activeOrgFetchRef = useRef<string>("")
@@ -245,16 +250,23 @@ export default function VehiclesPage() {
 
         const first = focusableEls[0]
         const last = focusableEls[focusableEls.length - 1]
+        const active = document.activeElement
+
+        if (!container.contains(active)) {
+          e.preventDefault()
+          ;(e.shiftKey ? last : first).focus()
+          return
+        }
 
         if (e.shiftKey) {
           // Shift+Tab: wrap backward from first to last
-          if (document.activeElement === first) {
+          if (active === first) {
             e.preventDefault()
             last.focus()
           }
         } else {
           // Tab: wrap forward from last to first
-          if (document.activeElement === last) {
+          if (active === last) {
             e.preventDefault()
             first.focus()
           }
@@ -306,6 +318,12 @@ export default function VehiclesPage() {
     const errors = validateVehicleForm(formValues, t)
     if (Object.keys(errors).length > 0) {
       setFormErrors(errors)
+      if (errors.plate) firstInputRef.current?.focus()
+      else if (errors.vin) vinInputRef.current?.focus()
+      else if (errors.make) makeInputRef.current?.focus()
+      else if (errors.model) modelInputRef.current?.focus()
+      else if (errors.model_year) yearInputRef.current?.focus()
+      else if (errors.label) labelInputRef.current?.focus()
       return
     }
 
@@ -457,6 +475,7 @@ export default function VehiclesPage() {
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto p-4 md:p-6 pb-20">
+      <div className="space-y-6" aria-hidden={modalMode !== "none"}>
       {/* Header section */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b pb-4">
         <div>
@@ -610,22 +629,22 @@ export default function VehiclesPage() {
                           {vehicle.plate}
                         </span>
                       ) : (
-                        <span className="text-gray-400 italic">{t("vehicles.notSpecified")}</span>
+                        <span className="text-gray-600 italic">{t("vehicles.notSpecified")}</span>
                       )}
                     </td>
                     <td className="p-3 font-mono text-xs text-gray-700">
-                      {vehicle.vin || <span className="text-gray-400 italic">{t("vehicles.notSpecified")}</span>}
+                      {vehicle.vin || <span className="text-gray-600 italic">{t("vehicles.notSpecified")}</span>}
                     </td>
                     <td className="p-3 text-gray-800">
                       {[vehicle.make, vehicle.model, vehicle.model_year].filter(Boolean).join(" ") || (
-                        <span className="text-gray-400 italic">{t("vehicles.noDetails")}</span>
+                        <span className="text-gray-600 italic">{t("vehicles.noDetails")}</span>
                       )}
                     </td>
                     <td className="p-3 text-gray-800">
                       {vehicle.label ? (
                         <span className="text-gray-700">{vehicle.label}</span>
                       ) : (
-                        <span className="text-gray-400 italic">-</span>
+                        <span className="text-gray-600 italic">-</span>
                       )}
                     </td>
                     <td className="p-3 text-gray-500 text-xs">
@@ -672,11 +691,12 @@ export default function VehiclesPage() {
 
       {/* Total count footer */}
       {!loadingVehicles && vehicles.length > 0 && (
-        <div className="text-xs text-gray-500 text-right">
+        <div className="text-xs text-gray-600 text-right">
           {t("vehicles.totalCount", { count: vehicles.length })}{" "}
           {searchQuery && t("vehicles.filteredCount", { count: filteredVehicles.length })}
         </div>
       )}
+      </div>
 
       {/* Accessible Create / Edit Modal Dialog */}
       {(modalMode === "create" || modalMode === "edit") && (
@@ -688,16 +708,23 @@ export default function VehiclesPage() {
         >
           <div
             ref={modalRef}
+            tabIndex={-1}
             className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 space-y-4"
           >
             <div className="border-b pb-3">
               <Heading level="h2" id="modal-vehicle-title" className="text-lg font-bold text-gray-900">
                 {modalMode === "create" ? t("vehicles.modalCreateTitle") : t("vehicles.modalEditTitle")}
               </Heading>
-              <Text className="text-xs text-gray-500 mt-1">
+              <Text className="text-xs text-gray-600 mt-1">
                 {t("vehicles.modalDescription")}
               </Text>
             </div>
+
+            {errorMessage && (
+              <Alert variant="error" role="alert" aria-live="assertive">
+                {errorMessage}
+              </Alert>
+            )}
 
             <form onSubmit={handleSubmitForm} className="space-y-4" noValidate>
               {/* Plaka Input */}
@@ -736,6 +763,7 @@ export default function VehiclesPage() {
                   {t("vehicles.vinLabel")}
                 </Label>
                 <Input
+                  ref={vinInputRef}
                   id="vehicle-vin"
                   type="text"
                   value={formValues.vin}
@@ -766,16 +794,19 @@ export default function VehiclesPage() {
                     {t("vehicles.makeLabel")}
                   </Label>
                   <Input
+                    ref={makeInputRef}
                     id="vehicle-make"
                     type="text"
                     value={formValues.make}
                     onChange={(e) => setFormValues({ ...formValues, make: e.target.value })}
                     placeholder={t("vehicles.makePlaceholder")}
+                    aria-invalid={!!formErrors.make}
+                    aria-describedby={formErrors.make ? "vehicle-make-error" : undefined}
                     maxLength={100}
                     className="w-full"
                   />
                   {formErrors.make && (
-                    <p role="alert" className="text-xs text-red-600">
+                    <p id="vehicle-make-error" role="alert" className="text-xs text-red-600">
                       {formErrors.make}
                     </p>
                   )}
@@ -786,16 +817,19 @@ export default function VehiclesPage() {
                     {t("vehicles.modelLabel")}
                   </Label>
                   <Input
+                    ref={modelInputRef}
                     id="vehicle-model"
                     type="text"
                     value={formValues.model}
                     onChange={(e) => setFormValues({ ...formValues, model: e.target.value })}
                     placeholder={t("vehicles.modelPlaceholder")}
+                    aria-invalid={!!formErrors.model}
+                    aria-describedby={formErrors.model ? "vehicle-model-error" : undefined}
                     maxLength={100}
                     className="w-full"
                   />
                   {formErrors.model && (
-                    <p role="alert" className="text-xs text-red-600">
+                    <p id="vehicle-model-error" role="alert" className="text-xs text-red-600">
                       {formErrors.model}
                     </p>
                   )}
@@ -809,6 +843,7 @@ export default function VehiclesPage() {
                     {t("vehicles.yearLabel")}
                   </Label>
                   <Input
+                    ref={yearInputRef}
                     id="vehicle-year"
                     type="number"
                     min={1886}
@@ -819,10 +854,12 @@ export default function VehiclesPage() {
                       if (formErrors.model_year) setFormErrors({ ...formErrors, model_year: "" })
                     }}
                     placeholder={t("vehicles.yearPlaceholder")}
+                    aria-invalid={!!formErrors.model_year}
+                    aria-describedby={formErrors.model_year ? "vehicle-year-error" : undefined}
                     className="w-full"
                   />
                   {formErrors.model_year && (
-                    <p role="alert" className="text-xs text-red-600">
+                    <p id="vehicle-year-error" role="alert" className="text-xs text-red-600">
                       {formErrors.model_year}
                     </p>
                   )}
@@ -833,16 +870,19 @@ export default function VehiclesPage() {
                     {t("vehicles.noteLabel")}
                   </Label>
                   <Input
+                    ref={labelInputRef}
                     id="vehicle-label"
                     type="text"
                     value={formValues.label}
                     onChange={(e) => setFormValues({ ...formValues, label: e.target.value })}
                     placeholder={t("vehicles.notePlaceholder")}
+                    aria-invalid={!!formErrors.label}
+                    aria-describedby={formErrors.label ? "vehicle-label-error" : undefined}
                     maxLength={100}
                     className="w-full"
                   />
                   {formErrors.label && (
-                    <p role="alert" className="text-xs text-red-600">
+                    <p id="vehicle-label-error" role="alert" className="text-xs text-red-600">
                       {formErrors.label}
                     </p>
                   )}
@@ -882,13 +922,19 @@ export default function VehiclesPage() {
           aria-labelledby="modal-delete-title"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
         >
-          <div ref={modalRef} className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4">
+          <div ref={modalRef} tabIndex={-1} className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4">
             <div className="flex items-center gap-3 text-red-600">
               <Trash className="w-6 h-6" aria-hidden="true" />
               <Heading level="h2" id="modal-delete-title" className="text-lg font-bold text-gray-900">
                 {t("vehicles.modalDeleteTitle")}
               </Heading>
             </div>
+
+            {errorMessage && (
+              <Alert variant="error" role="alert" aria-live="assertive">
+                {errorMessage}
+              </Alert>
+            )}
 
             <Text className="text-sm text-gray-700">
               {t("vehicles.deletePrompt", { identifier: selectedVehicle.plate || selectedVehicle.vin })}

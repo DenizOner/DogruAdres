@@ -86,15 +86,10 @@ const Form = () => {
 
           <Link
             href="/user"
-            className="flex"
+            className="button-text button-tonal flex w-full items-center justify-center rounded-sm py-2.5 text-center uppercase"
             data-testid="forgot-password-back-to-login-link"
           >
-            <Button
-              variant="tonal"
-              className="flex w-full justify-center uppercase"
-            >
-              Back to log in
-            </Button>
+            Back to log in
           </Link>
         </div>
       </form>

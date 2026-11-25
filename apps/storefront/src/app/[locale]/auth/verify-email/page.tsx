@@ -281,8 +281,9 @@ export default function VerifyEmailPage() {
             <button
               key={loc}
               type="button"
+              aria-pressed={currentLocale === loc}
               onClick={() => setCurrentLocale(loc)}
-              className={`px-2.5 py-1 rounded-md uppercase transition-all ${
+              className={`px-2.5 py-1 rounded-md uppercase transition-all focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#0e66c2] ${
                 currentLocale === loc
                   ? "bg-white dark:bg-slate-700 text-[#0e66c2] dark:text-blue-400 font-bold shadow-xs"
                   : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
@@ -351,7 +352,7 @@ export default function VerifyEmailPage() {
               >
                 {state === "submitting" ? (
                   <>
-                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <div aria-hidden="true" className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                     <span>{t.verifyingBtn}</span>
                   </>
                 ) : (
@@ -409,7 +410,7 @@ export default function VerifyEmailPage() {
 
               <Link
                 href="/login"
-                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold text-base shadow-sm transition-all flex items-center justify-center"
+                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold text-base shadow-sm focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[#0e66c2] transition-all flex items-center justify-center"
               >
                 {t.requestNewBtn}
               </Link>
@@ -437,7 +438,7 @@ export default function VerifyEmailPage() {
 
               <Link
                 href="/login"
-                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold text-base shadow-sm transition-all flex items-center justify-center"
+                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold text-base shadow-sm focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[#0e66c2] transition-all flex items-center justify-center"
               >
                 {t.loginBtn}
               </Link>
@@ -465,7 +466,7 @@ export default function VerifyEmailPage() {
 
               <Link
                 href="/"
-                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-semibold text-base shadow-sm transition-all flex items-center justify-center"
+                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-semibold text-base shadow-sm focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-slate-800 transition-all flex items-center justify-center"
               >
                 {t.homeBtn}
               </Link>
@@ -474,7 +475,7 @@ export default function VerifyEmailPage() {
         </div>
 
         {/* Card Footer */}
-        <div className="px-8 py-4 bg-slate-50 dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-800 text-center text-xs text-slate-500 dark:text-slate-400">
+        <div className="px-8 py-4 bg-slate-50 dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-800 text-center text-xs text-slate-600 dark:text-slate-400">
           <span>{t.supportText} </span>
           <a href="mailto:destek@dogruadres.net" className="text-[#0e66c2] dark:text-blue-400 hover:underline font-medium">
             destek@dogruadres.net
@@ -483,7 +484,7 @@ export default function VerifyEmailPage() {
       </main>
 
       {/* Footer */}
-      <footer className="max-w-md w-full mx-auto text-center pt-8 text-xs text-slate-400 dark:text-slate-600">
+      <footer className="max-w-md w-full mx-auto text-center pt-8 text-xs text-slate-600 dark:text-slate-400">
         <p>© 2026 DoğruAdres. All rights reserved.</p>
       </footer>
     </div>
