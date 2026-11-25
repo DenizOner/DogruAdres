@@ -8,6 +8,7 @@ import { deleteVehicleWorkflow } from "../../../../../../workflows/dogruadres-ve
 import type { UpdateVehicleBody } from "../../../../validators"
 
 export const GET = async (req: AuthenticatedMedusaRequest, res: MedusaResponse) => {
+  res.setHeader("Cache-Control", "no-store")
   const { organizationId } = await requireOrganizationAccess(req, req.params.id, "vehicle.read")
   const vehicleService = req.scope.resolve<VehicleModuleService>(DOGRUADRES_VEHICLE_MODULE)
   const vehicle = await vehicleService.getLiveVehicle(organizationId, req.params.vehicle_id)
@@ -33,6 +34,7 @@ export const GET = async (req: AuthenticatedMedusaRequest, res: MedusaResponse) 
 }
 
 export const PATCH = async (req: AuthenticatedMedusaRequest<UpdateVehicleBody>, res: MedusaResponse) => {
+  res.setHeader("Cache-Control", "no-store")
   const access = await requireOrganizationAccess(req, req.params.id, "vehicle.update")
   const body = req.validatedBody || req.body
   try {
@@ -87,6 +89,7 @@ export const PATCH = async (req: AuthenticatedMedusaRequest<UpdateVehicleBody>, 
 }
 
 export const DELETE = async (req: AuthenticatedMedusaRequest, res: MedusaResponse) => {
+  res.setHeader("Cache-Control", "no-store")
   const access = await requireOrganizationAccess(req, req.params.id, "vehicle.delete")
   try {
     await deleteVehicleWorkflow(req.scope).run({

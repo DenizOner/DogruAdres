@@ -12,7 +12,7 @@ import {
   UseFormReturn,
 } from "react-hook-form"
 import { ProfilePasswordFormData, profilePasswordSchema } from "./schema"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { updateCustomerPassword } from "@/lib/data/customer"
 import { Heading, toast } from "@medusajs/ui"
 import Link from "next/link"
@@ -20,6 +20,17 @@ import { usePathname } from "next/navigation"
 import { PasswordValidator } from "@/components/cells/PasswordValidator/PasswordValidator"
 
 export const ProfilePasswordForm = ({ token }: { token?: string }) => {
+  const [retainedToken] = useState(() => token || "")
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const url = new URL(window.location.href)
+    if (url.searchParams.has("token")) {
+      url.searchParams.delete("token")
+      window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash)
+    }
+  }, [])
+
   const form = useForm<ProfilePasswordFormData>({
     resolver: zodResolver(profilePasswordSchema),
     defaultValues: {
@@ -30,7 +41,7 @@ export const ProfilePasswordForm = ({ token }: { token?: string }) => {
 
   return (
     <FormProvider {...form}>
-      <Form form={form} token={token} />
+      <Form form={form} token={retainedToken} />
     </FormProvider>
   )
 }

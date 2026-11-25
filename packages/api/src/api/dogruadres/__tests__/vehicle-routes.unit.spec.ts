@@ -199,6 +199,7 @@ describe("Vehicle HTTP API Routes and Policy Enforcement", () => {
     it("STRICTLY DENIES active Member from deleting vehicle (V-03 / DA-AUTO-006)", async () => {
       const { req, res } = mockReq({ orgId: "daorg_abc", vehicleId: "daveh_1", role: "member" })
       await expect(deleteVehicle(req, res)).rejects.toThrow(MedusaError)
+      expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store")
     })
   })
 })

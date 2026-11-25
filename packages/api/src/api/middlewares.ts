@@ -12,7 +12,8 @@ import {
 
 export default defineMiddlewares({
   errorHandler: (error,req,res,next) => {
-    if(req.path.toLowerCase().startsWith("/personal")) {
+    const p = req.path.toLowerCase()
+    if(p==="/personal"||p.startsWith("/personal/")||p==="/organization"||p.startsWith("/organization/")||p==="/platform"||p.startsWith("/platform/")) {
       res.setHeader("Cache-Control","no-store")
       if(error?.status===413 || error?.type==="entity.too.large") {
         res.status(413).json({message:"Payload too large"})

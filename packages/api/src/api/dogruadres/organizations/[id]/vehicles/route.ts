@@ -7,6 +7,7 @@ import { createVehicleWorkflow } from "../../../../../workflows/dogruadres-vehic
 import type { CreateVehicleBody } from "../../../validators"
 
 export const GET = async (req: AuthenticatedMedusaRequest, res: MedusaResponse) => {
+  res.setHeader("Cache-Control", "no-store")
   const { organizationId } = await requireOrganizationAccess(req, req.params.id, "vehicle.read")
   const vehicleService = req.scope.resolve<VehicleModuleService>(DOGRUADRES_VEHICLE_MODULE)
   const vehicles = await vehicleService.listLiveVehicles(organizationId)
@@ -29,6 +30,7 @@ export const GET = async (req: AuthenticatedMedusaRequest, res: MedusaResponse) 
 }
 
 export const POST = async (req: AuthenticatedMedusaRequest<CreateVehicleBody>, res: MedusaResponse) => {
+  res.setHeader("Cache-Control", "no-store")
   const access = await requireOrganizationAccess(req, req.params.id, "vehicle.create")
   const body = req.validatedBody || req.body
   try {
