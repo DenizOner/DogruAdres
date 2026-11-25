@@ -1,4 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types";
+import { randomBytes } from "node:crypto";
 import {
   ContainerRegistrationKeys,
   Modules,
@@ -232,7 +233,28 @@ const updateStoreCurrencies = createWorkflow(
   }
 );
 
+export function assertSafeSeedEnvironment(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.NODE_ENV === "production" || env.MEDUSA_ENVIRONMENT === "production") {
+    throw new Error("DEMO SEED REFUSED: Demo seed script must never run in production");
+  }
+}
+
+export function resolveDemoSellerPassword(env: NodeJS.ProcessEnv = process.env): string {
+  assertSafeSeedEnvironment(env);
+  if (env.DEMO_SELLER_PASSWORD && env.DEMO_SELLER_PASSWORD.trim().length >= 8) {
+    return env.DEMO_SELLER_PASSWORD.trim();
+  }
+  if (env.NODE_ENV === "test") {
+    return "DemoSellerTestPassword2026!";
+  }
+  if (env.NODE_ENV === "development") {
+    return "DevSellerPassword2026!";
+  }
+  return randomBytes(16).toString("base64url");
+}
+
 export default async function seedDemoData({ container }: ExecArgs) {
+  assertSafeSeedEnvironment();
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
   const link = container.resolve(ContainerRegistrationKeys.LINK);
   const query = container.resolve(ContainerRegistrationKeys.QUERY);
@@ -595,13 +617,12 @@ export default async function seedDemoData({ container }: ExecArgs) {
 
   logger.info("Finished seeding global product attributes.");
 
-  const SELLER_PASSWORD = "supersecret";
+  const SELLER_PASSWORD = resolveDemoSellerPassword();
   const SELLER_CONFIGS = [
     { name: "Sole Society", email: "seller@mercur.dev", first_name: "Demo", last_name: "Seller", city: "Berlin", country_code: "DE", address_1: "Alexanderplatz 1" },
     { name: "Kickz Corner", email: "kickz@mercur.dev", first_name: "Kai", last_name: "Corner", city: "Amsterdam", country_code: "NL", address_1: "Damrak 12" },
     { name: "Trailhead Outfitters", email: "trailhead@mercur.dev", first_name: "Tara", last_name: "Head", city: "Munich", country_code: "DE", address_1: "Marienplatz 3" },
   ];
-  const PRIMARY_SELLER_EMAIL = SELLER_CONFIGS[0].email;
 
   // DiceBear renders a crisp initials avatar per seller name; Picsum returns a
   // deterministic photo for the same seed, so re-seeding is stable.
@@ -609,20 +630,6 @@ export default async function seedDemoData({ container }: ExecArgs) {
     `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(name)}`;
   const sellerBanner = (name: string) =>
     `https://picsum.photos/seed/${toHandle(name)}/1200/320`;
-
-  const { data: existingSellers } = await query.graph({
-    entity: "seller",
-    fields: ["id"],
-    filters: { email: PRIMARY_SELLER_EMAIL },
-  });
-
-  if (existingSellers[0]) {
-    logger.info(
-      "Demo sellers already exist, skipping seller, product and offer seeding."
-    );
-    logger.info("Finished seeding.");
-    return;
-  }
 
   const authModuleService = container.resolve(Modules.AUTH);
 
@@ -657,46 +664,74 @@ export default async function seedDemoData({ container }: ExecArgs) {
   const sellers: SeededSeller[] = [];
 
   for (const [index, sellerConfig] of SELLER_CONFIGS.entries()) {
-    logger.info(`Seeding seller "${sellerConfig.name}"...`);
+    logger.info(`Checking/seeding seller "${sellerConfig.name}"...`);
 
-    let authIdentityId: string;
-    const registerResponse = await authModuleService.register("emailpass", {
-      body: { email: sellerConfig.email, password: SELLER_PASSWORD },
+    const { data: existingSellerList } = await query.graph({
+      entity: "seller",
+      fields: ["id"],
+      filters: { email: sellerConfig.email },
     });
 
-    if (registerResponse.success && registerResponse.authIdentity) {
-      authIdentityId = registerResponse.authIdentity.id;
+    let sellerId: string;
+    let memberId: string;
+
+    if (existingSellerList && existingSellerList.length > 0 && existingSellerList[0]?.id) {
+      sellerId = existingSellerList[0].id as string;
+      const { data: members } = await query.graph({
+        entity: "member",
+        fields: ["id"],
+        filters: { email: sellerConfig.email },
+      });
+      memberId = members[0]?.id as string;
+      logger.info(`Seller "${sellerConfig.name}" already exists (${sellerId}), reusing.`);
     } else {
-      const [providerIdentity] =
-        await authModuleService.listProviderIdentities({
-          entity_id: sellerConfig.email,
-          provider: "emailpass",
-        });
-      authIdentityId = providerIdentity.auth_identity_id!;
-    }
+      let authIdentityId: string;
+      const registerResponse = await authModuleService.register("emailpass", {
+        body: { email: sellerConfig.email, password: SELLER_PASSWORD },
+      });
 
-    const { result: seller } = await createSellerAccountWorkflow(
-      container
-    ).run({
-      input: {
-        auth_identity_id: authIdentityId,
-        member_email: sellerConfig.email,
-        first_name: sellerConfig.first_name,
-        last_name: sellerConfig.last_name,
-        seller: {
-          name: sellerConfig.name,
-          email: sellerConfig.email,
-          currency_code: "eur",
-          description: `${sellerConfig.name} — a demo marketplace footwear seller.`,
-          logo: sellerLogo(sellerConfig.name),
-          banner: sellerBanner(sellerConfig.name),
+      if (registerResponse.success && registerResponse.authIdentity) {
+        authIdentityId = registerResponse.authIdentity.id;
+      } else {
+        const [providerIdentity] =
+          await authModuleService.listProviderIdentities({
+            entity_id: sellerConfig.email,
+            provider: "emailpass",
+          });
+        authIdentityId = providerIdentity.auth_identity_id!;
+      }
+
+      const { result: seller } = await createSellerAccountWorkflow(
+        container
+      ).run({
+        input: {
+          auth_identity_id: authIdentityId,
+          member_email: sellerConfig.email,
+          first_name: sellerConfig.first_name,
+          last_name: sellerConfig.last_name,
+          seller: {
+            name: sellerConfig.name,
+            email: sellerConfig.email,
+            currency_code: "eur",
+            description: `${sellerConfig.name} — a demo marketplace footwear seller.`,
+            logo: sellerLogo(sellerConfig.name),
+            banner: sellerBanner(sellerConfig.name),
+          },
         },
-      },
-    });
+      });
+      sellerId = seller.id;
 
-    await approveSellerWorkflow(container).run({
-      input: { seller_id: seller.id },
-    });
+      await approveSellerWorkflow(container).run({
+        input: { seller_id: sellerId },
+      });
+
+      const { data: members } = await query.graph({
+        entity: "member",
+        fields: ["id"],
+        filters: { email: sellerConfig.email },
+      });
+      memberId = members[0].id;
+    }
 
     // Mercur 2.4.0 scopes seller offers and shipping prices to assigned
     // regions. This seed operates ONLY on its newly created DEMO sellers.
@@ -704,169 +739,210 @@ export default async function seedDemoData({ container }: ExecArgs) {
     const { data: demoRegionLinks } = await query.graph({
       entity: "region_seller",
       fields: ["seller_id", "region_id"],
-      filters: { seller_id: seller.id, region_id: region.id },
+      filters: { seller_id: sellerId, region_id: region.id },
     });
     if (demoRegionLinks.length > 1 || demoRegionLinks.some(
-      row => row.seller_id !== seller.id || row.region_id !== region.id
+      row => row.seller_id !== sellerId || row.region_id !== region.id
     )) {
       throw new Error("Demo seller has an inconsistent native region link");
     }
     if (!demoRegionLinks.length) {
       await linkSellerRegionsWorkflow(container).run({
-        input: { add: [{ seller_id: seller.id, region_id: region.id }] },
+        input: { add: [{ seller_id: sellerId, region_id: region.id }] },
       });
     }
 
-  const { data: members } = await query.graph({
-      entity: "member",
-      fields: ["id"],
-      filters: { email: sellerConfig.email },
+    const { data: existingStockLocations } = await query.graph({
+      entity: "stock_location",
+      fields: ["id", "fulfillment_sets.id"],
+      filters: { name: `${sellerConfig.name} Warehouse` },
     });
-    const memberId = members[0].id;
 
-    const { result: stockLocations } =
-      await createSellerStockLocationsWorkflow(container).run({
-        input: {
-          seller_id: seller.id,
-          locations: [
-            {
-              name: `${sellerConfig.name} Warehouse`,
-              address: {
-                city: sellerConfig.city,
-                country_code: sellerConfig.country_code,
-                address_1: sellerConfig.address_1,
+    let stockLocationId: string;
+    let fulfillmentSetId: string | undefined;
+
+    if (existingStockLocations && existingStockLocations.length > 0) {
+      stockLocationId = existingStockLocations[0].id as string;
+      fulfillmentSetId = existingStockLocations[0]?.fulfillment_sets?.[0]?.id;
+    } else {
+      const { result: stockLocations } =
+        await createSellerStockLocationsWorkflow(container).run({
+          input: {
+            seller_id: sellerId,
+            locations: [
+              {
+                name: `${sellerConfig.name} Warehouse`,
+                address: {
+                  city: sellerConfig.city,
+                  country_code: sellerConfig.country_code,
+                  address_1: sellerConfig.address_1,
+                },
               },
+            ],
+          },
+        });
+      stockLocationId = stockLocations[0].id;
+
+      try {
+        await link.create({
+          [Modules.STOCK_LOCATION]: { stock_location_id: stockLocationId },
+          [Modules.FULFILLMENT]: { fulfillment_provider_id: "manual_manual" },
+        });
+      } catch {
+        // Link may already exist on rerun
+      }
+
+      try {
+        await linkSalesChannelsToStockLocationWorkflow(container).run({
+          input: {
+            id: stockLocationId,
+            add: [defaultSalesChannel[0].id],
+          },
+        });
+      } catch {
+        // Link may already exist on rerun
+      }
+
+      if (index === 0) {
+        await updateStoresWorkflow(container).run({
+          input: {
+            selector: { id: store.id },
+            update: {
+              default_location_id: stockLocationId,
             },
-          ],
-        },
-      });
-    const stockLocation = stockLocations[0];
+          },
+        });
+      }
 
-    await link.create({
-      [Modules.STOCK_LOCATION]: { stock_location_id: stockLocation.id },
-      [Modules.FULFILLMENT]: { fulfillment_provider_id: "manual_manual" },
-    });
-
-    await linkSalesChannelsToStockLocationWorkflow(container).run({
-      input: {
-        id: stockLocation.id,
-        add: [defaultSalesChannel[0].id],
-      },
-    });
-
-    if (index === 0) {
-      await updateStoresWorkflow(container).run({
+      await createLocationFulfillmentSetWorkflow(container).run({
         input: {
-          selector: { id: store.id },
-          update: {
-            default_location_id: stockLocation.id,
+          location_id: stockLocationId,
+          fulfillment_set_data: {
+            name: `${sellerConfig.name} delivery`,
+            type: "shipping",
           },
         },
       });
+
+      const {
+        data: [locationWithSet],
+      } = await query.graph({
+        entity: "stock_location",
+        fields: ["id", "fulfillment_sets.id"],
+        filters: { id: stockLocationId },
+      });
+      fulfillmentSetId = locationWithSet?.fulfillment_sets?.[0]?.id;
     }
 
-    await createLocationFulfillmentSetWorkflow(container).run({
-      input: {
-        location_id: stockLocation.id,
-        fulfillment_set_data: {
-          name: `${sellerConfig.name} delivery`,
-          type: "shipping",
-        },
-      },
-    });
-
-    const {
-      data: [locationWithSet],
-    } = await query.graph({
-      entity: "stock_location",
-      fields: ["id", "fulfillment_sets.id"],
-      filters: { id: stockLocation.id },
-    });
-    const fulfillmentSetId = locationWithSet?.fulfillment_sets?.[0]?.id;
     if (!fulfillmentSetId) {
       throw new Error(
         `Fulfillment set was not created for seller "${sellerConfig.name}"`
       );
     }
 
-    const { result: serviceZones } = await createServiceZonesWorkflow(
-      container
-    ).run({
-      input: {
-        data: [
-          {
-            fulfillment_set_id: fulfillmentSetId,
-            name: `${sellerConfig.name} Europe`,
-            geo_zones: countries.map((country_code) => ({
-              country_code,
-              type: "country" as const,
-            })),
-          },
-        ],
-      },
+    const { data: existingServiceZones } = await query.graph({
+      entity: "service_zone",
+      fields: ["id"],
+      filters: { fulfillment_set_id: fulfillmentSetId, name: `${sellerConfig.name} Europe` },
     });
-    const serviceZoneId = serviceZones[0].id;
+
+    let serviceZoneId: string;
+    if (existingServiceZones && existingServiceZones.length > 0) {
+      serviceZoneId = existingServiceZones[0].id as string;
+    } else {
+      const { result: serviceZones } = await createServiceZonesWorkflow(
+        container
+      ).run({
+        input: {
+          data: [
+            {
+              fulfillment_set_id: fulfillmentSetId,
+              name: `${sellerConfig.name} Europe`,
+              geo_zones: countries.map((country_code) => ({
+                country_code,
+                type: "country" as const,
+              })),
+            },
+          ],
+        },
+      });
+      serviceZoneId = serviceZones[0].id;
+    }
 
     const shippingProfileId = sharedShippingProfileId;
 
-    await createSellerShippingOptionsWorkflow(container).run({
-      input: {
-        seller_id: seller.id,
-        shipping_options: [
-          {
-            name: "Standard Shipping",
-            price_type: "flat",
-            provider_id: "manual_manual",
-            service_zone_id: serviceZoneId,
-            shipping_profile_id: shippingProfileId,
-            type: {
-              label: "Standard",
-              description: "Ship in 2-3 days.",
-              code: "standard",
-            },
-            prices: [
-              { currency_code: "usd", amount: 10 },
-              { currency_code: "eur", amount: 10 },
-              { region_id: region.id, amount: 10 },
-            ],
-            rules: [
-              { attribute: "enabled_in_store", value: "true", operator: "eq" },
-              { attribute: "is_return", value: "false", operator: "eq" },
-            ],
-          },
-          {
-            name: "Express Shipping",
-            price_type: "flat",
-            provider_id: "manual_manual",
-            service_zone_id: serviceZoneId,
-            shipping_profile_id: shippingProfileId,
-            type: {
-              label: "Express",
-              description: "Ship in 24 hours.",
-              code: "express",
-            },
-            prices: [
-              { currency_code: "usd", amount: 10 },
-              { currency_code: "eur", amount: 10 },
-              { region_id: region.id, amount: 10 },
-            ],
-            rules: [
-              { attribute: "enabled_in_store", value: "true", operator: "eq" },
-              { attribute: "is_return", value: "false", operator: "eq" },
-            ],
-          },
-        ],
-      },
+    const { data: existingShippingOptions } = await query.graph({
+      entity: "shipping_option",
+      fields: ["id", "name"],
+      filters: { service_zone_id: serviceZoneId },
     });
+    const existingOptionNames = new Set((existingShippingOptions || []).map((o: any) => o.name));
+
+    const shippingOptionsToCreate: any[] = [];
+    if (!existingOptionNames.has("Standard Shipping")) {
+      shippingOptionsToCreate.push({
+        name: "Standard Shipping",
+        price_type: "flat",
+        provider_id: "manual_manual",
+        service_zone_id: serviceZoneId,
+        shipping_profile_id: shippingProfileId,
+        type: {
+          label: "Standard",
+          description: "Ship in 2-3 days.",
+          code: "standard",
+        },
+        prices: [
+          { currency_code: "usd", amount: 10 },
+          { currency_code: "eur", amount: 10 },
+          { region_id: region.id, amount: 10 },
+        ],
+        rules: [
+          { attribute: "enabled_in_store", value: "true", operator: "eq" },
+          { attribute: "is_return", value: "false", operator: "eq" },
+        ],
+      });
+    }
+    if (!existingOptionNames.has("Express Shipping")) {
+      shippingOptionsToCreate.push({
+        name: "Express Shipping",
+        price_type: "flat",
+        provider_id: "manual_manual",
+        service_zone_id: serviceZoneId,
+        shipping_profile_id: shippingProfileId,
+        type: {
+          label: "Express",
+          description: "Ship in 24 hours.",
+          code: "express",
+        },
+        prices: [
+          { currency_code: "usd", amount: 10 },
+          { currency_code: "eur", amount: 10 },
+          { region_id: region.id, amount: 10 },
+        ],
+        rules: [
+          { attribute: "enabled_in_store", value: "true", operator: "eq" },
+          { attribute: "is_return", value: "false", operator: "eq" },
+        ],
+      });
+    }
+
+    if (shippingOptionsToCreate.length > 0) {
+      await createSellerShippingOptionsWorkflow(container).run({
+        input: {
+          seller_id: sellerId,
+          shipping_options: shippingOptionsToCreate,
+        },
+      });
+    }
 
     sellers.push({
-      id: seller.id,
+      id: sellerId,
       name: sellerConfig.name,
       memberId,
-      stockLocationId: stockLocation.id,
+      stockLocationId,
       shippingProfileId,
     });
-    logger.info(`Finished seeding seller "${sellerConfig.name}".`);
+    logger.info(`Finished checking/seeding seller "${sellerConfig.name}".`);
   }
 
   const primarySeller = sellers[0];
@@ -964,13 +1040,29 @@ export default async function seedDemoData({ container }: ExecArgs) {
     };
   });
 
-  await createProductsWorkflow(container).run({
-    input: {
-      created_by: primarySeller.memberId,
-      products,
+  const { data: existingProducts } = await query.graph({
+    entity: "product",
+    fields: ["id", "handle"],
+    filters: {
+      handle: products
+        .map((product) => product.handle)
+        .filter((handle): handle is string => Boolean(handle)),
     },
   });
-  logger.info(`Finished seeding ${products.length} products.`);
+  const existingHandles = new Set((existingProducts || []).map((p: any) => p.handle));
+  const productsToCreate = products.filter((p) => !existingHandles.has(p.handle));
+
+  if (productsToCreate.length > 0) {
+    await createProductsWorkflow(container).run({
+      input: {
+        created_by: primarySeller.memberId,
+        products: productsToCreate,
+      },
+    });
+    logger.info(`Finished seeding ${productsToCreate.length} products (${products.length - productsToCreate.length} already existed).`);
+  } else {
+    logger.info(`All ${products.length} products already exist, skipping product creation.`);
+  }
 
   logger.info("Creating randomized offers across sellers...");
 
@@ -1047,10 +1139,21 @@ export default async function seedDemoData({ container }: ExecArgs) {
     }
   }
 
-  await createOffersWorkflow(container).run({ input: { offers } });
-  logger.info(
-    `Finished creating ${offers.length} offers across ${sellers.length} sellers.`
-  );
+  const { data: existingOffers } = await query.graph({
+    entity: "offer",
+    fields: ["id", "sku"],
+  });
+  const existingOfferSkus = new Set((existingOffers || []).map((o: any) => o.sku));
+  const offersToCreate = offers.filter((o) => !existingOfferSkus.has(o.sku));
+
+  if (offersToCreate.length > 0) {
+    await createOffersWorkflow(container).run({ input: { offers: offersToCreate } });
+    logger.info(
+      `Finished creating ${offersToCreate.length} offers (${offers.length - offersToCreate.length} already existed).`
+    );
+  } else {
+    logger.info(`All ${offers.length} offers already exist, skipping offer creation.`);
+  }
 
   logger.info("Finished seeding.");
 }
