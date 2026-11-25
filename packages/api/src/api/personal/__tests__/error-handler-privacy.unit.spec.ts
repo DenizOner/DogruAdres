@@ -1,5 +1,10 @@
 import middlewareConfig from "../../middlewares"
 
+const handleError = middlewareConfig.errorHandler
+if (typeof handleError !== "function") {
+  throw new Error("Expected middlewareConfig.errorHandler to be a function")
+}
+
 describe("middlewares errorHandler privacy and Cache-Control", () => {
   const makeRes = () => {
     const headers: Record<string, string> = {}
@@ -33,7 +38,7 @@ describe("middlewares errorHandler privacy and Cache-Control", () => {
     const next = jest.fn()
     const error = new Error("SELECT * FROM da_secret_table WHERE token='leak'")
 
-    middlewareConfig.errorHandler!(error, { path } as any, res, next)
+    handleError(error, { path } as any, res, next)
 
     expect(res.headers["cache-control"]).toBe("no-store")
     expect(res.statusCode).toBe(503)
@@ -52,7 +57,7 @@ describe("middlewares errorHandler privacy and Cache-Control", () => {
     ]
     for (const c of cases) {
       const res = makeRes()
-      middlewareConfig.errorHandler!(c.err, { path: "/organization/product-drafts" } as any, res, jest.fn())
+      handleError(c.err, { path: "/organization/product-drafts" } as any, res, jest.fn())
       expect(res.headers["cache-control"]).toBe("no-store")
       expect(res.statusCode).toBe(c.status)
       expect(res.body).toEqual({ message: c.message })
@@ -62,7 +67,7 @@ describe("middlewares errorHandler privacy and Cache-Control", () => {
   it("does not match unrelated prefixes like /personalized", () => {
     const res = makeRes()
     const next = jest.fn()
-    middlewareConfig.errorHandler!({ type: "unknown_x" }, { path: "/personalized" } as any, res, next)
+    handleError({ type: "unknown_x" }, { path: "/personalized" } as any, res, next)
     expect(res.headers["cache-control"]).toBeUndefined()
   })
 })
