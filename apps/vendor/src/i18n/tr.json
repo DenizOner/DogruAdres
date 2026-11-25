@@ -157,5 +157,99 @@
         "desc": "İsteğe bağlı kampanya ve tanıtım mesajları (varsayılan kapalı)."
       }
     }
+  },
+  "returns": {
+    "pageTitle": "İade ve Müşteri Talepleri Yönetimi",
+    "pageDescription": "Alıcı şirketlerden mağazanıza gelen yedek parça iade taleplerini inceleyin, onaylayın veya gerekçe belirterek yanıtlayın.",
+    "orgLabel": "Aktif İşletme",
+    "unauthorizedWarning": "İade taleplerini görüntülemek ve aksiyon almak için kişisel oturum açmalısınız.",
+    "status": {
+      "all": "Tüm Durumlar",
+      "requested": "Talep Edildi",
+      "open": "İnceleniyor",
+      "received": "Ürün Ulaştı",
+      "accepted": "Onaylandı",
+      "canceled": "Reddedildi"
+    },
+    "stats": {
+      "total": "Toplam Talep"
+    },
+    "filters": {
+      "title": "Filtreler ve Arama",
+      "reset": "Filtreleri Sıfırla",
+      "searchLabel": "Arama (Sipariş No, Alıcı Şirket, Parça veya SKU)",
+      "searchPlaceholder": "Örn: 10042, Fren Diski, BRK-...",
+      "statusLabel": "İade Durumu",
+      "startDateLabel": "Başlangıç Tarihi",
+      "endDateLabel": "Bitiş Tarihi"
+    },
+    "table": {
+      "title": "Gelen İade Talepleri",
+      "loading": "Talepler yükleniyor...",
+      "emptyHeading": "İade Talebi Bulunamadı",
+      "emptyDescription": "Arama kriterlerinize uygun veya işletmenize yöneltilmiş yeni bir iade talebi bulunmamaktadır.",
+      "orderId": "Sipariş No",
+      "buyerOrg": "Alıcı Kuruluş",
+      "items": "İade Edilen Parça(lar)",
+      "moreItems": "parça daha",
+      "date": "Talep Tarihi",
+      "status": "Durum",
+      "actions": "İşlemler"
+    },
+    "actions": {
+      "viewDetail": "İncele",
+      "viewDetailAria": "Sipariş #{{id}} iade talebini incele",
+      "closeModal": "Pencereyi Kapat",
+      "approveReturn": "İadeyi Onayla",
+      "rejectReturn": "İadeyi Reddet",
+      "cancel": "Vazgeç",
+      "submitting": "İşleniyor...",
+      "loginBtn": "Kişisel Giriş Yap →",
+      "addNoteLabel": "Yeni Satıcı İnceleme Notu",
+      "addNotePlaceholder": "İade inceleme durumu, parça kontrolü veya kargo hakkında satıcı notu ekleyin...",
+      "saveNoteBtn": "Notu Kaydet",
+      "rejectWarningTitle": "İade Talebini Reddetme Uyarısı",
+      "rejectWarningDesc": "İadeyi reddetmek talebi kapatır. Alıcı kuruluşa iletilmek üzere gerekçe yazılması zorunludur.",
+      "rejectReasonLabel": "Reddetme Gerekçesi",
+      "rejectReasonPlaceholder": "Parçanın iadesinin neden reddedildiğini açıklayın (örn: montaj izi mevcut, 14 günlük yasal süre aşıldı vb.)...",
+      "confirmRejectBtn": "Evet, İadeyi Reddet",
+      "sellerAuthor": "Satıcı Yetkilisi",
+      "approveSystemNote": "İade talebi satıcı tarafından incelendi ve onaylandı.",
+      "rejectSystemNotePrefix": "İade reddedildi. Gerekçe"
+    },
+    "detail": {
+      "modalTitle": "İade Detayı — Sipariş #{{id}}",
+      "tabDetails": "Parça ve Sipariş Detayı",
+      "tabNotes": "İnceleme Notları",
+      "itemsTitle": "İade Edilen Parçalar",
+      "quantity": "Adet",
+      "reasonLabel": "İade Nedeni",
+      "rejectionReasonTitle": "Satıcı Reddetme Gerekçesi",
+      "noNotes": "Henüz satıcı inceleme notu eklenmemiş."
+    },
+    "reasons": {
+      "incompatible_part": "Uyumsuz Parça",
+      "incorrect_order": "Hatalı Sipariş",
+      "damaged_in_shipping": "Kargoda Hasar Görmüş",
+      "defective_item": "Kusurlu / Arızalı Ürün",
+      "not_as_described": "Tanıma / Görsele Uygun Değil",
+      "other": "Diğer Neden"
+    },
+    "feedback": {
+      "approvedSuccess": "İade talebi başarıyla onaylandı.",
+      "approveError": "İade onaylanırken bir hata oluştu.",
+      "rejectedSuccess": "İade talebi gerekçesiyle birlikte reddedildi.",
+      "rejectError": "İade reddedilirken bir hata oluştu.",
+      "noteAddedSuccess": "İnceleme notu başarıyla eklendi.",
+      "noteError": "Not eklenirken bir hata oluştu."
+    },
+    "validation": {
+      "reasonRequired": "İade reddi için gerekçe belirtilmesi zorunludur.",
+      "reasonMinLength": "Red gerekçesi en az 5 karakter olmalıdır.",
+      "reasonMaxLength": "Red gerekçesi en fazla 1000 karakter olabilir.",
+      "noteRequired": "İnceleme notu boş bırakılamaz.",
+      "noteMinLength": "İnceleme notu en az 2 karakter olmalıdır.",
+      "noteMaxLength": "İnceleme notu en fazla 1000 karakter olabilir."
+    }
   }
 }
