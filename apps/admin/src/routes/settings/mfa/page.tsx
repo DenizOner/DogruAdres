@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react"
 import { Button, Container, Heading, Text } from "@medusajs/ui"
+import { useTranslation } from "react-i18next"
 
 export const config = {
   public: true,
@@ -20,28 +21,32 @@ interface PlatformRead {
   runtime_enforcement: "enforced" | "not_yet_enabled"
 }
 
-const options: ReadonlyArray<{ value: PlatformMode; name: string; effect: string }> = [
+const optionDefinitions: ReadonlyArray<{
+  value: PlatformMode
+  nameKey: string
+  effectKey: string
+}> = [
   {
     value: "required",
-    name: "Herkes için zorunlu",
-    effect: "Kullanıcının kişisel tercihi kapalı olsa bile MFA gerekir; faktör kurulumu gerekli olabilir.",
+    nameKey: "mfa.requiredName",
+    effectKey: "mfa.requiredEffect",
   },
   {
     value: "optional",
-    name: "Seçime bağlı",
-    effect: "Kullanıcı kendi MFA tercihini değiştirebilir; etkin faktörler kendiliğinden kaldırılmaz.",
+    nameKey: "mfa.optionalName",
+    effectKey: "mfa.optionalEffect",
   },
   {
     value: "disabled",
-    name: "Devre dışı",
-    effect: "Yeni MFA kullanımını durdurma hedefidir. Mevcut native faktörler güvenli uzlaştırma tamamlanana kadar doğrulama isteyebilir.",
+    nameKey: "mfa.disabledName",
+    effectKey: "mfa.disabledEffect",
   },
 ]
 
 function parsePolicy(value: unknown): PlatformPolicy | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const data = value as Record<string, unknown>
-  if (!options.some(option => option.value === data.platform_mode)) return null
+  if (!optionDefinitions.some(option => option.value === data.platform_mode)) return null
   if (typeof data.version !== "number" || !Number.isInteger(data.version) ||
       data.version < 0 || data.version > 2147483646) return null
   return { platform_mode: data.platform_mode as PlatformMode, version: data.version }
@@ -62,6 +67,9 @@ function parseRead(value: unknown): PlatformRead | null {
 const reauthenticate = "/personal"
 
 export default function PlatformMfaSettingsPage() {
+  const { t } = useTranslation()
+  const tRef = useRef(t)
+  tRef.current = t
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [policy, setPolicy] = useState<PlatformRead | null>(null)
@@ -73,6 +81,12 @@ export default function PlatformMfaSettingsPage() {
   const [confirmed, setConfirmed] = useState(false)
   const sequence = useRef(0)
   const inFlight = useRef(false)
+
+  const options = optionDefinitions.map(opt => ({
+    value: opt.value,
+    name: t(opt.nameKey),
+    effect: t(opt.effectKey),
+  }))
 
   // A rejected or uncertain mutation invalidates the previously displayed
   // policy. Do not label a stale version as the current saved setting.
@@ -133,16 +147,16 @@ export default function PlatformMfaSettingsPage() {
         setConfirmed(verified)
         if (!verified) {
           setLocked(true)
-          setMessage("Kayıt yanıtı alınmış olsa da güncel politika sürümü doğrulanamadı. Yeniden kontrol edin.")
+          setMessage(tRef.current("mfa.warnUnverifiedVersion"))
           return
         }
-        setMessage("Yeni sürüm sunucudan doğrulandı. Native faktör uzlaştırması ayrıca gereklidir.")
+        setMessage(tRef.current("mfa.successVersion"))
       }
       setLocked(false)
     } catch {
       if (seq === sequence.current) {
         setLocked(true)
-        setMessage("MFA politikası güvenle doğrulanamadı. Güçlü oturumla yeniden doğrulayın veya sayfayı yenileyin.")
+        setMessage(tRef.current("mfa.errVerifyFailed"))
       }
     } finally {
       if (seq === sequence.current) setLoading(false)
@@ -162,9 +176,11 @@ export default function PlatformMfaSettingsPage() {
         selected === policy.platform.platform_mode) return
     const chosen = options.find(option => option.value === selected)
     if (!chosen || !window.confirm(
-      "Platform MFA politikasını değiştirmek istiyor musunuz? " +
-      chosen.name + ": " + chosen.effect +
-      " Mevcut native faktörler güvenli uzlaştırma olmadan atlanamaz."
+      t("mfa.confirmPrompt", {
+        name: chosen.name,
+        effect: chosen.effect,
+        defaultValue: `Platform MFA politikasını değiştirmek istiyor musunuz? ${chosen.name}: ${chosen.effect} Mevcut native faktörler güvenli uzlaştırma olmadan atlanamaz.`,
+      })
     )) return
     inFlight.current = true
     setSaving(true)
@@ -191,17 +207,17 @@ export default function PlatformMfaSettingsPage() {
       if (response.status === 401 || response.status === 403) {
         concealStalePolicy()
         setDenied(true)
-        setMessage("Bu işlem için güncel MFA platform görevi ve güçlü oturum gerekli.")
+        setMessage(t("mfa.errUnauthorized"))
         return
       }
       if (response.status === 409) {
         concealStalePolicy()
-        setMessage("Ayar başka oturumda değişti. Yeniden okuyup sürümü karşılaştırın.")
+        setMessage(t("mfa.errConflict"))
         return
       }
       if (!response.ok) {
         concealStalePolicy()
-        setMessage("Kayıt doğrulanamadı. Aynı isteği tekrar göndermeyin; önce güncel ayarı okuyun.")
+        setMessage(t("mfa.errUnverified"))
         return
       }
       const body: unknown = await response.json()
@@ -209,7 +225,7 @@ export default function PlatformMfaSettingsPage() {
         ? parsePolicy((body as Record<string, unknown>).platform) : null
       if (!posted || posted.platform_mode !== selected || posted.version <= previousVersion) {
         concealStalePolicy()
-        setMessage("Sunucu yanıtı tutarsız. Tekrar göndermeden önce güncel ayarı okuyun.")
+        setMessage(t("mfa.errInconsistent"))
         return
       }
       // A successful POST is not the same as the current server-side policy
@@ -217,7 +233,7 @@ export default function PlatformMfaSettingsPage() {
       await refresh(selected, previousVersion)
     } catch {
       concealStalePolicy()
-      setMessage("Ağ yanıtı belirsiz. Tekrar göndermeden önce güncel ayarı okuyun.")
+      setMessage(t("mfa.errNetwork"))
     } finally {
       inFlight.current = false
       setSaving(false)
@@ -229,41 +245,41 @@ export default function PlatformMfaSettingsPage() {
   return (
     <div className="space-y-6 max-w-4xl pb-16">
       <div>
-        <Heading level="h1">Platform Güvenliği — Çok Faktörlü Doğrulama</Heading>
-        <Text>Bu işlem yalnız MFA yönetimi için özel yetkisi olan platform görevlisine açıktır.</Text>
+        <Heading level="h1">{t("mfa.title")}</Heading>
+        <Text>{t("mfa.description")}</Text>
       </div>
 
       <Container className="space-y-5 p-6">
         <p role="status" aria-live="polite">
-          {loading ? "Platform MFA güvenlik ayarları yükleniyor." :
-           message || (confirmed ? "Yeni politika sürümü doğrulandı." :
-           policy ? "Güncel platform MFA politikası görüntüleniyor." : "Güvenlik ayarlarına erişilemiyor.")}
+          {loading ? t("mfa.loading") :
+           message || (confirmed ? t("mfa.confirmed") :
+           policy ? t("mfa.currentPolicy") : t("mfa.unavailable"))}
         </p>
         {denied && (
           <p role="alert">
-            Yetkisiz erişim. Organization Owner veya SMTP görevi bu yetkiyi vermez.
-            {" "}<a href={reauthenticate}>Güçlü kimlik doğrulaması yap</a>.
+            {t("mfa.denied")}{" "}
+            <a href={reauthenticate}>{t("mfa.reauthenticate")}</a>.
           </p>
         )}
         <Button type="button" variant="secondary" disabled={loading || saving}
           onClick={() => { void refresh() }}>
-          Sunucudan yeniden oku
+          {t("mfa.reloadBtn")}
         </Button>
 
         {policy && !loading && (
           <>
-            <p><strong>Kayıtlı mod:</strong> {options.find(option =>
+            <p><strong>{t("mfa.savedMode")}</strong> {options.find(option =>
               option.value === policy.platform.platform_mode)?.name}</p>
-            <p><strong>Politika sürümü:</strong> {policy.platform.version}</p>
+            <p><strong>{t("mfa.policyVersion")}</strong> {policy.platform.version}</p>
             <p>
-              <strong>Oturumda uygulama:</strong>{" "}
+              <strong>{t("mfa.runtimeEnforcement")}</strong>{" "}
               {policy.runtime_enforcement === "enforced"
-                ? "MFA çalışma zamanı denetimi etkin."
-                : "MFA çalışma zamanı henüz etkinleştirilmedi; ürün kabulü tamamlanmadı."}
+                ? t("mfa.enforced")
+                : t("mfa.notEnforced")}
             </p>
             <form onSubmit={save} className="space-y-5">
               <fieldset disabled={saving || locked} className="space-y-3">
-                <legend className="font-semibold">Platform MFA politikası</legend>
+                <legend className="font-semibold">{t("mfa.legend")}</legend>
                 {options.map(option => (
                   <label key={option.value} className="flex gap-3 items-start min-h-[48px]">
                     <input type="radio" name="platform-mode" value={option.value}
@@ -281,11 +297,10 @@ export default function PlatformMfaSettingsPage() {
                 ))}
               </fieldset>
               <p>
-                Bu değişiklik, mevcut native MFA faktörlerini silmez. Devre dışı
-                seçeneği, native faktör uzlaştırması tamamlanmadan tam kapatma değildir.
+                {t("mfa.note")}
               </p>
               <Button type="submit" disabled={saving || locked || !hasChange}>
-                {saving ? "Kaydediliyor..." : "Seçilen modu kaydet"}
+                {saving ? t("mfa.saving") : t("mfa.saveBtn")}
               </Button>
             </form>
           </>

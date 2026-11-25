@@ -12,6 +12,7 @@ import {
   toast,
   Label,
 } from "@medusajs/ui"
+import { useTranslation } from "react-i18next"
 
 declare const __BACKEND_URL__: string
 
@@ -52,6 +53,9 @@ function isSmtpSettings(value: unknown): value is SmtpSettings {
 }
 
 export default function PlatformSmtpSettingsPage() {
+  const { t } = useTranslation()
+  const tRef = useRef(t)
+  tRef.current = t
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -112,7 +116,6 @@ export default function PlatformSmtpSettingsPage() {
           const sessionRes = await fetch(`${backendUrl}/personal/session`, {
             method: "GET",
             headers: {
-
               "Accept": "application/json",
             },
             credentials: "include",
@@ -133,7 +136,6 @@ export default function PlatformSmtpSettingsPage() {
         const res = await fetch(`${backendUrl}/platform/smtp`, {
           method: "GET",
           headers: {
-
             "Accept": "application/json",
           },
           credentials: "include",
@@ -143,7 +145,7 @@ export default function PlatformSmtpSettingsPage() {
         if (res.status !== 200) {
           if (res.status === 401 || res.status === 403) {
             clearSettings()
-            setAuthError("SMTP ayarlarını yönetmek için yetkili platform hesabınızla ek doğrulama yapmanız gerekiyor.")
+            setAuthError(tRef.current("smtp.authError"))
             return
           }
           throw new Error("HTTP " + res.status)
@@ -169,7 +171,7 @@ export default function PlatformSmtpSettingsPage() {
       } catch {
         if (!cancelled) {
           clearSettings()
-          setLoadError("SMTP ayarları yüklenemedi. Lütfen daha sonra sayfayı yenileyerek tekrar deneyin.")
+          setLoadError(tRef.current("smtp.loadError"))
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -204,7 +206,6 @@ export default function PlatformSmtpSettingsPage() {
       }
 
       const headers: Record<string, string> = {
-
         "Content-Type": "application/json",
         "Accept": "application/json",
       }
@@ -223,9 +224,9 @@ export default function PlatformSmtpSettingsPage() {
 
       if (!res.ok) {
         if (res.status === 409) {
-          toast.error("Eşzamanlı değişiklik çakışması! Sayfayı yenileyip tekrar deneyiniz.")
+          toast.error(t("smtp.saveConflict"))
         } else {
-          toast.error(data.message || "Kaydetme başarısız")
+          toast.error(data.message || t("smtp.saveFailed"))
         }
         return
       }
@@ -235,10 +236,10 @@ export default function PlatformSmtpSettingsPage() {
         setHasExistingPassword(data.settings.has_password)
         setLastUpdated(data.settings.updated_at)
         setPassword("") // Clear plaintext password immediately
-        toast.success("E-posta ayarları kaydedildi.")
+        toast.success(t("smtp.saveSuccess"))
       }
     } catch (err: any) {
-      toast.error("Hata: " + (err.message || "Sunucuya ulaşılamadı"))
+      toast.error(t("smtp.saveError", { error: err.message || t("smtp.saveUnreachable") }))
     } finally {
       setSaving(false)
     }
@@ -246,12 +247,10 @@ export default function PlatformSmtpSettingsPage() {
 
   // Live Test Dispatch handler
   async function handleTest() {
-    // The test recipient is outside the Save settings form; validate it only
-    // for the separate Test action, leaving Save constraints unaffected.
     const recipientInput = testRecipientRef.current
     if (!recipientInput) return
     if (!recipientInput.value.trim()) {
-      recipientInput.setCustomValidity("Test e-postası için bir alıcı adresi girin.")
+      recipientInput.setCustomValidity(t("smtp.testRecipientValidation"))
       recipientInput.reportValidity()
       recipientInput.setCustomValidity("")
       return
@@ -280,7 +279,6 @@ export default function PlatformSmtpSettingsPage() {
       }
 
       const headers: Record<string, string> = {
-
         "Content-Type": "application/json",
         "Accept": "application/json",
       }
@@ -300,22 +298,22 @@ export default function PlatformSmtpSettingsPage() {
       if (res.ok && data.ok) {
         setTestResult({
           ok: true,
-          message: "E-posta gönderim için kabul edildi. Gelen kutusundan teslimatı kontrol edin.",
+          message: t("smtp.testSuccessMessage"),
         })
-        toast.success("SMTP sunucusu e-postayı gönderim için kabul etti.")
+        toast.success(t("smtp.testSuccessToast"))
       } else {
         setTestResult({
           ok: false,
-          message: data.message || "Bağlantı veya kimlik doğrulama başarısız oldu.",
+          message: data.message || t("smtp.testFailedMessage"),
         })
-        toast.error("Test e-postası gönderilemedi.")
+        toast.error(t("smtp.testFailedToast"))
       }
     } catch (err: any) {
       setTestResult({
         ok: false,
-        message: "Ağ veya sunucu hatası: " + err.message,
+        message: t("smtp.testNetworkError", { error: err.message }),
       })
-      toast.error("Test hatası: " + err.message)
+      toast.error(t("smtp.testErrorToast", { error: err.message }))
     } finally {
       setTesting(false)
     }
@@ -330,21 +328,21 @@ export default function PlatformSmtpSettingsPage() {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <Heading level="h1" className="text-2xl font-bold tracking-tight text-ui-fg-base">
-              Platform SMTP Ayarları
+              {t("smtp.title")}
             </Heading>
             {canManage && <Badge color="blue" size="small" className="bg-[#0e66c2]/10 text-[#0e66c2] border-[#0e66c2]/20 font-semibold">
-              Ayar sürümü: {version}
+              {t("smtp.versionBadge", { version })}
             </Badge>}
           </div>
           <Text className="text-sm text-ui-fg-subtle">
-            DoğruAdres e-posta doğrulama, kullanıcı davetleri ve işlem bildirimleri için giden SMTP sunucu altyapısı.
+            {t("smtp.description")}
           </Text>
         </div>
 
         {lastUpdated && (
           <div className="text-xs text-ui-fg-muted sm:text-right">
-            <span>Son Güncelleme: </span>
-            <span className="font-medium text-ui-fg-subtle">{new Date(lastUpdated).toLocaleString("tr-TR")}</span>
+            <span>{t("smtp.lastUpdated")}</span>
+            <span className="font-medium text-ui-fg-subtle">{new Date(lastUpdated).toLocaleString()}</span>
           </div>
         )}
       </div>
@@ -354,7 +352,7 @@ export default function PlatformSmtpSettingsPage() {
           <div className="space-y-2">
             <Text className="text-sm font-semibold text-red-900">{authError}</Text>
             <Text className="text-xs text-red-700">
-              Güçlü kimlik doğrulamasını tamamladıktan sonra yeniden deneyin.
+              {t("smtp.authSubtext")}
             </Text>
             <div className="pt-1">
               <Button
@@ -364,7 +362,7 @@ export default function PlatformSmtpSettingsPage() {
                 className="min-h-[48px] px-4 font-semibold text-ui-fg-base"
               >
                 <a href={backendUrl ? `${backendUrl}/personal` : "/personal"} target="_blank" rel="noopener noreferrer">
-                  Personal Frontdoor Panelinde Doğrula &rarr;
+                  {t("smtp.authFrontdoorBtn")}
                 </a>
               </Button>
             </div>
@@ -377,7 +375,7 @@ export default function PlatformSmtpSettingsPage() {
       {loading ? (
         <Container className="p-8 text-center">
           <div className="w-8 h-8 border-3 border-[#0e66c2]/20 border-t-[#0e66c2] rounded-full animate-spin mx-auto mb-3" />
-          <Text className="text-sm text-ui-fg-muted">Yapılandırma yükleniyor...</Text>
+          <Text className="text-sm text-ui-fg-muted">{t("smtp.loading")}</Text>
         </Container>
       ) : canManage ? (
         <div className="space-y-6">
@@ -388,15 +386,15 @@ export default function PlatformSmtpSettingsPage() {
             <div className="flex items-center justify-between pb-4 border-b border-ui-border-base">
               <div>
                 <Label htmlFor="smtp-toggle" className="text-base font-semibold text-ui-fg-base">
-                  SMTP Bildirim Servisi Durumu
+                  {t("smtp.serviceStatus")}
                 </Label>
                 <Text className="text-xs text-ui-fg-subtle">
-                  Servis kapalı olduğunda giden e-postalar Transactional Outbox kuyruğunda bekletilir.
+                  {t("smtp.serviceDesc")}
                 </Text>
               </div>
               <div className="flex items-center gap-3">
                 <Badge color={enabled ? "green" : "grey"} size="small">
-                  {enabled ? "Aktif" : "Devre Dışı"}
+                  {enabled ? t("smtp.statusActive") : t("smtp.statusDisabled")}
                 </Badge>
                 <Switch
                   id="smtp-toggle"
@@ -411,17 +409,17 @@ export default function PlatformSmtpSettingsPage() {
               <div className="md:col-span-8 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="smtp-host" className="text-xs font-semibold text-ui-fg-base">
-                    Sunucu Adresi (Host) *
+                    {t("smtp.hostLabel")}
                   </Label>
                   <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                    SSRF & Özel IP Korumalı
+                    {t("smtp.badgeSsrf")}
                   </span>
                 </div>
                 <Input
                   id="smtp-host"
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
-                  placeholder="smtp.example.com"
+                  placeholder={t("smtp.hostPlaceholder")}
                   required
                   className="min-h-[48px]"
                 />
@@ -429,14 +427,14 @@ export default function PlatformSmtpSettingsPage() {
 
               <div className="md:col-span-4 space-y-1.5">
                 <Label htmlFor="smtp-port" className="text-xs font-semibold text-ui-fg-base">
-                  Port Numarası *
+                  {t("smtp.portLabel")}
                 </Label>
                 <Input
                   id="smtp-port"
                   type="number"
                   value={port}
                   onChange={(e) => setPort(Number(e.target.value))}
-                  placeholder="465"
+                  placeholder={t("smtp.portPlaceholder")}
                   required
                   className="min-h-[48px]"
                 />
@@ -446,7 +444,7 @@ export default function PlatformSmtpSettingsPage() {
             {/* Security Protocol Options */}
             <fieldset className="space-y-2">
               <legend className="text-xs font-semibold text-ui-fg-base">
-                Güvenlik Protokolü *
+                {t("smtp.securityLegend")}
               </legend>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label
@@ -465,11 +463,11 @@ export default function PlatformSmtpSettingsPage() {
                   />
                   <div>
                     <div className="text-xs font-bold text-ui-fg-base flex items-center gap-1.5">
-                      <span>SSL / TLS (Port 465)</span>
-                      <span className="text-[10px] bg-[#0e66c2] text-white px-1.5 py-0.5 rounded font-medium">Önerilen</span>
+                      <span>{t("smtp.securitySsl")}</span>
+                      <span className="text-[10px] bg-[#0e66c2] text-white px-1.5 py-0.5 rounded font-medium">{t("smtp.securityRecommended")}</span>
                     </div>
                     <Text className="text-[11px] text-ui-fg-subtle mt-0.5">
-                      Doğrudan TLS soket bağlantısı; el sıkışma öncesi şifreleme aktiftir.
+                      {t("smtp.securitySslDesc")}
                     </Text>
                   </div>
                 </label>
@@ -490,10 +488,10 @@ export default function PlatformSmtpSettingsPage() {
                   />
                   <div>
                     <div className="text-xs font-bold text-ui-fg-base">
-                      STARTTLS (Port 587)
+                      {t("smtp.securityTls")}
                     </div>
                     <Text className="text-[11px] text-ui-fg-subtle mt-0.5">
-                      Düz metin başlangıçlı TLS yükseltmesi; kimlik bilgileri TLS sonrası iletilir.
+                      {t("smtp.securityTlsDesc")}
                     </Text>
                   </div>
                 </label>
@@ -504,14 +502,14 @@ export default function PlatformSmtpSettingsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
               <div className="space-y-1.5">
                 <Label htmlFor="smtp-user" className="text-xs font-semibold text-ui-fg-base">
-                  Kullanıcı Adı (Kimlik Doğrulama)
+                  {t("smtp.userLabel")}
                 </Label>
                 <Input
                   id="smtp-user"
                   type="email"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="ornek@dogruadres.com"
+                  placeholder={t("smtp.userPlaceholder")}
                   className="min-h-[48px]"
                 />
               </div>
@@ -519,11 +517,11 @@ export default function PlatformSmtpSettingsPage() {
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="smtp-pass" className="text-xs font-semibold text-ui-fg-base">
-                    Parola / Uygulama Şifresi
+                    {t("smtp.passLabel")}
                   </Label>
                   {hasExistingPassword && !password && (
                     <span className="text-[11px] font-medium text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                      AES-256 Kasada Kayıtlı
+                      {t("smtp.badgeExistingPass")}
                     </span>
                   )}
                 </div>
@@ -532,7 +530,7 @@ export default function PlatformSmtpSettingsPage() {
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={hasExistingPassword ? "•••••••••••••••• (Değiştirmek için yeni parola girin)" : "Uygulama şifresi"}
+                  placeholder={hasExistingPassword ? t("smtp.passPlaceholderExisting") : t("smtp.passPlaceholderNew")}
                   className="min-h-[48px]"
                 />
               </div>
@@ -542,14 +540,14 @@ export default function PlatformSmtpSettingsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-ui-border-base">
               <div className="space-y-1.5">
                 <Label htmlFor="smtp-from-email" className="text-xs font-semibold text-ui-fg-base">
-                  Gönderen E-posta (From Email) *
+                  {t("smtp.fromEmailLabel")}
                 </Label>
                 <Input
                   id="smtp-from-email"
                   type="email"
                   value={fromEmail}
                   onChange={(e) => setFromEmail(e.target.value)}
-                  placeholder="bildirim@dogruadres.com"
+                  placeholder={t("smtp.fromEmailPlaceholder")}
                   required
                   className="min-h-[48px]"
                 />
@@ -557,13 +555,13 @@ export default function PlatformSmtpSettingsPage() {
 
               <div className="space-y-1.5">
                 <Label htmlFor="smtp-from-name" className="text-xs font-semibold text-ui-fg-base">
-                  Gönderen Adı (From Name)
+                  {t("smtp.fromNameLabel")}
                 </Label>
                 <Input
                   id="smtp-from-name"
                   value={fromName}
                   onChange={(e) => setFromName(e.target.value)}
-                  placeholder="DoğruAdres Platformu"
+                  placeholder={t("smtp.fromNamePlaceholder")}
                   className="min-h-[48px]"
                 />
               </div>
@@ -576,7 +574,7 @@ export default function PlatformSmtpSettingsPage() {
                 disabled={saving}
                 className="bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold min-h-[48px] px-6"
               >
-                {saving ? "Kaydediliyor..." : "Ayarları kaydet"}
+                {saving ? t("smtp.savingBtn") : t("smtp.saveBtn")}
               </Button>
             </div>
           </Container>
@@ -586,10 +584,10 @@ export default function PlatformSmtpSettingsPage() {
           <Container className="p-6 space-y-4 rounded-xl border border-ui-border-base bg-ui-bg-base">
             <div>
               <Heading level="h2" className="text-lg font-bold text-ui-fg-base">
-                Canlı Bağlantı ve Teslimat Testi
+                {t("smtp.testTitle")}
               </Heading>
               <Text className="text-xs text-ui-fg-subtle">
-                Test e-postası gönderin; sunucu tarafından kabulünü ve gelen kutusundaki teslimatını ayrı ayrı kontrol edin.
+                {t("smtp.testDesc")}
               </Text>
             </div>
 
@@ -605,7 +603,7 @@ export default function PlatformSmtpSettingsPage() {
             <div className="flex flex-col sm:flex-row gap-3 items-end">
               <div className="flex-1 space-y-1.5 w-full">
                 <Label htmlFor="test-recipient" className="text-xs font-semibold text-ui-fg-base">
-                  Hedef Test Alıcısı
+                  {t("smtp.testRecipientLabel")}
                 </Label>
                 <Input
                   id="test-recipient"
@@ -613,7 +611,7 @@ export default function PlatformSmtpSettingsPage() {
                   type="email"
                   value={testRecipient}
                   onChange={(e) => setTestRecipient(e.target.value)}
-                  placeholder="yonetici@dogruadres.net"
+                  placeholder={t("smtp.testRecipientPlaceholder")}
                   className="min-h-[48px]"
                 />
               </div>
@@ -624,7 +622,7 @@ export default function PlatformSmtpSettingsPage() {
                 variant="secondary"
                 className="min-h-[48px] px-5 font-semibold text-ui-fg-base"
               >
-                {testing ? "Bağlanıyor..." : "Bağlantıyı ve E-posta Gönderimini Test Et"}
+                {testing ? t("smtp.testingBtn") : t("smtp.testBtn")}
               </Button>
             </div>
           </Container>

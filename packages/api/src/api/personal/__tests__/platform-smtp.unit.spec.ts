@@ -346,11 +346,14 @@ describe("Admin SMTP fail-closed loading", () => {
       if (networkFailure) throw new Error("private-error-must-not-be-shown")
       return response
     })
+    const trDict = JSON.parse(readFileSync(resolve(process.cwd(), "../../apps/admin/src/i18n/tr.json"), "utf8"))
+    const translate = (key: string) => key.split(".").reduce((acc: any, k) => acc?.[k], trDict) ?? key
     const module = { exports: {} as any }
     runInNewContext(compiled, { module, exports: module.exports, fetch: fetchMock,
       require: (id: string) => {
         if (id === "react") return react
         if (id === "@medusajs/ui") return ui
+        if (id === "react-i18next") return { useTranslation: () => ({ t: translate }) }
         throw Error("Unexpected component dependency")
       },
     })
