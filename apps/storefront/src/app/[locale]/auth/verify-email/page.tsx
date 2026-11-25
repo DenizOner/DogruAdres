@@ -284,7 +284,7 @@ export default function VerifyEmailPage() {
               type="button"
               aria-pressed={currentLocale === loc}
               onClick={() => setCurrentLocale(loc)}
-              className={`px-2.5 py-1 rounded-md uppercase transition-all focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#0e66c2] ${
+              className={`px-2.5 py-1 rounded-md uppercase transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0e66c2] ${
                 currentLocale === loc
                   ? "bg-white dark:bg-slate-700 text-[#0e66c2] dark:text-blue-400 font-bold shadow-xs"
                   : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
@@ -314,7 +314,7 @@ export default function VerifyEmailPage() {
 
           {/* State 2 & 3: Pending / Submitting (Explicit Confirmation) */}
           {(state === "pending" || state === "submitting") && (
-            <div role="status" aria-live="polite" className="space-y-6">
+            <div className="space-y-6">
               <div className="text-center">
                 <div aria-hidden="true" className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-50 dark:bg-blue-950/40 text-[#0e66c2] flex items-center justify-center">
                   <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -349,13 +349,13 @@ export default function VerifyEmailPage() {
                 id="btn-confirm-email"
                 disabled={state === "submitting"}
                 onClick={handleConfirm}
-                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0e66c2] hover:bg-[#0b57a4] active:bg-[#084585] text-white font-semibold text-base shadow-sm shadow-blue-600/20 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[#0e66c2] disabled:opacity-60 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0e66c2] hover:bg-[#0b57a4] active:bg-[#084585] text-white font-semibold text-base shadow-sm shadow-blue-600/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#0e66c2] disabled:opacity-60 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
               >
                 {state === "submitting" ? (
-                  <>
-                    <div aria-hidden="true" className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span role="status" aria-live="polite" className="flex items-center justify-center gap-2">
+                    <span aria-hidden="true" className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin inline-block" />
                     <span>{t.verifyingBtn}</span>
-                  </>
+                  </span>
                 ) : (
                   <span>{t.verifyBtn}</span>
                 )}
@@ -384,7 +384,7 @@ export default function VerifyEmailPage() {
               <Link
                 href="/login"
                 id="btn-goto-login"
-                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold text-base shadow-sm focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[#0e66c2] transition-all flex items-center justify-center"
+                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#0e66c2] transition-all flex items-center justify-center"
               >
                 {t.loginBtn}
               </Link>
@@ -411,7 +411,7 @@ export default function VerifyEmailPage() {
 
               <Link
                 href="/login"
-                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold text-base shadow-sm focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[#0e66c2] transition-all flex items-center justify-center"
+                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#0e66c2] transition-all flex items-center justify-center"
               >
                 {t.requestNewBtn}
               </Link>
@@ -439,7 +439,7 @@ export default function VerifyEmailPage() {
 
               <Link
                 href="/login"
-                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold text-base shadow-sm focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[#0e66c2] transition-all flex items-center justify-center"
+                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#0e66c2] transition-all flex items-center justify-center"
               >
                 {t.loginBtn}
               </Link>
@@ -467,7 +467,7 @@ export default function VerifyEmailPage() {
 
               <Link
                 href="/"
-                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-semibold text-base shadow-sm focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-slate-800 transition-all flex items-center justify-center"
+                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-semibold text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-800 transition-all flex items-center justify-center"
               >
                 {t.homeBtn}
               </Link>
