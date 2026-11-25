@@ -96,5 +96,69 @@
     "warnUnverifiedVersion": "Kayıt yanıtı alınmış olsa da güncel politika sürümü doğrulanamadı. Yeniden kontrol edin.",
     "successVersion": "Yeni sürüm sunucudan doğrulandı. Native faktör uzlaştırması ayrıca gereklidir.",
     "errVerifyFailed": "MFA politikası güvenle doğrulanamadı. Güçlü oturumla yeniden doğrulayın veya sayfayı yenileyin."
+  },
+  "notifications": {
+    "label": "Bildirim Ayarları",
+    "title": "Kişisel Bildirim Tercihleri",
+    "description": "Hangi olaylarda platform içi, e-posta veya mobil bildirim almak istediğinizi olay ve kanal düzeyinde yönetin.",
+    "versionBadge": "Tercih sürümü: {{version}}",
+    "loading": "Bildirim tercihleri yükleniyor...",
+    "authError": "Bildirim tercihlerinizi görüntülemek ve değiştirmek için kişisel oturumunuzla giriş yapmalısınız.",
+    "authFrontdoorBtn": "Kişisel Oturumda Giriş Yap →",
+    "loadError": "Bildirim tercihleri şu anda okunamıyor. Lütfen sayfayı yenileyin.",
+    "summaryTitle": "Genel Özet",
+    "summaryCritical": "Kritik güvenlik ve Owner/kapatma bildirimleri kilitlidir ve kapatılamaz.",
+    "advancedToggle": "Gelişmiş Ayarlar (Olay ve Kanal Tablosu)",
+    "tableCategory": "Olay Kategorisi",
+    "tablePlatform": "Platform İçi",
+    "tableEmail": "E-posta",
+    "tableMobile": "Mobil",
+    "criticalBadge": "Zorunlu / Kapatılamaz",
+    "mobileUnsupported": "Desteklenmiyor (mobil bildirim izni/sağlayıcısı yok)",
+    "emailImmediate": "Anında",
+    "emailDailyDigest": "Günlük özet",
+    "emailOff": "Kapalı",
+    "saveBtn": "Tercihleri kaydet",
+    "savingBtn": "Kaydediliyor...",
+    "resetBtn": "Varsayılanlara döndür",
+    "saveSuccess": "Bildirim tercihleriniz kaydedildi.",
+    "resetSuccess": "Bildirim tercihleriniz varsayılanlara döndürüldü.",
+    "saveConflict": "Tercihler başka bir oturumda değişti. Güncel ayarlar yeniden yüklendi.",
+    "saveFailed": "Tercihler kaydedilemedi. Lütfen ayarları kontrol edin.",
+    "bellLink": "Bildirim zili ve kutusuna dön",
+    "categories": {
+      "security_account": {
+        "name": "Güvenlik, Hesap ve Oturum",
+        "desc": "Oturum kilitleme, parola sıfırlama ve kritik hesap güvenliği uyarıları."
+      },
+      "owner_closing": {
+        "name": "Owner Yetkisi ve Mağaza Kapatma",
+        "desc": "Owner yetki değişiklikleri, mağaza kapatma süreçleri, itiraz ve karar bildirimleri."
+      },
+      "organization_membership": {
+        "name": "Şirket Üyeliği ve Davetler",
+        "desc": "Şirket davetleri, onaylar ve üyelik/izin değişiklikleri."
+      },
+      "store_operations": {
+        "name": "Mağaza Başvuruları ve Durumu",
+        "desc": "Mağaza başvuru sonuçları, taslak izinleri ve mağaza yeniden açılışları."
+      },
+      "buyer_orders": {
+        "name": "Alıcı Sipariş ve İade İşlemleri",
+        "desc": "Sipariş, teslimat, ödeme ve iade talebi güncellemeleri."
+      },
+      "seller_operations": {
+        "name": "Satıcı Teklif, Katalog ve Stok",
+        "desc": "Teklif, katalog onayı, takip ve stok bildirimleri."
+      },
+      "platform_announcements": {
+        "name": "Platform Duyuruları",
+        "desc": "Genel platform güncellemeleri ve operasyonel duyurular."
+      },
+      "marketing_promotions": {
+        "name": "Tanıtım ve Pazarlama",
+        "desc": "İsteğe bağlı kampanya ve tanıtım mesajları (varsayılan kapalı)."
+      }
+    }
   }
 }

@@ -1,10 +1,16 @@
 import { LoginForm, ProfileDetails } from "@/components/molecules"
 import { UserNavigation } from "@/components/molecules"
 import { ProfilePassword } from "@/components/molecules/ProfileDetails/ProfilePassword"
+import { NotificationPreferences } from "@/components/molecules/NotificationPreferences/NotificationPreferences"
 import { retrieveCustomer } from "@/lib/data/customer"
 
-export default async function ReviewsPage() {
+export default async function ReviewsPage({
+  params,
+}: {
+  params?: Promise<{ locale?: string }>
+}) {
   const user = await retrieveCustomer()
+  const resolvedParams = params ? await params : undefined
 
   if (!user) return <LoginForm />
 
@@ -16,6 +22,7 @@ export default async function ReviewsPage() {
           <h1 className="heading-md uppercase mb-8">Settings</h1>
           <ProfileDetails user={user} />
           <ProfilePassword user={user} />
+          <NotificationPreferences locale={resolvedParams?.locale} />
         </div>
       </div>
     </main>

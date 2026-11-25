@@ -159,6 +159,13 @@ test('B10 invitation adapter exposes only exact scoped GET and POST',()=>{
     assert.equal(allowedPublicRequest(method,path),false)
 })
 
+test('notification preferences route allows exact GET and POST only', () => {
+  for(const method of ['GET','POST'])assert.equal(allowedPublicRequest(method,'/personal/notification-preferences'),true)
+  for(const method of ['HEAD','OPTIONS','PUT','PATCH','DELETE'])assert.equal(allowedPublicRequest(method,'/personal/notification-preferences'),false)
+  for(const path of ['/personal/notification-preferences/','/personal/notification-preferences/extra','/admin/notification-preferences'])
+    assert.equal(allowedPublicRequest('GET',path),false)
+})
+
 test('MFA settings has exact GET/POST relay only',()=>{
   for(const method of ['GET','POST'])assert.equal(allowedPublicRequest(method,'/personal/mfa'),true)
   for(const method of ['HEAD','OPTIONS','PUT','PATCH','DELETE'])assert.equal(allowedPublicRequest(method,'/personal/mfa'),false)
