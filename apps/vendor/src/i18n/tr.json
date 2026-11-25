@@ -164,6 +164,7 @@
     "orgLabel": "Aktif İşletme",
     "infoBanner": "Müşteri iade talepleri şu anda görüntüleme ve inceleme modundadır. Satıcı onay ve ret kararları sunucu tarafı yetkilendirme (Policy A) tamamlandığında doğrudan işlenecektir.",
     "unauthorizedWarning": "İade taleplerini görüntülemek ve aksiyon almak için kişisel oturum açmalısınız.",
+    "errorFetchFailed": "İade talepleri yüklenemedi. Lütfen bağlantınızı kontrol edin.",
     "status": {
       "all": "Tüm Durumlar",
       "requested": "Talep Edildi",

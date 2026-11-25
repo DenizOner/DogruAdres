@@ -164,6 +164,7 @@
     "orgLabel": "Active Business",
     "infoBanner": "Customer return requests are currently in view and review mode. Seller approve and reject decisions will be directly persisted upon completion of server-side authorization (Policy A).",
     "unauthorizedWarning": "You must log in with your personal session to view return requests and take action.",
+    "errorFetchFailed": "Failed to load return requests. Please check your connection.",
     "status": {
       "all": "All Statuses",
       "requested": "Requested",

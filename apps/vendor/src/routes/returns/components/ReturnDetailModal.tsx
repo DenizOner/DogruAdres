@@ -15,9 +15,9 @@ interface ReturnDetailModalProps {
   isOpen: boolean
   returnRequest: VendorReturnRequest | null
   onClose: () => void
-  onApprove: (returnId: string) => Promise<void>
-  onReject: (returnId: string, reason: string) => Promise<void>
-  onAddNote: (returnId: string, note: string) => Promise<void>
+  onApprove: (returnId: string) => Promise<boolean>
+  onReject: (returnId: string, reason: string) => Promise<boolean>
+  onAddNote: (returnId: string, note: string) => Promise<boolean>
   submitting: boolean
 }
 
@@ -149,7 +149,10 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
       return
     }
     setRejectionError("")
-    await onReject(returnRequest.id, rejectionReason.trim())
+    const success = await onReject(returnRequest.id, rejectionReason.trim())
+    if (success) {
+      setRejectionReason("")
+    }
   }
 
   const handleAddNoteSubmit = async (e: React.FormEvent) => {
@@ -161,8 +164,10 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
       return
     }
     setNoteError("")
-    await onAddNote(returnRequest.id, newNote.trim())
-    setNewNote("")
+    const success = await onAddNote(returnRequest.id, newNote.trim())
+    if (success) {
+      setNewNote("")
+    }
   }
 
   return (

@@ -174,9 +174,9 @@ export default function VendorReturnsPage() {
   const [unauthorized, setUnauthorized] = useState(false)
   const [csrfToken, setCsrfToken] = useState<string>("")
   const [activeOrg, setActiveOrg] = useState<OrgInfo | null>(null)
-  const [activeSellerId, setActiveSellerId] = useState<string>("sel_store_primary")
+  const [activeSellerId, setActiveSellerId] = useState<string>("")
 
-  const [returnsList, setReturnsList] = useState<VendorReturnRequest[]>(INITIAL_SAMPLE_RETURNS)
+  const [returnsList, setReturnsList] = useState<VendorReturnRequest[]>([])
   const [filters, setFilters] = useState<ReturnFilters>({
     status: "all",
     searchOrder: "",
@@ -226,15 +226,31 @@ export default function VendorReturnsPage() {
           ? [{ id: orgData.id, name: orgData.name || orgData.id, role: orgData.role, status: orgData.status }]
           : []
         if (orgList.length > 0) {
-          setActiveOrg(orgList[0])
-          // Derive seller ID if present
-          if ((orgList[0] as unknown as { seller_id?: string }).seller_id) {
-            setActiveSellerId((orgList[0] as unknown as { seller_id: string }).seller_id)
+          const firstOrg = orgList[0]
+          setActiveOrg(firstOrg)
+          // Resolve authorized seller store from /organization/stores
+          const storeRes = await fetch(
+            `/organization/stores?organization=${encodeURIComponent(firstOrg.id)}`,
+            {
+              method: "GET",
+              credentials: "include",
+              headers: { Accept: "application/json" },
+            }
+          ).catch(() => null)
+          if (storeRes && storeRes.ok) {
+            const storeData = await storeRes.json()
+            if (
+              Array.isArray(storeData?.stores) &&
+              storeData.stores.length > 0 &&
+              typeof storeData.stores[0]?.id === "string"
+            ) {
+              setActiveSellerId(storeData.stores[0].id)
+            }
           }
         }
       }
     } catch {
-      // Offline / development fallback - keep sample data available
+      // Network or authorization error
     }
   }, [])
 
@@ -244,6 +260,7 @@ export default function VendorReturnsPage() {
 
   // 2. Fetch returns from backend endpoint if available
   const fetchBackendReturns = useCallback(async (orgId: string, sellerId: string) => {
+    if (!orgId || !sellerId) return
     setLoadingReturns(true)
     setErrorMessage("")
     try {
@@ -260,40 +277,39 @@ export default function VendorReturnsPage() {
       )
       if (res.ok) {
         const data = await res.json()
-        if (Array.isArray(data.return_requests) && data.return_requests.length > 0) {
-          // Merge backend summaries with rich local representation without fabricating false commercial data
-          const merged: VendorReturnRequest[] = data.return_requests.map(
-            (bItem: { id: string; status: ReturnStatus; created_at: string }) => {
-              const existing = INITIAL_SAMPLE_RETURNS.find((s) => s.id === bItem.id)
-              if (existing) {
-                return { ...existing, status: bItem.status, created_at: bItem.created_at }
-              }
-              return {
-                id: bItem.id,
-                order_id: bItem.id,
-                order_display_id: bItem.id.slice(0, 12),
-                buyer_organization_id: orgId,
-                buyer_organization_name: t("returns.table.notSpecified"),
-                seller_id: sellerId,
-                status: bItem.status,
-                created_at: bItem.created_at,
-                updated_at: bItem.created_at,
-                items: [],
-                review_notes: [],
-                total_refund_amount: 0,
-                currency_code: "TRY",
-              }
-            }
+        if (Array.isArray(data.return_requests)) {
+          const mapped: VendorReturnRequest[] = data.return_requests.map(
+            (bItem: { id: string; status: ReturnStatus; created_at: string }) => ({
+              id: bItem.id,
+              order_id: bItem.id,
+              order_display_id: bItem.id.slice(0, 12),
+              buyer_organization_id: orgId,
+              buyer_organization_name: t("returns.table.notSpecified"),
+              seller_id: sellerId,
+              status: bItem.status,
+              created_at: bItem.created_at,
+              updated_at: bItem.created_at,
+              items: [],
+              review_notes: [],
+              total_refund_amount: 0,
+              currency_code: "TRY",
+            })
           )
-          setReturnsList(merged)
+          setReturnsList(mapped)
+        } else {
+          setReturnsList([])
         }
+      } else {
+        setReturnsList([])
+        setErrorMessage(t("returns.errorFetchFailed"))
       }
     } catch {
-      // Backend not yet serving returns in current test environment; retain initial representation
+      setReturnsList([])
+      setErrorMessage(t("returns.errorFetchFailed"))
     } finally {
       setLoadingReturns(false)
     }
-  }, [activeOrg?.name])
+  }, [t])
 
   useEffect(() => {
     if (activeOrg?.id && activeSellerId) {
@@ -336,14 +352,14 @@ export default function VendorReturnsPage() {
   }
 
   // Seller Action: Approve Return
-  const handleApproveReturn = async (returnId: string) => {
+  const handleApproveReturn = async (returnId: string): Promise<boolean> => {
     setSubmitting(true)
     setErrorMessage("")
     setStatusMessage("")
     try {
-      if (!csrfToken || !activeOrg) {
+      if (!csrfToken || !activeOrg || !activeSellerId) {
         setErrorMessage(t("returns.feedback.actionPendingBackend"))
-        return
+        return false
       }
 
       const res = await fetch("/organization/return-requests", {
@@ -364,7 +380,7 @@ export default function VendorReturnsPage() {
       // Fail-closed verification: never assume success if server does not respond 2xx
       if (!res || !res.ok) {
         setErrorMessage(t("returns.feedback.actionPendingBackend"))
-        return
+        return false
       }
 
       // Update state only on verified server response
@@ -391,22 +407,24 @@ export default function VendorReturnsPage() {
 
       setStatusMessage(t("returns.feedback.approvedSuccess"))
       handleCloseModal()
+      return true
     } catch {
       setErrorMessage(t("returns.feedback.approveError"))
+      return false
     } finally {
       setSubmitting(false)
     }
   }
 
   // Seller Action: Reject Return (requires mandatory reason)
-  const handleRejectReturn = async (returnId: string, reason: string) => {
+  const handleRejectReturn = async (returnId: string, reason: string): Promise<boolean> => {
     setSubmitting(true)
     setErrorMessage("")
     setStatusMessage("")
     try {
-      if (!csrfToken || !activeOrg) {
+      if (!csrfToken || !activeOrg || !activeSellerId) {
         setErrorMessage(t("returns.feedback.actionPendingBackend"))
-        return
+        return false
       }
 
       const res = await fetch("/organization/return-requests", {
@@ -428,7 +446,7 @@ export default function VendorReturnsPage() {
       // Fail-closed verification: preserve inputs and form on server error
       if (!res || !res.ok) {
         setErrorMessage(t("returns.feedback.actionPendingBackend"))
-        return
+        return false
       }
 
       setReturnsList((prev) =>
@@ -455,22 +473,24 @@ export default function VendorReturnsPage() {
 
       setStatusMessage(t("returns.feedback.rejectedSuccess"))
       handleCloseModal()
+      return true
     } catch {
       setErrorMessage(t("returns.feedback.rejectError"))
+      return false
     } finally {
       setSubmitting(false)
     }
   }
 
   // Seller Action: Add Review Note
-  const handleAddReviewNote = async (returnId: string, note: string) => {
+  const handleAddReviewNote = async (returnId: string, note: string): Promise<boolean> => {
     setSubmitting(true)
     setErrorMessage("")
     setStatusMessage("")
     try {
-      if (!csrfToken || !activeOrg) {
+      if (!csrfToken || !activeOrg || !activeSellerId) {
         setErrorMessage(t("returns.feedback.actionPendingBackend"))
-        return
+        return false
       }
 
       const res = await fetch("/organization/return-requests", {
@@ -492,7 +512,7 @@ export default function VendorReturnsPage() {
       // Fail-closed: preserve typed note if server has not confirmed write
       if (!res || !res.ok) {
         setErrorMessage(t("returns.feedback.actionPendingBackend"))
-        return
+        return false
       }
 
       const newNoteObj = {
@@ -525,8 +545,10 @@ export default function VendorReturnsPage() {
       )
 
       setStatusMessage(t("returns.feedback.noteAddedSuccess"))
+      return true
     } catch {
       setErrorMessage(t("returns.feedback.noteError"))
+      return false
     } finally {
       setSubmitting(false)
     }
