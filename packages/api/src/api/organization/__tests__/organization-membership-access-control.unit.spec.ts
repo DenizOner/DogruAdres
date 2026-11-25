@@ -166,6 +166,26 @@ describe("organization memberships route — HTTP contract (moved from /personal
       expect(res.json).toHaveBeenCalledWith({ message: "Access denied" })
     })
 
+    it("maps MedusaError NOT_FOUND from service to 404 Not found — not 503", async () => {
+      mockService.personalChangeMembershipRole.mockRejectedValueOnce(
+        new MedusaError(MedusaError.Types.NOT_FOUND, "Membership not found in the selected Organization")
+      )
+      req.body = { organization_id: orgId, membership_id: memberId, role: "member" }
+      await POST(req, res)
+      expect(res.status).toHaveBeenCalledWith(404)
+      expect(res.json).toHaveBeenCalledWith({ message: "Not found" })
+    })
+
+    it("maps MedusaError INVALID_DATA from service to 400 Invalid input — not 503", async () => {
+      mockService.personalChangeMembershipRole.mockRejectedValueOnce(
+        new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid role")
+      )
+      req.body = { organization_id: orgId, membership_id: memberId, role: "member" }
+      await POST(req, res)
+      expect(res.status).toHaveBeenCalledWith(400)
+      expect(res.json).toHaveBeenCalledWith({ message: "Invalid input" })
+    })
+
     it("maps unexpected service error to 503 Unavailable — not 403", async () => {
       mockService.personalRevokeMembership.mockRejectedValueOnce(new Error("DB connection lost"))
       req.body = { organization_id: orgId, membership_id: memberId }
