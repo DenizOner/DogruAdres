@@ -49,7 +49,7 @@ interface ReviewQueueResponse {
   next_cursor: string | null
 }
 
-type TabType = "all" | "submitted" | "in_review" | "processed"
+type TabType = "all" | "submitted" | "in_review"
 
 export default function OrganizationsPage() {
   const { t } = useTranslation()
@@ -61,86 +61,142 @@ export default function OrganizationsPage() {
   const [selectedApp, setSelectedApp] = useState<OrganizationApplicationItem | null>(null)
   const [notes, setNotes] = useState<string>("")
   const [inFlight, setInFlight] = useState<boolean>(false)
+
+  // Cursor-based pagination state
+  const [cursorStack, setCursorStack] = useState<(string | null)[]>([null])
+  const [cursorIndex, setCursorIndex] = useState<number>(0)
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+
+  // Document preview state with strict application binding
   const [previewLoading, setPreviewLoading] = useState<boolean>(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewForAppId, setPreviewForAppId] = useState<string | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const activePreviewAppId = useRef<string | null>(null)
 
   const activeSeq = useRef(0)
 
-  const loadApplications = useCallback(async () => {
-    const seq = ++activeSeq.current
-    setLoading(true)
-    setErrorMsg(null)
-    try {
-      const data = await apiGet<ReviewQueueResponse>("/platform/organization-applications?action=review_queue")
-      if (seq !== activeSeq.current) return
-      setApplications(data.applications || [])
-    } catch (err) {
-      if (seq !== activeSeq.current) return
-      const message = err instanceof Error ? err.message : t("organizations.alerts.loadError")
-      setErrorMsg(message)
-    } finally {
-      if (seq === activeSeq.current) {
-        setLoading(false)
+  const loadApplications = useCallback(
+    async (cursor?: string | null) => {
+      const seq = ++activeSeq.current
+      setLoading(true)
+      setErrorMsg(null)
+      try {
+        const queryParam = cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""
+        const data = await apiGet<ReviewQueueResponse>(
+          `/platform/organization-applications?action=review_queue${queryParam}`
+        )
+        if (seq !== activeSeq.current) return
+        setApplications(data.applications || [])
+        setNextCursor(data.next_cursor || null)
+      } catch (err) {
+        if (seq !== activeSeq.current) return
+        const message = err instanceof Error ? err.message : t("organizations.alerts.loadError")
+        setErrorMsg(message)
+      } finally {
+        if (seq === activeSeq.current) {
+          setLoading(false)
+        }
       }
-    }
-  }, [t])
+    },
+    [t]
+  )
 
   useEffect(() => {
-    void loadApplications()
+    void loadApplications(null)
     return () => {
       activeSeq.current++
+      activePreviewAppId.current = null
       if (previewUrl) {
         URL.revokeObjectURL(previewUrl)
       }
     }
   }, [loadApplications])
 
+  const handleNextPage = () => {
+    if (!nextCursor || inFlight || loading) return
+    const newStack = [...cursorStack.slice(0, cursorIndex + 1), nextCursor]
+    setCursorStack(newStack)
+    setCursorIndex(cursorIndex + 1)
+    void loadApplications(nextCursor)
+  }
+
+  const handlePrevPage = () => {
+    if (cursorIndex <= 0 || inFlight || loading) return
+    const prevIdx = cursorIndex - 1
+    const prevCursor = cursorStack[prevIdx]
+    setCursorIndex(prevIdx)
+    void loadApplications(prevCursor)
+  }
+
   const openReviewModal = (app: OrganizationApplicationItem) => {
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl)
+      setPreviewUrl(null)
+    }
+    activePreviewAppId.current = app.id
     setSelectedApp(app)
     setNotes("")
-    setPreviewUrl(null)
+    setPreviewForAppId(null)
     setPreviewError(null)
   }
 
   const closeReviewModal = () => {
     if (inFlight) return
+    activePreviewAppId.current = null
     setSelectedApp(null)
     setNotes("")
     if (previewUrl) {
       URL.revokeObjectURL(previewUrl)
       setPreviewUrl(null)
     }
+    setPreviewForAppId(null)
     setPreviewError(null)
   }
 
   const loadSafePreview = async (appId: string) => {
     if (previewLoading || inFlight) return
+    activePreviewAppId.current = appId
     setPreviewLoading(true)
     setPreviewError(null)
     if (previewUrl) {
       URL.revokeObjectURL(previewUrl)
       setPreviewUrl(null)
     }
+    setPreviewForAppId(null)
 
     try {
-      const response = await fetch(`/platform/organization-applications?action=review_preview&application_id=${encodeURIComponent(appId)}`, {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      })
+      const response = await fetch(
+        `/platform/organization-applications?action=review_preview&application_id=${encodeURIComponent(appId)}`,
+        {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+        }
+      )
 
       if (!response.ok) {
         throw new Error(response.status === 403 ? "Erişim reddedildi" : "Önizleme oluşturulamadı")
       }
 
       const blob = await response.blob()
+
+      // Guard against stale response if user switched applications or closed modal
+      if (activePreviewAppId.current !== appId) {
+        return
+      }
+
       const objectUrl = URL.createObjectURL(blob)
       setPreviewUrl(objectUrl)
+      setPreviewForAppId(appId)
     } catch (err) {
-      setPreviewError(err instanceof Error ? err.message : "Önizleme yüklenemedi")
+      if (activePreviewAppId.current === appId) {
+        setPreviewError(err instanceof Error ? err.message : "Önizleme yüklenemedi")
+      }
     } finally {
-      setPreviewLoading(false)
+      if (activePreviewAppId.current === appId) {
+        setPreviewLoading(false)
+      }
     }
   }
 
@@ -188,12 +244,14 @@ export default function OrganizationsPage() {
       await apiPost("/platform/organization-applications", payload)
       setSuccessMsg(t("organizations.alerts.actionSuccess"))
       closeReviewModal()
-      await loadApplications()
+      const currentCursor = cursorStack[cursorIndex]
+      await loadApplications(currentCursor)
     } catch (err) {
       if (err instanceof ApiError && err.isConflict) {
         setErrorMsg(t("organizations.alerts.conflictError"))
         closeReviewModal()
-        await loadApplications()
+        const currentCursor = cursorStack[cursorIndex]
+        await loadApplications(currentCursor)
       } else {
         const message = err instanceof Error ? err.message : "İşlem başarısız"
         setErrorMsg(t("organizations.alerts.actionError", { error: message }))
@@ -206,9 +264,6 @@ export default function OrganizationsPage() {
   const filteredApps = applications.filter((item) => {
     if (currentTab === "submitted") return item.status === "submitted"
     if (currentTab === "in_review") return item.status === "in_review"
-    if (currentTab === "processed") {
-      return item.status === "approved" || item.status === "rejected" || item.status === "correction_requested"
-    }
     return true
   })
 
@@ -232,6 +287,10 @@ export default function OrganizationsPage() {
     }
   }
 
+  const isPreviewVerifiedForSelected = Boolean(
+    selectedApp && previewUrl && previewForAppId === selectedApp.id
+  )
+
   return (
     <div className="space-y-6 max-w-7xl pb-16">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -243,7 +302,11 @@ export default function OrganizationsPage() {
           type="button"
           variant="secondary"
           disabled={loading || inFlight}
-          onClick={() => void loadApplications()}
+          onClick={() => {
+            setCursorIndex(0)
+            setCursorStack([null])
+            void loadApplications(null)
+          }}
           className="self-start sm:self-auto"
         >
           <ArrowPath className="w-4 h-4 mr-2" />
@@ -263,15 +326,15 @@ export default function OrganizationsPage() {
         </Alert>
       )}
 
-      {/* Tabs */}
+      {/* Tabs with keyboard accessibility */}
       <div className="flex border-b border-ui-border-base gap-2" role="tablist" aria-label="Başvuru durum filtreleri">
-        {(["all", "submitted", "in_review", "processed"] as const).map((tab) => (
+        {(["all", "submitted", "in_review"] as const).map((tab) => (
           <button
             key={tab}
             role="tab"
             type="button"
             aria-selected={currentTab === tab}
-            tabIndex={currentTab === tab ? 0 : -1}
+            tabIndex={0}
             onClick={() => setCurrentTab(tab)}
             className={`py-2 px-4 font-medium text-sm border-b-2 transition-colors ${
               currentTab === tab
@@ -285,15 +348,13 @@ export default function OrganizationsPage() {
                 ? applications.length
                 : tab === "submitted"
                 ? applications.filter((a) => a.status === "submitted").length
-                : tab === "in_review"
-                ? applications.filter((a) => a.status === "in_review").length
-                : applications.filter((a) => ["approved", "rejected", "correction_requested"].includes(a.status)).length}
+                : applications.filter((a) => a.status === "in_review").length}
             </span>
           </button>
         ))}
       </div>
 
-      {/* Applications Table */}
+      {/* Applications Table & Pagination */}
       <Container className="p-0 overflow-hidden">
         {loading ? (
           <div className="p-8 text-center text-ui-fg-muted" role="status" aria-live="polite">
@@ -371,6 +432,33 @@ export default function OrganizationsPage() {
             </table>
           </div>
         )}
+
+        {/* Cursor-based pagination controls */}
+        {(cursorIndex > 0 || nextCursor) && (
+          <div className="flex items-center justify-between p-4 border-t border-ui-border-base">
+            <Button
+              type="button"
+              size="small"
+              variant="secondary"
+              disabled={cursorIndex <= 0 || loading || inFlight}
+              onClick={handlePrevPage}
+            >
+              Önceki Sayfa
+            </Button>
+            <span className="text-xs text-ui-fg-subtle">
+              Sayfa {cursorIndex + 1}
+            </span>
+            <Button
+              type="button"
+              size="small"
+              variant="secondary"
+              disabled={!nextCursor || loading || inFlight}
+              onClick={handleNextPage}
+            >
+              Sonraki Sayfa
+            </Button>
+          </div>
+        )}
       </Container>
 
       {/* Review & Decision Modal */}
@@ -434,10 +522,12 @@ export default function OrganizationsPage() {
                       {t("organizations.modal.documentPreviewTitle")}
                     </h3>
                     <p className="text-xs text-ui-fg-subtle">
-                      {t("organizations.modal.documentNotice")}
+                      {isPreviewVerifiedForSelected
+                        ? t("organizations.modal.documentVerifiedNotice")
+                        : t("organizations.modal.documentPendingNotice")}
                     </p>
                   </div>
-                  {!previewUrl && (
+                  {!isPreviewVerifiedForSelected && (
                     <Button
                       type="button"
                       size="small"
@@ -457,7 +547,7 @@ export default function OrganizationsPage() {
                   </Alert>
                 )}
 
-                {previewUrl && (
+                {isPreviewVerifiedForSelected && previewUrl && (
                   <div
                     tabIndex={0}
                     role="region"

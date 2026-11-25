@@ -118,7 +118,12 @@ export default function StoresPage() {
 
   // State for /platform/store-closing-reviews & /platform/store-closings
   const [appeals, setAppeals] = useState<ClosingAppealItem[]>([])
+  const [appealsPage, setAppealsPage] = useState<number>(0)
+  const [appealsHasMore, setAppealsHasMore] = useState<boolean>(false)
+
   const [closingCandidates, setClosingCandidates] = useState<ClosingCandidateItem[]>([])
+  const [closingsPage, setClosingsPage] = useState<number>(0)
+  const [closingsHasMore, setClosingsHasMore] = useState<boolean>(false)
   const [closingsLoading, setClosingsLoading] = useState<boolean>(false)
 
   // Global messages & in-flight
@@ -138,68 +143,102 @@ export default function StoresPage() {
   const [reasonText, setReasonText] = useState<string>("")
   const [closingConfirmed, setClosingConfirmed] = useState<boolean>(false)
 
-  const activeSeq = useRef(0)
+  // Independent sequence refs per source to avoid cross-tab loading lockups
+  const storesSeq = useRef(0)
+  const renamesSeq = useRef(0)
+  const closingsSeq = useRef(0)
 
   // Fetch /platform/stores
   const loadStores = useCallback(async (page: number) => {
-    const seq = ++activeSeq.current
+    const seq = ++storesSeq.current
     setStoresLoading(true)
     setErrorMsg(null)
     try {
       const data = await apiGet<StoresResponse>(`/platform/stores?page=${page}`)
-      if (seq !== activeSeq.current) return
+      if (seq !== storesSeq.current) return
       setStoresData(data)
     } catch (err) {
-      if (seq !== activeSeq.current) return
+      if (seq !== storesSeq.current) return
       setErrorMsg(err instanceof Error ? err.message : t("stores.alerts.loadError"))
     } finally {
-      if (seq === activeSeq.current) setStoresLoading(false)
+      if (seq === storesSeq.current) {
+        setStoresLoading(false)
+      }
     }
   }, [t])
 
   // Fetch /platform/store-renames
   const loadRenames = useCallback(async (page: number) => {
-    const seq = ++activeSeq.current
+    const seq = ++renamesSeq.current
     setRenamesLoading(true)
     setErrorMsg(null)
     try {
       const data = await apiGet<StoreRenamesResponse>(`/platform/store-renames?page=${page}`)
-      if (seq !== activeSeq.current) return
+      if (seq !== renamesSeq.current) return
       setRenamesData(data)
     } catch (err) {
-      if (seq !== activeSeq.current) return
+      if (seq !== renamesSeq.current) return
       setErrorMsg(err instanceof Error ? err.message : t("stores.alerts.loadError"))
     } finally {
-      if (seq === activeSeq.current) setRenamesLoading(false)
+      if (seq === renamesSeq.current) {
+        setRenamesLoading(false)
+      }
     }
   }, [t])
 
   // Fetch /platform/store-closing-reviews & /platform/store-closings
-  const loadClosingsAndAppeals = useCallback(async () => {
-    const seq = ++activeSeq.current
+  const loadClosingsAndAppeals = useCallback(async (cPage: number, aPage: number) => {
+    const seq = ++closingsSeq.current
     setClosingsLoading(true)
     setErrorMsg(null)
     try {
       const [appealsRes, closingsRes] = await Promise.allSettled([
-        apiGet<ClosingAppealItem[] | { candidates: ClosingAppealItem[] }>("/platform/store-closing-reviews?page=0"),
-        apiGet<ClosingsResponse>("/platform/store-closings?page=0"),
+        apiGet<ClosingAppealItem[] | { candidates: ClosingAppealItem[]; page: number; has_more?: boolean }>(
+          `/platform/store-closing-reviews?page=${aPage}`
+        ),
+        apiGet<ClosingsResponse>(`/platform/store-closings?page=${cPage}`),
       ])
 
-      if (seq !== activeSeq.current) return
+      if (seq !== closingsSeq.current) return
+
+      const failureMessages: string[] = []
 
       if (appealsRes.status === "fulfilled") {
         const val = appealsRes.value
-        setAppeals(Array.isArray(val) ? val : val.candidates || [])
+        if (Array.isArray(val)) {
+          setAppeals(val)
+          setAppealsHasMore(val.length >= 30)
+        } else {
+          setAppeals(val.candidates || [])
+          setAppealsHasMore(Boolean(val.has_more))
+        }
+      } else {
+        failureMessages.push(
+          "İtiraz listesi yüklenemedi: " +
+            (appealsRes.reason instanceof Error ? appealsRes.reason.message : "Erişim hatası")
+        )
       }
 
       if (closingsRes.status === "fulfilled") {
         setClosingCandidates(closingsRes.value.candidates || [])
+        setClosingsHasMore(Boolean(closingsRes.value.has_more))
+      } else {
+        failureMessages.push(
+          "Kapatma adayları listesi yüklenemedi: " +
+            (closingsRes.reason instanceof Error ? closingsRes.reason.message : "Erişim hatası")
+        )
+      }
+
+      if (failureMessages.length > 0) {
+        setErrorMsg(failureMessages.join(" | "))
       }
     } catch (err) {
-      if (seq !== activeSeq.current) return
+      if (seq !== closingsSeq.current) return
       setErrorMsg(err instanceof Error ? err.message : t("stores.alerts.loadError"))
     } finally {
-      if (seq === activeSeq.current) setClosingsLoading(false)
+      if (seq === closingsSeq.current) {
+        setClosingsLoading(false)
+      }
     }
   }, [t])
 
@@ -209,9 +248,18 @@ export default function StoresPage() {
     } else if (activeTab === "renames") {
       void loadRenames(renamesPage)
     } else if (activeTab === "closings") {
-      void loadClosingsAndAppeals()
+      void loadClosingsAndAppeals(closingsPage, appealsPage)
     }
-  }, [activeTab, storesPage, renamesPage, loadStores, loadRenames, loadClosingsAndAppeals])
+  }, [
+    activeTab,
+    storesPage,
+    renamesPage,
+    closingsPage,
+    appealsPage,
+    loadStores,
+    loadRenames,
+    loadClosingsAndAppeals,
+  ])
 
   // Store Application Actions
   const handleApproveStore = async (item: PendingStoreItem) => {
@@ -333,7 +381,7 @@ export default function StoresPage() {
           decision: reasonModal.appealDecision || "rejected",
           reason: trimmed,
         })
-        await loadClosingsAndAppeals()
+        await loadClosingsAndAppeals(closingsPage, appealsPage)
       } else if (reasonModal.type === "start_closing") {
         const randomHex = crypto.randomUUID().replace(/-/g, "")
         await apiPost("/platform/store-closings", {
@@ -342,7 +390,7 @@ export default function StoresPage() {
           request_id: `dascp_${randomHex}`,
           reason: trimmed,
         })
-        await loadClosingsAndAppeals()
+        await loadClosingsAndAppeals(closingsPage, appealsPage)
       }
 
       setSuccessMsg(t("stores.alerts.actionSuccess"))
@@ -375,7 +423,7 @@ export default function StoresPage() {
           onClick={() => {
             if (activeTab === "applications" || activeTab === "suspended") void loadStores(storesPage)
             if (activeTab === "renames") void loadRenames(renamesPage)
-            if (activeTab === "closings") void loadClosingsAndAppeals()
+            if (activeTab === "closings") void loadClosingsAndAppeals(closingsPage, appealsPage)
           }}
         >
           <ArrowPath className="w-4 h-4 mr-2" />
@@ -395,7 +443,7 @@ export default function StoresPage() {
         </Alert>
       )}
 
-      {/* Tabs */}
+      {/* Tabs with keyboard accessibility */}
       <div className="flex border-b border-ui-border-base gap-2" role="tablist" aria-label="Mağaza yönetim sekmeleri">
         {(["applications", "suspended", "renames", "closings"] as const).map((tab) => (
           <button
@@ -403,7 +451,7 @@ export default function StoresPage() {
             role="tab"
             type="button"
             aria-selected={activeTab === tab}
-            tabIndex={activeTab === tab ? 0 : -1}
+            tabIndex={0}
             onClick={() => setActiveTab(tab)}
             className={`py-2 px-4 font-medium text-sm border-b-2 transition-colors ${
               activeTab === tab
@@ -443,71 +491,75 @@ export default function StoresPage() {
             <div className="p-8 text-center text-ui-fg-muted" role="status" aria-live="polite">
               Yükleniyor...
             </div>
-          ) : !storesData || storesData.pending.length === 0 ? (
-            <div className="p-8 text-center text-ui-fg-muted" role="status" aria-live="polite">
-              {t("stores.alerts.emptyPending")}
-            </div>
           ) : (
             <>
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm" aria-label={t("stores.tabs.applications")}>
-                  <thead className="bg-ui-bg-subtle text-ui-fg-subtle border-b border-ui-border-base">
-                    <tr>
-                      <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.storeName")}</th>
-                      <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.organization")}</th>
-                      <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.sellerId")}</th>
-                      <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.status")}</th>
-                      <th scope="col" className="py-3 px-4 font-semibold text-right">{t("stores.table.actions")}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-ui-border-base">
-                    {storesData.pending.map((item) => (
-                      <tr key={item.application_id} className="hover:bg-ui-bg-subtle-hover transition-colors">
-                        <td className="py-3 px-4 font-medium text-ui-fg-base">{item.name}</td>
-                        <td className="py-3 px-4 text-ui-fg-subtle">{item.organization_name}</td>
-                        <td className="py-3 px-4 font-mono text-xs text-ui-fg-muted">{item.seller_id}</td>
-                        <td className="py-3 px-4">
-                          <Badge color="orange">{t("stores.status.pending_approval")}</Badge>
-                          {item.on_hold && (
-                            <div className="mt-1">
-                              <Badge color="red" size="small">{t("stores.status.onHold")}</Badge>
-                            </div>
-                          )}
-                        </td>
-                        <td className="py-3 px-4 text-right space-x-2">
-                          <Button
-                            type="button"
-                            size="small"
-                            variant="primary"
-                            disabled={item.on_hold || inFlight}
-                            onClick={() => void handleApproveStore(item)}
-                          >
-                            <CheckCircle className="w-4 h-4 mr-1" />
-                            {t("stores.actions.approveStore")}
-                          </Button>
-                          <Button
-                            type="button"
-                            size="small"
-                            variant="danger"
-                            disabled={inFlight}
-                            onClick={() => {
-                              setReasonModal({
-                                type: "reject_store",
-                                targetId: item.application_id,
-                                sellerId: item.seller_id,
-                              })
-                              setReasonText("")
-                            }}
-                          >
-                            <XCircle className="w-4 h-4 mr-1" />
-                            {t("stores.actions.rejectStore")}
-                          </Button>
-                        </td>
+                {!storesData || storesData.pending.length === 0 ? (
+                  <div className="p-8 text-center text-ui-fg-muted" role="status" aria-live="polite">
+                    {t("stores.alerts.emptyPending")}
+                  </div>
+                ) : (
+                  <table className="w-full text-left text-sm" aria-label={t("stores.tabs.applications")}>
+                    <thead className="bg-ui-bg-subtle text-ui-fg-subtle border-b border-ui-border-base">
+                      <tr>
+                        <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.storeName")}</th>
+                        <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.organization")}</th>
+                        <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.sellerId")}</th>
+                        <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.status")}</th>
+                        <th scope="col" className="py-3 px-4 font-semibold text-right">{t("stores.table.actions")}</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-ui-border-base">
+                      {storesData.pending.map((item) => (
+                        <tr key={item.application_id} className="hover:bg-ui-bg-subtle-hover transition-colors">
+                          <td className="py-3 px-4 font-medium text-ui-fg-base">{item.name}</td>
+                          <td className="py-3 px-4 text-ui-fg-subtle">{item.organization_name}</td>
+                          <td className="py-3 px-4 font-mono text-xs text-ui-fg-muted">{item.seller_id}</td>
+                          <td className="py-3 px-4">
+                            <Badge color="orange">{t("stores.status.pending_approval")}</Badge>
+                            {item.on_hold && (
+                              <div className="mt-1">
+                                <Badge color="red" size="small">{t("stores.status.onHold")}</Badge>
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-right space-x-2">
+                            <Button
+                              type="button"
+                              size="small"
+                              variant="primary"
+                              disabled={item.on_hold || inFlight}
+                              onClick={() => void handleApproveStore(item)}
+                            >
+                              <CheckCircle className="w-4 h-4 mr-1" />
+                              {t("stores.actions.approveStore")}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="small"
+                              variant="danger"
+                              disabled={inFlight}
+                              onClick={() => {
+                                setReasonModal({
+                                  type: "reject_store",
+                                  targetId: item.application_id,
+                                  sellerId: item.seller_id,
+                                })
+                                setReasonText("")
+                              }}
+                            >
+                              <XCircle className="w-4 h-4 mr-1" />
+                              {t("stores.actions.rejectStore")}
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
+
+              {/* Pagination controls always accessible regardless of empty list */}
               {storesData && (storesData.has_more || storesPage > 0) && (
                 <div className="flex items-center justify-between p-4 border-t border-ui-border-base">
                   <Button
@@ -545,48 +597,77 @@ export default function StoresPage() {
             </div>
             {storesLoading ? (
               <div className="p-8 text-center text-ui-fg-muted">Yükleniyor...</div>
-            ) : !storesData || storesData.suspended.length === 0 ? (
-              <div className="p-8 text-center text-ui-fg-muted">{t("stores.alerts.emptySuspended")}</div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm" aria-label="Askıdaki mağazalar listesi">
-                  <thead className="bg-ui-bg-subtle text-ui-fg-subtle border-b border-ui-border-base">
-                    <tr>
-                      <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.storeName")}</th>
-                      <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.organization")}</th>
-                      <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.status")}</th>
-                      <th scope="col" className="py-3 px-4 font-semibold text-right">{t("stores.table.actions")}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-ui-border-base">
-                    {storesData.suspended.map((item) => (
-                      <tr key={item.application_id} className="hover:bg-ui-bg-subtle-hover transition-colors">
-                        <td className="py-3 px-4 font-medium text-ui-fg-base">{item.name}</td>
-                        <td className="py-3 px-4 text-ui-fg-subtle">{item.organization_name}</td>
-                        <td className="py-3 px-4">
-                          <Badge color="red">{t("stores.status.suspended")}</Badge>
-                          {item.name_review_required && (
-                            <div className="mt-1">
-                              <Badge color="orange" size="small">{t("stores.status.nameReviewRequired")}</Badge>
-                            </div>
-                          )}
-                        </td>
-                        <td className="py-3 px-4 text-right">
-                          <Button
-                            type="button"
-                            size="small"
-                            variant="secondary"
-                            disabled={item.name_review_required || inFlight}
-                            onClick={() => void handleSuspendedAction("unsuspend", item)}
-                          >
-                            {t("stores.actions.unsuspendStore")}
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <>
+                <div className="overflow-x-auto">
+                  {!storesData || storesData.suspended.length === 0 ? (
+                    <div className="p-8 text-center text-ui-fg-muted">{t("stores.alerts.emptySuspended")}</div>
+                  ) : (
+                    <table className="w-full text-left text-sm" aria-label="Askıdaki mağazalar listesi">
+                      <thead className="bg-ui-bg-subtle text-ui-fg-subtle border-b border-ui-border-base">
+                        <tr>
+                          <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.storeName")}</th>
+                          <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.organization")}</th>
+                          <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.status")}</th>
+                          <th scope="col" className="py-3 px-4 font-semibold text-right">{t("stores.table.actions")}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-ui-border-base">
+                        {storesData.suspended.map((item) => (
+                          <tr key={item.application_id} className="hover:bg-ui-bg-subtle-hover transition-colors">
+                            <td className="py-3 px-4 font-medium text-ui-fg-base">{item.name}</td>
+                            <td className="py-3 px-4 text-ui-fg-subtle">{item.organization_name}</td>
+                            <td className="py-3 px-4">
+                              <Badge color="red">{t("stores.status.suspended")}</Badge>
+                              {item.name_review_required && (
+                                <div className="mt-1">
+                                  <Badge color="orange" size="small">{t("stores.status.nameReviewRequired")}</Badge>
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <Button
+                                type="button"
+                                size="small"
+                                variant="secondary"
+                                disabled={item.name_review_required || inFlight}
+                                onClick={() => void handleSuspendedAction("unsuspend", item)}
+                              >
+                                {t("stores.actions.unsuspendStore")}
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+
+                {/* Pagination for suspended view as well */}
+                {storesData && (storesData.has_more || storesPage > 0) && (
+                  <div className="flex items-center justify-between p-4 border-t border-ui-border-base">
+                    <Button
+                      type="button"
+                      size="small"
+                      variant="secondary"
+                      disabled={storesPage === 0 || inFlight}
+                      onClick={() => setStoresPage((p) => Math.max(0, p - 1))}
+                    >
+                      {t("stores.actions.newer")}
+                    </Button>
+                    <span className="text-xs text-ui-fg-subtle">Sayfa {storesPage + 1}</span>
+                    <Button
+                      type="button"
+                      size="small"
+                      variant="secondary"
+                      disabled={!storesData.has_more || inFlight}
+                      onClick={() => setStoresPage((p) => p + 1)}
+                    >
+                      {t("stores.actions.older")}
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
           </Container>
 
@@ -643,75 +724,78 @@ export default function StoresPage() {
         <Container className="p-0 overflow-hidden">
           {renamesLoading ? (
             <div className="p-8 text-center text-ui-fg-muted">Yükleniyor...</div>
-          ) : !renamesData || renamesData.pending.length === 0 ? (
-            <div className="p-8 text-center text-ui-fg-muted">{t("stores.alerts.emptyRenames")}</div>
           ) : (
             <>
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm" aria-label={t("stores.tabs.renames")}>
-                  <thead className="bg-ui-bg-subtle text-ui-fg-subtle border-b border-ui-border-base">
-                    <tr>
-                      <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.organization")}</th>
-                      <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.oldName")}</th>
-                      <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.proposedName")}</th>
-                      <th scope="col" className="py-3 px-4 font-semibold text-right">{t("stores.table.actions")}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-ui-border-base">
-                    {renamesData.pending.map((item) => (
-                      <tr key={item.request_id} className="hover:bg-ui-bg-subtle-hover transition-colors">
-                        <td className="py-3 px-4">
-                          <div className="font-medium text-ui-fg-base">{item.organization_name}</div>
-                          {item.seller_status === "suspended" && (
-                            <Badge color="red" size="small">Askıda</Badge>
-                          )}
-                        </td>
-                        <td className="py-3 px-4 text-ui-fg-subtle">
-                          {item.old_name} <span className="text-xs font-mono">({item.old_handle})</span>
-                        </td>
-                        <td className="py-3 px-4 text-ui-fg-base font-medium">
-                          {item.proposed_name} <span className="text-xs font-mono">({item.proposed_handle})</span>
-                        </td>
-                        <td className="py-3 px-4 text-right space-x-2">
-                          {item.status === "approving" ? (
-                            <span className="text-xs text-ui-fg-subtle">Onaylanıyor...</span>
-                          ) : (
-                            <>
-                              <Button
-                                type="button"
-                                size="small"
-                                variant="primary"
-                                disabled={inFlight}
-                                onClick={() => void handleApproveRename(item)}
-                              >
-                                <CheckCircle className="w-4 h-4 mr-1" />
-                                {t("stores.actions.approveRename")}
-                              </Button>
-                              <Button
-                                type="button"
-                                size="small"
-                                variant="danger"
-                                disabled={inFlight}
-                                onClick={() => {
-                                  setReasonModal({
-                                    type: "reject_rename",
-                                    targetId: item.request_id,
-                                    sellerId: item.seller_id,
-                                  })
-                                  setReasonText("")
-                                }}
-                              >
-                                <XCircle className="w-4 h-4 mr-1" />
-                                {t("stores.actions.rejectRename")}
-                              </Button>
-                            </>
-                          )}
-                        </td>
+                {!renamesData || renamesData.pending.length === 0 ? (
+                  <div className="p-8 text-center text-ui-fg-muted">{t("stores.alerts.emptyRenames")}</div>
+                ) : (
+                  <table className="w-full text-left text-sm" aria-label={t("stores.tabs.renames")}>
+                    <thead className="bg-ui-bg-subtle text-ui-fg-subtle border-b border-ui-border-base">
+                      <tr>
+                        <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.organization")}</th>
+                        <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.oldName")}</th>
+                        <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.proposedName")}</th>
+                        <th scope="col" className="py-3 px-4 font-semibold text-right">{t("stores.table.actions")}</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-ui-border-base">
+                      {renamesData.pending.map((item) => (
+                        <tr key={item.request_id} className="hover:bg-ui-bg-subtle-hover transition-colors">
+                          <td className="py-3 px-4">
+                            <div className="font-medium text-ui-fg-base">{item.organization_name}</div>
+                            {item.seller_status === "suspended" && (
+                              <Badge color="red" size="small">Askıda</Badge>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-ui-fg-subtle">
+                            {item.old_name} <span className="text-xs font-mono">({item.old_handle})</span>
+                          </td>
+                          <td className="py-3 px-4 text-ui-fg-base font-medium">
+                            {item.proposed_name} <span className="text-xs font-mono">({item.proposed_handle})</span>
+                          </td>
+                          <td className="py-3 px-4 text-right space-x-2">
+                            {item.status === "approving" ? (
+                              <span className="text-xs text-ui-fg-subtle">Onaylanıyor...</span>
+                            ) : (
+                              <>
+                                <Button
+                                  type="button"
+                                  size="small"
+                                  variant="primary"
+                                  disabled={inFlight}
+                                  onClick={() => void handleApproveRename(item)}
+                                >
+                                  <CheckCircle className="w-4 h-4 mr-1" />
+                                  {t("stores.actions.approveRename")}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="small"
+                                  variant="danger"
+                                  disabled={inFlight}
+                                  onClick={() => {
+                                    setReasonModal({
+                                      type: "reject_rename",
+                                      targetId: item.request_id,
+                                      sellerId: item.seller_id,
+                                    })
+                                    setReasonText("")
+                                  }}
+                                >
+                                  <XCircle className="w-4 h-4 mr-1" />
+                                  {t("stores.actions.rejectRename")}
+                                </Button>
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
+
               {renamesData && (renamesData.has_more || renamesPage > 0) && (
                 <div className="flex items-center justify-between p-4 border-t border-ui-border-base">
                   <Button
@@ -811,6 +895,30 @@ export default function StoresPage() {
                     </div>
                   </div>
                 ))}
+
+                {(appealsHasMore || appealsPage > 0) && (
+                  <div className="flex items-center justify-between p-2 border-t border-ui-border-base">
+                    <Button
+                      type="button"
+                      size="small"
+                      variant="secondary"
+                      disabled={appealsPage === 0 || inFlight}
+                      onClick={() => setAppealsPage((p) => Math.max(0, p - 1))}
+                    >
+                      Önceki İtirazlar
+                    </Button>
+                    <span className="text-xs text-ui-fg-subtle">İtiraz Sayfası {appealsPage + 1}</span>
+                    <Button
+                      type="button"
+                      size="small"
+                      variant="secondary"
+                      disabled={!appealsHasMore || inFlight}
+                      onClick={() => setAppealsPage((p) => p + 1)}
+                    >
+                      Sonraki İtirazlar
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
           </Container>
@@ -858,6 +966,30 @@ export default function StoresPage() {
                     ))}
                   </select>
                 </div>
+
+                {(closingsHasMore || closingsPage > 0) && (
+                  <div className="flex items-center justify-between pt-2">
+                    <Button
+                      type="button"
+                      size="small"
+                      variant="secondary"
+                      disabled={closingsPage === 0 || inFlight}
+                      onClick={() => setClosingsPage((p) => Math.max(0, p - 1))}
+                    >
+                      Önceki Adaylar
+                    </Button>
+                    <span className="text-xs text-ui-fg-subtle">Aday Sayfası {closingsPage + 1}</span>
+                    <Button
+                      type="button"
+                      size="small"
+                      variant="secondary"
+                      disabled={!closingsHasMore || inFlight}
+                      onClick={() => setClosingsPage((p) => p + 1)}
+                    >
+                      Sonraki Adaylar
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
           </Container>
