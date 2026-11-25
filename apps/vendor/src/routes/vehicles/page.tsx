@@ -83,6 +83,7 @@ export default function VehiclesPage() {
   const labelInputRef = useRef<HTMLInputElement>(null)
   const cancelDeleteRef = useRef<HTMLButtonElement>(null)
   const triggerButtonRef = useRef<HTMLElement | null>(null)
+  const pendingFocusRestoreRef = useRef<boolean>(false)
   const activeOrgFetchRef = useRef<string>("")
   const abortControllerRef = useRef<AbortController | null>(null)
 
@@ -190,6 +191,18 @@ export default function VehiclesPage() {
     }
   }, [activeOrg, fetchVehicles])
 
+  // When vehicle list finishes reloading, restore focus to #add-vehicle-btn if pending (WCAG 2.1 SC 2.4.3)
+  useEffect(() => {
+    if (!loadingVehicles && pendingFocusRestoreRef.current && modalMode === "none") {
+      pendingFocusRestoreRef.current = false
+      const addBtn = document.getElementById("add-vehicle-btn")
+      if (addBtn && !addBtn.hasAttribute("disabled")) {
+        addBtn.focus()
+      }
+      triggerButtonRef.current = null
+    }
+  }, [loadingVehicles, modalMode])
+
   // Filtered vehicles based on search query
   const filteredVehicles = useMemo(() => {
     if (!searchQuery.trim()) return vehicles
@@ -213,8 +226,19 @@ export default function VehiclesPage() {
     setFormErrors({})
     // Return focus to the trigger button for keyboard users (WCAG 2.1 SC 2.4.3)
     setTimeout(() => {
-      triggerButtonRef.current?.focus()
-      triggerButtonRef.current = null
+      const trigger = triggerButtonRef.current
+      if (trigger && trigger.isConnected && !trigger.hasAttribute("disabled")) {
+        trigger.focus()
+        triggerButtonRef.current = null
+      } else {
+        pendingFocusRestoreRef.current = true
+        const addBtn = document.getElementById("add-vehicle-btn")
+        if (addBtn && !addBtn.hasAttribute("disabled")) {
+          addBtn.focus()
+          pendingFocusRestoreRef.current = false
+          triggerButtonRef.current = null
+        }
+      }
     }, 0)
   }, [])
 
@@ -502,7 +526,7 @@ export default function VehiclesPage() {
                 if (found) setActiveOrg(found)
               }}
               className="px-3 py-1.5 border rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              aria-label={t("vehicles.changeActiveOrg")}
+              aria-label={`${t("vehicles.orgLabel")} - ${t("vehicles.changeActiveOrg")}`}
             >
               {organizations.map((org) => (
                 <option key={org.id} value={org.id}>
@@ -581,6 +605,7 @@ export default function VehiclesPage() {
         </div>
 
         <Button
+          id="add-vehicle-btn"
           variant="primary"
           onClick={(e) => openCreateModal(e)}
           disabled={!activeOrg || loadingVehicles}

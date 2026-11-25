@@ -1,12 +1,13 @@
 import type { AuthenticatedMedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { MedusaError } from "@medusajs/framework/utils"
 import { requireOrganizationAccess } from "../../../authorization"
-import { DOGRUADRES_VEHICLE_MODULE } from "../../../../../modules/dogruadres-vehicle"
+import { DOGRUADRES_VEHICLE_MODULE } from "../../../../../modules/dogruadres-vehicle/constants"
 import type VehicleModuleService from "../../../../../modules/dogruadres-vehicle/service"
 import { createVehicleWorkflow } from "../../../../../workflows/dogruadres-vehicle/create-vehicle"
 import type { CreateVehicleBody } from "../../../validators"
 
 export const GET = async (req: AuthenticatedMedusaRequest, res: MedusaResponse) => {
+  res.setHeader("Cache-Control", "no-store")
   const { organizationId } = await requireOrganizationAccess(req, req.params.id, "vehicle.read")
   const vehicleService = req.scope.resolve<VehicleModuleService>(DOGRUADRES_VEHICLE_MODULE)
   const vehicles = await vehicleService.listLiveVehicles(organizationId)
@@ -29,6 +30,7 @@ export const GET = async (req: AuthenticatedMedusaRequest, res: MedusaResponse) 
 }
 
 export const POST = async (req: AuthenticatedMedusaRequest<CreateVehicleBody>, res: MedusaResponse) => {
+  res.setHeader("Cache-Control", "no-store")
   const access = await requireOrganizationAccess(req, req.params.id, "vehicle.create")
   const body = req.validatedBody || req.body
   try {
