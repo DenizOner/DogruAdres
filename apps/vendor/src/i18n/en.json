@@ -162,6 +162,7 @@
     "pageTitle": "Returns & Customer Requests Management",
     "pageDescription": "Review, approve, or reject with a reason parts return requests received from buyer companies for your store.",
     "orgLabel": "Active Business",
+    "infoBanner": "Customer return requests are currently in view and review mode. Seller approve and reject decisions will be directly persisted upon completion of server-side authorization (Policy A).",
     "unauthorizedWarning": "You must log in with your personal session to view return requests and take action.",
     "status": {
       "all": "All Statuses",
@@ -194,7 +195,8 @@
       "moreItems": "more parts",
       "date": "Request Date",
       "status": "Status",
-      "actions": "Actions"
+      "actions": "Actions",
+      "notSpecified": "Not specified"
     },
     "actions": {
       "viewDetail": "Review",
@@ -225,7 +227,8 @@
       "quantity": "Quantity",
       "reasonLabel": "Return Reason",
       "rejectionReasonTitle": "Seller Rejection Reason",
-      "noNotes": "No seller review notes added yet."
+      "noNotes": "No seller review notes added yet.",
+      "itemsPendingBackend": "Part and order details for this return record are currently pending backend integration."
     },
     "reasons": {
       "incompatible_part": "Incompatible Part",
@@ -241,7 +244,8 @@
       "rejectedSuccess": "Return request was rejected with the provided reason.",
       "rejectError": "An error occurred while rejecting the return.",
       "noteAddedSuccess": "Review note was successfully added.",
-      "noteError": "An error occurred while adding the note."
+      "noteError": "An error occurred while adding the note.",
+      "actionPendingBackend": "Return actions are temporarily in read-only mode until server-side write authorization (Policy A) is complete. The change was not saved to the database."
     },
     "validation": {
       "reasonRequired": "Providing a reason is required for return rejection.",

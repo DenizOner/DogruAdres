@@ -41,17 +41,23 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const rejectionInputRef = useRef<HTMLTextAreaElement>(null)
   const noteInputRef = useRef<HTMLTextAreaElement>(null)
+  const prevReturnIdRef = useRef<string | null>(null)
 
-  // Reset local form states when modal opens or return request changes
+  // Reset local form states when modal opens or return request ID changes (preserves tab on note addition)
   useEffect(() => {
     if (isOpen) {
-      setActiveTab("details")
-      setRejectionReason("")
-      setRejectionError("")
-      setNewNote("")
-      setNoteError("")
+      if (prevReturnIdRef.current !== returnRequest?.id) {
+        setActiveTab("details")
+        setRejectionReason("")
+        setRejectionError("")
+        setNewNote("")
+        setNoteError("")
+        prevReturnIdRef.current = returnRequest?.id ?? null
+      }
+    } else {
+      prevReturnIdRef.current = null
     }
-  }, [isOpen, returnRequest])
+  }, [isOpen, returnRequest?.id])
 
   // Accessibility: Focus trap & Escape key handling (WCAG 2.2 SC 2.1.2)
   useEffect(() => {
@@ -262,40 +268,46 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
                 <Heading level="h3" className="text-base font-semibold text-ui-fg-base mb-3">
                   {t("returns.detail.itemsTitle")} ({returnRequest.items.length})
                 </Heading>
-                <div className="space-y-3">
-                  {returnRequest.items.map((item) => (
-                    <div
-                      key={item.id}
-                      className="p-4 rounded-lg border border-ui-border-base bg-ui-bg-base flex flex-col md:flex-row md:items-center justify-between gap-4"
-                    >
-                      <div className="space-y-1">
-                        <Text className="text-sm font-semibold text-ui-fg-base">
-                          {item.title}
-                        </Text>
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-ui-fg-subtle">
-                          <span className="font-mono bg-ui-bg-subtle px-2 py-0.5 rounded border border-ui-border-base">
-                            SKU: {item.sku}
-                          </span>
-                          <span>•</span>
-                          <span>
-                            {t("returns.detail.quantity")}: {item.quantity}
-                          </span>
-                          <span>•</span>
-                          <span className="font-medium text-ui-fg-base">
-                            {item.unit_price ? `${item.unit_price.toFixed(2)} ${item.currency_code}` : ""}
-                          </span>
-                        </div>
-                        <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs">
-                          <InformationCircle className="w-4 h-4 flex-shrink-0" />
-                          <span>
-                            <strong>{t("returns.detail.reasonLabel")}:</strong> {getReasonLabel(item.reason_code, t)}
-                            {item.reason_note ? ` — ${item.reason_note}` : ""}
-                          </span>
+                {returnRequest.items.length === 0 ? (
+                  <div className="p-4 rounded-lg bg-ui-bg-subtle border border-ui-border-base text-xs text-ui-fg-muted">
+                    {t("returns.detail.itemsPendingBackend")}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {returnRequest.items.map((item) => (
+                      <div
+                        key={item.id}
+                        className="p-4 rounded-lg border border-ui-border-base bg-ui-bg-base flex flex-col md:flex-row md:items-center justify-between gap-4"
+                      >
+                        <div className="space-y-1">
+                          <Text className="text-sm font-semibold text-ui-fg-base">
+                            {item.title}
+                          </Text>
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-ui-fg-subtle">
+                            <span className="font-mono bg-ui-bg-subtle px-2 py-0.5 rounded border border-ui-border-base">
+                              SKU: {item.sku}
+                            </span>
+                            <span>•</span>
+                            <span>
+                              {t("returns.detail.quantity")}: {item.quantity}
+                            </span>
+                            <span>•</span>
+                            <span className="font-medium text-ui-fg-base">
+                              {item.unit_price ? `${item.unit_price.toFixed(2)} ${item.currency_code}` : ""}
+                            </span>
+                          </div>
+                          <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs">
+                            <InformationCircle className="w-4 h-4 flex-shrink-0" />
+                            <span>
+                              <strong>{t("returns.detail.reasonLabel")}:</strong> {getReasonLabel(item.reason_code, t)}
+                              {item.reason_note ? ` — ${item.reason_note}` : ""}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Rejection / Decision Note Display if Canceled */}

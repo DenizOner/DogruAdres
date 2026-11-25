@@ -261,36 +261,26 @@ export default function VendorReturnsPage() {
       if (res.ok) {
         const data = await res.json()
         if (Array.isArray(data.return_requests) && data.return_requests.length > 0) {
-          // Merge backend summaries with rich local representation
+          // Merge backend summaries with rich local representation without fabricating false commercial data
           const merged: VendorReturnRequest[] = data.return_requests.map(
-            (bItem: { id: string; status: ReturnStatus; created_at: string }, idx: number) => {
+            (bItem: { id: string; status: ReturnStatus; created_at: string }) => {
               const existing = INITIAL_SAMPLE_RETURNS.find((s) => s.id === bItem.id)
               if (existing) {
                 return { ...existing, status: bItem.status, created_at: bItem.created_at }
               }
               return {
                 id: bItem.id,
-                order_id: `order_backend_${idx + 1}`,
-                order_display_id: String(10050 + idx),
+                order_id: bItem.id,
+                order_display_id: bItem.id.slice(0, 12),
                 buyer_organization_id: orgId,
-                buyer_organization_name: activeOrg?.name || "Kurumsal Müşteri",
+                buyer_organization_name: t("returns.table.notSpecified"),
                 seller_id: sellerId,
                 status: bItem.status,
                 created_at: bItem.created_at,
                 updated_at: bItem.created_at,
-                items: [
-                  {
-                    id: `item_backend_${idx}`,
-                    title: "Otomotiv Yedek Parça Kalemi",
-                    sku: `SKU-${idx + 100}`,
-                    quantity: 1,
-                    unit_price: 1250.0,
-                    currency_code: "TRY",
-                    reason_code: "incompatible_part",
-                  },
-                ],
+                items: [],
                 review_notes: [],
-                total_refund_amount: 1250.0,
+                total_refund_amount: 0,
                 currency_code: "TRY",
               }
             }
@@ -351,25 +341,33 @@ export default function VendorReturnsPage() {
     setErrorMessage("")
     setStatusMessage("")
     try {
-      // Attempt backend notification if endpoint mounted
-      if (csrfToken && activeOrg) {
-        await fetch("/organization/return-requests", {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "x-csrf-token": csrfToken,
-          },
-          body: JSON.stringify({
-            action: "approve",
-            return_id: returnId,
-            organization_id: activeOrg.id,
-            seller_id: activeSellerId,
-          }),
-        }).catch(() => {})
+      if (!csrfToken || !activeOrg) {
+        setErrorMessage(t("returns.feedback.actionPendingBackend"))
+        return
       }
 
-      // Update state locally
+      const res = await fetch("/organization/return-requests", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "x-csrf-token": csrfToken,
+        },
+        body: JSON.stringify({
+          action: "approve",
+          return_id: returnId,
+          organization_id: activeOrg.id,
+          seller_id: activeSellerId,
+        }),
+      }).catch(() => null)
+
+      // Fail-closed verification: never assume success if server does not respond 2xx
+      if (!res || !res.ok) {
+        setErrorMessage(t("returns.feedback.actionPendingBackend"))
+        return
+      }
+
+      // Update state only on verified server response
       setReturnsList((prev) =>
         prev.map((r) =>
           r.id === returnId
@@ -406,22 +404,31 @@ export default function VendorReturnsPage() {
     setErrorMessage("")
     setStatusMessage("")
     try {
-      if (csrfToken && activeOrg) {
-        await fetch("/organization/return-requests", {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "x-csrf-token": csrfToken,
-          },
-          body: JSON.stringify({
-            action: "reject",
-            return_id: returnId,
-            reason,
-            organization_id: activeOrg.id,
-            seller_id: activeSellerId,
-          }),
-        }).catch(() => {})
+      if (!csrfToken || !activeOrg) {
+        setErrorMessage(t("returns.feedback.actionPendingBackend"))
+        return
+      }
+
+      const res = await fetch("/organization/return-requests", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "x-csrf-token": csrfToken,
+        },
+        body: JSON.stringify({
+          action: "reject",
+          return_id: returnId,
+          reason,
+          organization_id: activeOrg.id,
+          seller_id: activeSellerId,
+        }),
+      }).catch(() => null)
+
+      // Fail-closed verification: preserve inputs and form on server error
+      if (!res || !res.ok) {
+        setErrorMessage(t("returns.feedback.actionPendingBackend"))
+        return
       }
 
       setReturnsList((prev) =>
@@ -461,22 +468,31 @@ export default function VendorReturnsPage() {
     setErrorMessage("")
     setStatusMessage("")
     try {
-      if (csrfToken && activeOrg) {
-        await fetch("/organization/return-requests", {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "x-csrf-token": csrfToken,
-          },
-          body: JSON.stringify({
-            action: "add_note",
-            return_id: returnId,
-            note,
-            organization_id: activeOrg.id,
-            seller_id: activeSellerId,
-          }),
-        }).catch(() => {})
+      if (!csrfToken || !activeOrg) {
+        setErrorMessage(t("returns.feedback.actionPendingBackend"))
+        return
+      }
+
+      const res = await fetch("/organization/return-requests", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "x-csrf-token": csrfToken,
+        },
+        body: JSON.stringify({
+          action: "add_note",
+          return_id: returnId,
+          note,
+          organization_id: activeOrg.id,
+          seller_id: activeSellerId,
+        }),
+      }).catch(() => null)
+
+      // Fail-closed: preserve typed note if server has not confirmed write
+      if (!res || !res.ok) {
+        setErrorMessage(t("returns.feedback.actionPendingBackend"))
+        return
       }
 
       const newNoteObj = {
@@ -498,7 +514,6 @@ export default function VendorReturnsPage() {
         )
       )
 
-      // Also update currently selected return for real-time modal update
       setSelectedReturn((prev) =>
         prev && prev.id === returnId
           ? {
@@ -573,6 +588,12 @@ export default function VendorReturnsPage() {
             <span className="text-ui-fg-muted font-mono">({activeOrg.id})</span>
           </div>
         )}
+      </div>
+
+      {/* Information Banner on Policy A Read-only Phase */}
+      <div className="p-3.5 rounded-xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 text-xs text-blue-900 dark:text-blue-200 flex items-center gap-2.5">
+        <InformationCircle className="w-4 h-4 flex-shrink-0 text-blue-600 dark:text-blue-400" />
+        <span>{t("returns.infoBanner")}</span>
       </div>
 
       {/* Unauthorized Notice Banner */}

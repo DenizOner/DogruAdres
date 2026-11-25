@@ -34,22 +34,21 @@ export function filterReturns(
       }
     }
 
-    // 3. Date Range Filter
+    // 3. Date Range Filter using local calendar date (matches table display)
     const itemDate = new Date(item.created_at)
     if (Number.isNaN(itemDate.getTime())) return false
 
-    if (filters.startDate) {
-      const start = new Date(`${filters.startDate}T00:00:00.000Z`)
-      if (!Number.isNaN(start.getTime()) && itemDate < start) {
-        return false
-      }
+    const localYear = itemDate.getFullYear()
+    const localMonth = String(itemDate.getMonth() + 1).padStart(2, "0")
+    const localDay = String(itemDate.getDate()).padStart(2, "0")
+    const itemLocalDate = `${localYear}-${localMonth}-${localDay}`
+
+    if (filters.startDate && itemLocalDate < filters.startDate) {
+      return false
     }
 
-    if (filters.endDate) {
-      const end = new Date(`${filters.endDate}T23:59:59.999Z`)
-      if (!Number.isNaN(end.getTime()) && itemDate > end) {
-        return false
-      }
+    if (filters.endDate && itemLocalDate > filters.endDate) {
+      return false
     }
 
     return true
