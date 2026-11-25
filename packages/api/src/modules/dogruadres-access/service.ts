@@ -628,7 +628,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return new PersonalNotificationPreferences(securitySql(context.transactionManager)).update(
       token,
       input,
-      (events) => this.persistAuditEventsWithOutbox_(events, context),
+      async (events) => { await this.persistAuditEventsWithOutbox_(events, context) },
       DOGRUADRES_AUDIT_MODULE
     )
   }
