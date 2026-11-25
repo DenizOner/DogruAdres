@@ -1,7 +1,7 @@
 import type { AuthenticatedMedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { MedusaError } from "@medusajs/framework/utils"
 import { requireOrganizationAccess } from "../../../authorization"
-import { DOGRUADRES_VEHICLE_MODULE } from "../../../../../modules/dogruadres-vehicle"
+import { DOGRUADRES_VEHICLE_MODULE } from "../../../../../modules/dogruadres-vehicle/constants"
 import type VehicleModuleService from "../../../../../modules/dogruadres-vehicle/service"
 import { createVehicleWorkflow } from "../../../../../workflows/dogruadres-vehicle/create-vehicle"
 import type { CreateVehicleBody } from "../../../validators"
