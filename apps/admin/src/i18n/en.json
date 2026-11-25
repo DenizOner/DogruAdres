@@ -96,5 +96,69 @@
     "warnUnverifiedVersion": "Save response received, but current policy version could not be verified. Check again.",
     "successVersion": "New version verified from server. Native factor reconciliation is separately required.",
     "errVerifyFailed": "MFA policy could not be safely verified. Re-authenticate with a strong session or refresh the page."
+  },
+  "notifications": {
+    "label": "Notification Settings",
+    "title": "Personal Notification Preferences",
+    "description": "Manage in-platform, email, and mobile notification channels per event category.",
+    "versionBadge": "Preference version: {{version}}",
+    "loading": "Loading notification preferences...",
+    "authError": "Sign in with your personal session to view and manage your notification preferences.",
+    "authFrontdoorBtn": "Sign in via Personal Console →",
+    "loadError": "Notification preferences cannot be loaded right now. Please refresh.",
+    "summaryTitle": "Overview",
+    "summaryCritical": "Critical security and Owner/closing notifications are locked and cannot be turned off.",
+    "advancedToggle": "Advanced Settings (Event and Channel Table)",
+    "tableCategory": "Event Category",
+    "tablePlatform": "In-Platform",
+    "tableEmail": "Email",
+    "tableMobile": "Mobile",
+    "criticalBadge": "Required / Locked",
+    "mobileUnsupported": "Not supported (no mobile push permission/provider)",
+    "emailImmediate": "Immediate",
+    "emailDailyDigest": "Daily digest",
+    "emailOff": "Off",
+    "saveBtn": "Save preferences",
+    "savingBtn": "Saving...",
+    "resetBtn": "Reset to defaults",
+    "saveSuccess": "Your notification preferences have been saved.",
+    "resetSuccess": "Your notification preferences have been reset to defaults.",
+    "saveConflict": "Preferences were updated in another session. Latest settings reloaded.",
+    "saveFailed": "Could not save preferences. Please review your selections.",
+    "bellLink": "Back to notification bell",
+    "categories": {
+      "security_account": {
+        "name": "Security, Account & Session",
+        "desc": "Session locks, password resets, and critical account security alerts."
+      },
+      "owner_closing": {
+        "name": "Owner Authority & Store Closing",
+        "desc": "Owner role changes, store closing workflows, appeals, and decisions."
+      },
+      "organization_membership": {
+        "name": "Organization Membership & Invitations",
+        "desc": "Company invitations, approvals, and membership/permission updates."
+      },
+      "store_operations": {
+        "name": "Store Applications & Status",
+        "desc": "Store application outcomes, draft permissions, and store reactivations."
+      },
+      "buyer_orders": {
+        "name": "Buyer Orders & Returns",
+        "desc": "Order, delivery, payment, and return request updates."
+      },
+      "seller_operations": {
+        "name": "Seller Offers, Catalog & Stock",
+        "desc": "Offer, catalog approval, follower, and inventory alerts."
+      },
+      "platform_announcements": {
+        "name": "Platform Announcements",
+        "desc": "General platform updates and operational announcements."
+      },
+      "marketing_promotions": {
+        "name": "Promotions & Marketing",
+        "desc": "Optional promotional messages (off by default)."
+      }
+    }
   }
 }

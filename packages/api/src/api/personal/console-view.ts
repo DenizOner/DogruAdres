@@ -80,7 +80,7 @@ export function renderPersonalConsole(nonce: string): string {
   </style>
   <header id="personal-header"><h1>DoğruAdres</h1><div><button id="notification-bell" type="button" aria-expanded="false" aria-controls="notification-panel" hidden><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg> Bildirimler <span id="notification-count"></span></button> <button id="session-lock" type="button" hidden>Oturumu kilitle</button></div></header>
   <section id="notification-panel" aria-labelledby="notification-heading" hidden>
-    <h2 id="notification-heading">Bildirimler</h2><p>Kişisel hesabınıza ait oturum bildirimleri</p>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem"><h2 id="notification-heading" tabindex="-1">Bildirimler</h2><button id="notification-settings-link" type="button" aria-label="Bildirim ayarları" title="Bildirim ayarları">⚙ Bildirim ayarları</button></div><p>Kişisel hesabınıza ait oturum bildirimleri</p>
     <p id="notification-status" role="status" aria-live="polite"></p>
     <ul id="notification-list"></ul>
     <button id="notification-refresh" type="button">Bildirimleri yenile</button>
@@ -149,6 +149,24 @@ export function renderPersonalConsole(nonce: string): string {
     <button type="submit">Cep telefonumu kaydet</button>
     <p id="person-mobile-status" role="status" aria-live="polite"></p>
   </form>
+  <section id="notification-preferences-section" aria-labelledby="notif-pref-heading" hidden tabindex="-1">
+    <h2 id="notif-pref-heading">Bildirim Ayarları</h2>
+    <p id="notif-pref-summary">Kritik güvenlik ve Owner/kapatma bildirimleri kilitlidir ve kapatılamaz. Mobil bildirim kanalı desteklenmediği için kapalıdır.</p>
+    <details id="notif-pref-advanced">
+      <summary>Gelişmiş Ayarlar (Olay ve Kanal Tablosu)</summary>
+      <div style="overflow-x:auto;margin-top:.5rem">
+        <table id="notif-pref-table">
+          <thead><tr><th>Olay Kategorisi</th><th>Platform içi</th><th>E-posta</th><th>Mobil</th></tr></thead>
+          <tbody id="notif-pref-rows"></tbody>
+        </table>
+      </div>
+    </details>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem">
+      <button id="notif-pref-save" type="button">Tercihleri kaydet</button>
+      <button id="notif-pref-reset" type="button">Varsayılanlara döndür</button>
+    </div>
+    <p id="notif-pref-status" role="status" aria-live="polite"></p>
+  </section>
   <section id="verification-status" aria-labelledby="verification-status-title">
     <h2 id="verification-status-title">Doğrulama durumları</h2>
     <p id="verification-email" role="status" aria-live="polite"></p>
@@ -1415,9 +1433,115 @@ export function renderPersonalConsole(nonce: string): string {
   el('notification-refresh').onclick=()=>notifications();
   el('notification-next').onclick=()=>{if(notificationNext!==null)void notifications(notificationNext)};
   el('notification-close').onclick=closeNotifications;
+  el('notification-settings-link').onclick=()=>{
+    el('notification-panel').hidden=true;
+    el('notification-bell').setAttribute('aria-expanded','false');
+    const sec=el('notification-preferences-section');
+    if(!sec.hidden){
+      el('notif-pref-advanced').open=true;
+      sec.scrollIntoView?.({behavior:'smooth',block:'start'});
+      sec.focus();
+    }
+  };
   el('notification-panel').onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();closeNotifications()}};
   function clearMfaCodes(){recoveryCodes=[];el("mfa-codes-value").textContent="";el("mfa-codes-value").hidden=true;el("mfa-codes").hidden=true}
   let currentOrg='',currentPersonId='',linkIntent='',organizationRequest=0,storeRequest=0,mfaState=null,timelineCursor=null,timelineOrg='',timelineRequest=0;
+  let notifPrefVersion=null,notifPrefData=null,notifPrefRequest=0;
+  const notifCategoryLabels={
+    security_account:'Güvenlik, Hesap ve Oturum (Zorunlu)',
+    owner_closing:'Owner Yetkisi ve Mağaza Kapatma (Zorunlu)',
+    organization_membership:'Şirket Üyeliği ve Davetler',
+    store_operations:'Mağaza Başvuruları ve Durumu',
+    buyer_orders:'Alıcı Sipariş ve İade İşlemleri',
+    seller_operations:'Satıcı Teklif, Katalog ve Stok',
+    platform_announcements:'Platform Duyuruları',
+    marketing_promotions:'Tanıtım ve Pazarlama',
+  };
+  function clearNotificationPreferences(){
+    notifPrefRequest++;notifPrefVersion=null;notifPrefData=null;
+    el('notification-preferences-section').hidden=true;
+    el('notif-pref-rows').replaceChildren();
+    el('notif-pref-status').textContent='';
+  }
+  function renderNotificationPreferences(){
+    const tbody=el('notif-pref-rows');
+    tbody.replaceChildren();
+    if(!notifPrefData)return;
+    for(const cat of notifPrefData.categories){
+      const pref=notifPrefData.preferences[cat.id];
+      const tr=document.createElement('tr');
+      const tdName=document.createElement('td');
+      tdName.textContent=notifCategoryLabels[cat.id]||cat.id;
+      const tdPlat=document.createElement('td');
+      const cbPlat=document.createElement('input');
+      cbPlat.type='checkbox';cbPlat.checked=Boolean(pref.platform);cbPlat.disabled=Boolean(cat.critical);
+      cbPlat.onchange=()=>{pref.platform=cbPlat.checked};
+      tdPlat.append(cbPlat);
+      const tdEmail=document.createElement('td');
+      const sel=document.createElement('select');
+      sel.disabled=Boolean(cat.critical);
+      const opts=cat.critical?[['immediate','Anında']]:[['immediate','Anında'],['daily_digest','Günlük özet'],['off','Kapalı']];
+      for(const [val,lbl] of opts){
+        const o=document.createElement('option');o.value=val;o.textContent=lbl;sel.append(o);
+      }
+      sel.value=pref.email;
+      sel.onchange=()=>{pref.email=sel.value};
+      tdEmail.append(sel);
+      const tdMob=document.createElement('td');
+      const cbMob=document.createElement('input');
+      cbMob.type='checkbox';cbMob.checked=false;cbMob.disabled=true;
+      cbMob.title='Desteklenmiyor (mobil bildirim izni/sağlayıcısı yok)';
+      tdMob.append(cbMob);
+      tr.append(tdName,tdPlat,tdEmail,tdMob);
+      tbody.append(tr);
+    }
+  }
+  async function refreshNotificationPreferences(){
+    const reqId=++notifPrefRequest,epoch=viewEpoch,person=currentPersonId;
+    el('notification-preferences-section').hidden=true;
+    try{
+      const result=await api('notification-preferences');
+      if(reqId!==notifPrefRequest||epoch!==viewEpoch||person!==currentPersonId||document.hidden||el('workspace').hidden)return false;
+      notifPrefVersion=result.version;
+      notifPrefData=result;
+      renderNotificationPreferences();
+      el('notification-preferences-section').hidden=false;
+      return true;
+    }catch{
+      if(reqId!==notifPrefRequest||epoch!==viewEpoch||person!==currentPersonId)return false;
+      clearNotificationPreferences();
+      el('notif-pref-status').textContent='Bildirim tercihleri şu anda okunamıyor.';
+      return false;
+    }
+  }
+  async function saveNotificationPreferences(action){
+    if(notifPrefVersion===null||!notifPrefData||el('workspace').hidden)return;
+    const saveBtn=el('notif-pref-save'),resetBtn=el('notif-pref-reset');
+    saveBtn.disabled=true;resetBtn.disabled=true;
+    try{
+      const payload=action==='reset_defaults'
+        ?{action:'reset_defaults',expected_version:notifPrefVersion}
+        :{action:'update',preferences:notifPrefData.preferences,expected_version:notifPrefVersion};
+      const result=await api('notification-preferences',{method:'POST',body:JSON.stringify(payload)});
+      notifPrefVersion=result.version;
+      notifPrefData=result;
+      renderNotificationPreferences();
+      el('notif-pref-status').textContent=action==='reset_defaults'
+        ?'Bildirim tercihleriniz varsayılanlara döndürüldü.'
+        :'Bildirim tercihleriniz kaydedildi.';
+    }catch(err){
+      if(err?.httpStatus===409){
+        await refreshNotificationPreferences();
+        el('notif-pref-status').textContent='Tercihler başka bir oturumda değişti. Güncel ayarlar yeniden yüklendi.';
+      }else{
+        el('notif-pref-status').textContent='Bildirim tercihleri kaydedilemedi.';
+      }
+    }finally{
+      saveBtn.disabled=false;resetBtn.disabled=false;
+    }
+  }
+  el('notif-pref-save').onclick=()=>void saveNotificationPreferences('update');
+  el('notif-pref-reset').onclick=()=>void saveNotificationPreferences('reset_defaults');
   let mobileVersion=null,mobileRequest=0;
   function clearPersonMobile(){
     mobileRequest++;mobileVersion=null;
@@ -4921,11 +5045,11 @@ export function renderPersonalConsole(nonce: string): string {
     if(platformMailLinkToken&&!document.hidden&&
        (!platformMailLinkPreservedPerson||platformMailLinkPreservedPerson===me.person_id))
       el('platform-closing-email-link-panel').hidden=false;
-    el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshPlatformClosings();void refreshPlatformClosingReviews();void refreshStoreRenameReviews();void refreshOrganizationReviews();void loadPlatformLauncher();
+    el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();void refreshNotificationPreferences();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshPlatformClosings();void refreshPlatformClosingReviews();void refreshStoreRenameReviews();void refreshOrganizationReviews();void loadPlatformLauncher();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
-    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;if(currentPersonId)clearPrivateClosingEmailLink();clearNotifications();clearCompanyLauncher();clearPlatformLauncher();organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('register-details').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPersonMobile();clearOrganizationDrafts();clearPendingInvitations();el('invite-result').textContent='';
+    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;if(currentPersonId)clearPrivateClosingEmailLink();clearNotifications();clearCompanyLauncher();clearPlatformLauncher();organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('register-details').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPersonMobile();clearNotificationPreferences();clearOrganizationDrafts();clearPendingInvitations();el('invite-result').textContent='';
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}
@@ -5294,7 +5418,7 @@ export function renderPersonalConsole(nonce: string): string {
     clearPlatformStorePolicy();
     clearPrivateClosingEmailLink(preserveUnopenedClosingLink);
     currentPersonId='';
-    clearPersonMobile();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPlatformClosings();clearPlatformClosingReviews();clearStoreRenameReviews();clearPendingInvitations();clearOrganizationReviews();
+    clearPersonMobile();clearNotificationPreferences();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPlatformClosings();clearPlatformClosingReviews();clearStoreRenameReviews();clearPendingInvitations();clearOrganizationReviews();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
     el('mfa-seed').value='';el('invite-member').hidden=true;status('Erişim yeniden doğrulanıyor');

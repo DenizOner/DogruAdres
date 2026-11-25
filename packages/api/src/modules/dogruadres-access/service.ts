@@ -29,6 +29,7 @@ import {
 } from "./smtp-settings"
 import { sendSmtpEmail } from "./smtp-client"
 import { PersonalNotifications } from "./personal-notifications"
+import { PersonalNotificationPreferences } from "./notification-preferences"
 import { CompanyLauncherConflict, companyLauncherAvailable, companyLauncherProject, companyLauncherValidate } from "./company-launcher"
 import { PlatformLauncherConflict, platformLauncherAvailable, platformLauncherProject, platformLauncherValidate } from "./platform-launcher"
 import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedSellerIds, verifiedStoreProductEditGrant } from "./legal-store-ownership"
@@ -611,6 +612,25 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async readPersonalNotification(token: string, id: string, organization?: string, @MedusaContext() context: Context = {}) {
     return new PersonalNotifications(securitySql(context.transactionManager)).read(token, id, organization)
+  }
+
+  @InjectTransactionManager()
+  async personalNotificationPreferences(token: string, @MedusaContext() context: Context = {}) {
+    return new PersonalNotificationPreferences(securitySql(context.transactionManager)).get(token)
+  }
+
+  @InjectTransactionManager()
+  async savePersonalNotificationPreferences(
+    token: string,
+    input: { action: "update"; preferences: unknown; expected_version: number } | { action: "reset_defaults"; expected_version: number },
+    @MedusaContext() context: Context = {}
+  ) {
+    return new PersonalNotificationPreferences(securitySql(context.transactionManager)).update(
+      token,
+      input,
+      (events) => this.persistAuditEventsWithOutbox_(events, context),
+      DOGRUADRES_AUDIT_MODULE
+    )
   }
 
   /**
