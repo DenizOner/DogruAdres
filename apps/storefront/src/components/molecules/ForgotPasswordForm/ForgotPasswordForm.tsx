@@ -59,7 +59,7 @@ const Form = () => {
     >
       <h1 className="heading-md my-0 mb-2 uppercase text-primary">Forgot your password?</h1>
       <p className="text-md">
-        Enter the email you used to sign up and we&#39;ll send you a password reset email. email.
+        Enter the email you used to sign up and we&#39;ll send you a password reset email.
       </p>
       <form
         onSubmit={handleSubmit(submit)}

@@ -255,6 +255,7 @@ export default function VerifyEmailPage() {
 
   return (
     <div
+      lang={currentLocale}
       dir={isRtl ? "rtl" : "ltr"}
       className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-between py-12 px-4 sm:px-6 lg:px-8 font-sans transition-colors duration-200"
     >

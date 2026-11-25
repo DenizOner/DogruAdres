@@ -259,8 +259,8 @@ export default function VehiclesPage() {
         }
 
         if (e.shiftKey) {
-          // Shift+Tab: wrap backward from first to last
-          if (active === first) {
+          // Shift+Tab: wrap backward from first to last, or if focus is on modal container itself
+          if (active === first || active === container) {
             e.preventDefault()
             last.focus()
           }

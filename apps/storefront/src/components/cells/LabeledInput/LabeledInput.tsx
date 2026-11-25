@@ -13,23 +13,31 @@ export const LabeledInput = ({
   error,
   label,
   className,
+  id: customId,
   ...props
 }: LabeledInputProps) => {
-  const errorId = useId()
+  const generatedId = useId()
+  const inputId = customId || generatedId
+  const errorId = `${inputId}-error`
+  const hasErrorMessage = Boolean(error?.message)
+
   return (
-    <label className={cn("label-sm block", className)}>
-      <p className={cn(error && "text-negative")}>{label}</p>
+    <div className={cn("label-sm block", className)}>
+      <label htmlFor={inputId} className={cn("block mb-1", error && "text-negative")}>
+        {label}
+      </label>
       <Input
+        id={inputId}
         error={!!error}
         aria-invalid={!!error}
-        aria-describedby={error?.message ? errorId : undefined}
+        aria-describedby={hasErrorMessage ? errorId : undefined}
         {...props}
       />
-      {error && (
-        <p id={errorId} role="alert" className="label-sm text-negative">
-          {error.message}
+      {hasErrorMessage && (
+        <p id={errorId} role="alert" className="label-sm text-negative mt-1">
+          {error?.message}
         </p>
       )}
-    </label>
+    </div>
   )
 }

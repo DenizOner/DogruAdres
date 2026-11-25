@@ -15,10 +15,11 @@ export function renderPersonalConsole(nonce: string): string {
   *{box-sizing:border-box}
   [hidden]{display:none!important}
   body{margin:0;padding:0 1rem 3rem;background:#f6f8fb;color:var(--ink);font:16px/1.5 system-ui,-apple-system,sans-serif}
-  body>#personal-header,body>p,body>#status,body>form,body>#workspace{max-width:60rem;margin-left:auto;margin-right:auto}
+  body>#personal-header,body>p,body>#status,body>form,body>#workspace,main,main>p,main>#status,main>form,main>#workspace{max-width:60rem;margin-left:auto;margin-right:auto}
+  main{outline:none}
   #personal-header{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.75rem;margin-top:2.5rem;margin-bottom:.1rem}
   #personal-header h1{margin:0;font-size:clamp(1.8rem,4vw,2.5rem)}
-  body>p{margin-top:.15rem;color:var(--muted)}
+  body>p,main>p:first-child{margin-top:.15rem;color:var(--muted)}
   #status{min-height:2.5rem;margin-top:1rem;margin-bottom:1rem;padding:.65rem 1rem;border-left:3px solid var(--accent);background:#eaf1fa;border-radius:.35rem}
   #login,#challenge{max-width:30rem;margin-top:1.25rem;padding:1.25rem;border:1px solid var(--line);border-radius:1rem;background:white}
   #login .da-help-text{margin:.5rem 0 0;font-size:.875rem;font-weight:400;color:var(--muted);text-align:center}
