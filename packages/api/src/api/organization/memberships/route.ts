@@ -36,12 +36,27 @@ const protectedOwnerInput = z.object({
 
 const input = z.union([protectedOwnerInput, roleChangeInput, revokeInput])
 
-// Returns true when the error should map to 403 Access denied.
-// Covers both module-level IdentityAccessDenied and service-level
-// MedusaError.Types.FORBIDDEN (e.g. personalChangeMembershipRole).
-function isForbidden(error: unknown): boolean {
-  return error instanceof IdentityAccessDenied ||
-    (error instanceof MedusaError && error.type === MedusaError.Types.FORBIDDEN)
+// Maps module and service errors to appropriate HTTP status codes.
+// IdentityAccessDenied, FORBIDDEN and UNAUTHORIZED map to 403 Access denied.
+// NOT_FOUND maps to 404 Not found.
+// INVALID_DATA maps to 400 Invalid input.
+// All unexpected errors fail closed to 503 Unavailable.
+function statusForError(error: unknown): { status: number; message: string } {
+  if (error instanceof IdentityAccessDenied) {
+    return { status: 403, message: 'Access denied' }
+  }
+  if (error instanceof MedusaError) {
+    if (error.type === MedusaError.Types.FORBIDDEN || error.type === MedusaError.Types.UNAUTHORIZED) {
+      return { status: 403, message: 'Access denied' }
+    }
+    if (error.type === MedusaError.Types.NOT_FOUND) {
+      return { status: 404, message: 'Not found' }
+    }
+    if (error.type === MedusaError.Types.INVALID_DATA) {
+      return { status: 400, message: 'Invalid input' }
+    }
+  }
+  return { status: 503, message: 'Unavailable' }
 }
 
 export const AUTHENTICATE = false
@@ -57,8 +72,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.json({ memberships: memberships.map(({ id, person_id, role, status, protected_owner }) =>
       ({ id, person_id, role, status, protected_owner })) })
   } catch (error) {
-    return res.status(isForbidden(error) ? 403 : 503)
-      .json({ message: isForbidden(error) ? 'Access denied' : 'Unavailable' })
+    const { status, message } = statusForError(error)
+    return res.status(status).json({ message })
   }
 }
 
@@ -95,7 +110,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     )
     return res.json({ membership })
   } catch (error) {
-    return res.status(isForbidden(error) ? 403 : 503)
-      .json({ message: isForbidden(error) ? 'Access denied' : 'Unavailable' })
+    const { status, message } = statusForError(error)
+    return res.status(status).json({ message })
   }
 }
