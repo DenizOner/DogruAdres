@@ -1526,6 +1526,9 @@ export function renderPersonalConsole(nonce: string): string {
     if(notifPrefVersion===null||!notifPrefData||el('workspace').hidden)return;
     const saveBtn=el('notif-pref-save'),resetBtn=el('notif-pref-reset');
     saveBtn.disabled=true;resetBtn.disabled=true;
+    const table=el('notif-pref-table');
+    const tableControls=table?Array.from(table.querySelectorAll('input, select')):null;
+    if(tableControls)tableControls.forEach(c=>{c.disabled=true;});
     try{
       const payload=action==='reset_defaults'
         ?{action:'reset_defaults',expected_version:notifPrefVersion}
@@ -1546,6 +1549,7 @@ export function renderPersonalConsole(nonce: string): string {
       }
     }finally{
       saveBtn.disabled=false;resetBtn.disabled=false;
+      renderNotificationPreferences();
     }
   }
   el('notif-pref-save').onclick=()=>void saveNotificationPreferences('update');

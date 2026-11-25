@@ -58,13 +58,12 @@ export async function runNotificationDigestTick(container: MedusaContainer) {
     const rows = await sql.execute(
       `update da_notification_digest_queue
        set claimed_at = clock_timestamp(),
-           claim_id = ?,
-           attempts = attempts + 1
+           claim_id = ?
        where person_id = any(?::text[])
          and sent_at is null
          and failed_at is null
          and (claimed_at is null or claimed_at < clock_timestamp() - interval '15 minutes')
-       returning id, person_id, category, event_action, summary_key, attempts`,
+       returning id, person_id, organization_id, category, event_action, summary_key, attempts`,
       [claimId, personIds]
     )
 
@@ -91,11 +90,35 @@ export async function runNotificationDigestTick(container: MedusaContainer) {
         for (const item of items) {
           const cat = String(item.category) as NotificationCategoryId
           const resolved = await prefs.resolveForPerson(personId, cat)
-          if (resolved.email === "daily_digest") {
-            deliverableIds.push(String(item.id))
-          } else {
+          if (resolved.email !== "daily_digest") {
             skippedIds.push(String(item.id))
+            continue
           }
+
+          // Re-verify current active organization membership before digest delivery
+          const orgId = item.organization_id ? String(item.organization_id) : null
+          if (orgId) {
+            const orgRows = await sql.execute(
+              `select 1
+               from da_organization o
+               join da_organization_membership m on m.organization_id = o.id
+               where o.id = ?
+                 and o.status = 'active'
+                 and o.deleted_at is null
+                 and m.person_id = ?
+                 and m.status = 'active'
+                 and m.revoked_at is null
+                 and m.deleted_at is null
+               limit 1`,
+              [orgId, personId]
+            )
+            if (orgRows.length === 0) {
+              skippedIds.push(String(item.id))
+              continue
+            }
+          }
+
+          deliverableIds.push(String(item.id))
         }
         if (skippedIds.length > 0) {
           await sql.execute(
@@ -197,7 +220,8 @@ export async function runNotificationDigestTick(container: MedusaContainer) {
       await db.transactional(async (sql) => {
         await sql.execute(
           `update da_notification_digest_queue
-           set sent_at = clock_timestamp()
+           set sent_at = clock_timestamp(),
+               attempts = attempts + 1
            where id = any(?::text[]) and claim_id = ?`,
           [deliverableIds, claimId]
         )
@@ -209,7 +233,8 @@ export async function runNotificationDigestTick(container: MedusaContainer) {
           `update da_notification_digest_queue
            set claimed_at = null,
                claim_id = null,
-               failed_at = case when attempts >= 4 then clock_timestamp() else null end
+               attempts = attempts + 1,
+               failed_at = case when attempts + 1 >= 4 then clock_timestamp() else null end
            where person_id = ? and claim_id = ? and sent_at is null`,
           [personId, claimId]
         )
