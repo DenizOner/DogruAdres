@@ -72,7 +72,9 @@ export default function OrganizationsPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [previewForAppId, setPreviewForAppId] = useState<string | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [modalError, setModalError] = useState<string | null>(null)
   const activePreviewAppId = useRef<string | null>(null)
+  const previewSeq = useRef(0)
 
   const activeSeq = useRef(0)
 
@@ -130,6 +132,8 @@ export default function OrganizationsPage() {
   }
 
   const openReviewModal = (app: OrganizationApplicationItem) => {
+    previewSeq.current += 1
+    setPreviewLoading(false)
     if (previewUrl) {
       URL.revokeObjectURL(previewUrl)
       setPreviewUrl(null)
@@ -139,10 +143,13 @@ export default function OrganizationsPage() {
     setNotes("")
     setPreviewForAppId(null)
     setPreviewError(null)
+    setModalError(null)
   }
 
   const closeReviewModal = () => {
     if (inFlight) return
+    previewSeq.current += 1
+    setPreviewLoading(false)
     activePreviewAppId.current = null
     setSelectedApp(null)
     setNotes("")
@@ -152,10 +159,12 @@ export default function OrganizationsPage() {
     }
     setPreviewForAppId(null)
     setPreviewError(null)
+    setModalError(null)
   }
 
   const loadSafePreview = async (appId: string) => {
     if (previewLoading || inFlight) return
+    const currentSeq = ++previewSeq.current
     activePreviewAppId.current = appId
     setPreviewLoading(true)
     setPreviewError(null)
@@ -182,7 +191,7 @@ export default function OrganizationsPage() {
       const blob = await response.blob()
 
       // Guard against stale response if user switched applications or closed modal
-      if (activePreviewAppId.current !== appId) {
+      if (previewSeq.current !== currentSeq || activePreviewAppId.current !== appId) {
         return
       }
 
@@ -190,11 +199,11 @@ export default function OrganizationsPage() {
       setPreviewUrl(objectUrl)
       setPreviewForAppId(appId)
     } catch (err) {
-      if (activePreviewAppId.current === appId) {
+      if (previewSeq.current === currentSeq && activePreviewAppId.current === appId) {
         setPreviewError(err instanceof Error ? err.message : "Önizleme yüklenemedi")
       }
     } finally {
-      if (activePreviewAppId.current === appId) {
+      if (previewSeq.current === currentSeq) {
         setPreviewLoading(false)
       }
     }
@@ -207,7 +216,7 @@ export default function OrganizationsPage() {
 
     const trimmedNotes = notes.trim()
     if ((decision === "request_correction" || decision === "reject") && trimmedNotes.length < 2) {
-      setErrorMsg(t("organizations.modal.notesRequired"))
+      setModalError(t("organizations.modal.notesRequired"))
       return
     }
 
@@ -220,6 +229,7 @@ export default function OrganizationsPage() {
     }
 
     setInFlight(true)
+    setModalError(null)
     setErrorMsg(null)
     setSuccessMsg(null)
 
@@ -254,7 +264,7 @@ export default function OrganizationsPage() {
         await loadApplications(currentCursor)
       } else {
         const message = err instanceof Error ? err.message : "İşlem başarısız"
-        setErrorMsg(t("organizations.alerts.actionError", { error: message }))
+        setModalError(t("organizations.alerts.actionError", { error: message }))
       }
     } finally {
       setInFlight(false)
@@ -578,6 +588,12 @@ export default function OrganizationsPage() {
                 maxLength={1000}
               />
             </div>
+
+            {modalError && (
+              <Alert variant="error" role="alert">
+                {modalError}
+              </Alert>
+            )}
 
             {/* Decision Actions */}
             <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-ui-border-base">

@@ -125,10 +125,12 @@ export default function StoresPage() {
   const [closingsPage, setClosingsPage] = useState<number>(0)
   const [closingsHasMore, setClosingsHasMore] = useState<boolean>(false)
   const [closingsLoading, setClosingsLoading] = useState<boolean>(false)
+  const [selectedClosingSellerId, setSelectedClosingSellerId] = useState<string>("")
 
   // Global messages & in-flight
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
+  const [modalError, setModalError] = useState<string | null>(null)
   const [inFlight, setInFlight] = useState<boolean>(false)
 
   // Action modals / reason prompts
@@ -142,6 +144,15 @@ export default function StoresPage() {
   } | null>(null)
   const [reasonText, setReasonText] = useState<string>("")
   const [closingConfirmed, setClosingConfirmed] = useState<boolean>(false)
+
+  const closeReasonModal = () => {
+    if (inFlight) return
+    setReasonModal(null)
+    setReasonText("")
+    setClosingConfirmed(false)
+    setModalError(null)
+    setSelectedClosingSellerId("")
+  }
 
   // Independent sequence refs per source to avoid cross-tab loading lockups
   const storesSeq = useRef(0)
@@ -346,11 +357,12 @@ export default function StoresPage() {
 
     const trimmed = reasonText.trim()
     if (trimmed.length < 10 || trimmed.length > 500) {
-      setErrorMsg(t("stores.alerts.reasonLengthError"))
+      setModalError(t("stores.alerts.reasonLengthError"))
       return
     }
 
     setInFlight(true)
+    setModalError(null)
     setErrorMsg(null)
     setSuccessMsg(null)
 
@@ -394,15 +406,13 @@ export default function StoresPage() {
       }
 
       setSuccessMsg(t("stores.alerts.actionSuccess"))
-      setReasonModal(null)
-      setReasonText("")
-      setClosingConfirmed(false)
+      closeReasonModal()
     } catch (err) {
       if (err instanceof ApiError && err.isConflict) {
-        setErrorMsg("İşlem çakışması: Veri başka bir oturumda güncellendi.")
+        setModalError("İşlem çakışması: Veri başka bir oturumda güncellendi.")
       } else {
         const msg = err instanceof Error ? err.message : "Hata"
-        setErrorMsg(t("stores.alerts.actionError", { error: msg }))
+        setModalError(t("stores.alerts.actionError", { error: msg }))
       }
     } finally {
       setInFlight(false)
@@ -423,7 +433,11 @@ export default function StoresPage() {
           onClick={() => {
             if (activeTab === "applications" || activeTab === "suspended") void loadStores(storesPage)
             if (activeTab === "renames") void loadRenames(renamesPage)
-            if (activeTab === "closings") void loadClosingsAndAppeals(closingsPage, appealsPage)
+            if (activeTab === "closings") {
+              setClosingsPage(0)
+              setAppealsPage(0)
+              void loadClosingsAndAppeals(0, 0)
+            }
           }}
         >
           <ArrowPath className="w-4 h-4 mr-2" />
@@ -504,7 +518,6 @@ export default function StoresPage() {
                       <tr>
                         <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.storeName")}</th>
                         <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.organization")}</th>
-                        <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.sellerId")}</th>
                         <th scope="col" className="py-3 px-4 font-semibold">{t("stores.table.status")}</th>
                         <th scope="col" className="py-3 px-4 font-semibold text-right">{t("stores.table.actions")}</th>
                       </tr>
@@ -514,7 +527,6 @@ export default function StoresPage() {
                         <tr key={item.application_id} className="hover:bg-ui-bg-subtle-hover transition-colors">
                           <td className="py-3 px-4 font-medium text-ui-fg-base">{item.name}</td>
                           <td className="py-3 px-4 text-ui-fg-subtle">{item.organization_name}</td>
-                          <td className="py-3 px-4 font-mono text-xs text-ui-fg-muted">{item.seller_id}</td>
                           <td className="py-3 px-4">
                             <Badge color="orange">{t("stores.status.pending_approval")}</Badge>
                             {item.on_hold && (
@@ -546,6 +558,7 @@ export default function StoresPage() {
                                   sellerId: item.seller_id,
                                 })
                                 setReasonText("")
+                                setModalError(null)
                               }}
                             >
                               <XCircle className="w-4 h-4 mr-1" />
@@ -834,70 +847,76 @@ export default function StoresPage() {
             </div>
             {closingsLoading ? (
               <div className="p-8 text-center text-ui-fg-muted">Yükleniyor...</div>
-            ) : appeals.length === 0 ? (
-              <div className="p-8 text-center text-ui-fg-muted">{t("stores.alerts.emptyClosings")}</div>
             ) : (
-              <div className="p-4 space-y-4">
-                {appeals.map((appeal) => (
-                  <div key={appeal.source_request_id} className="p-4 border border-ui-border-base rounded-md space-y-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div>
-                        <h3 className="font-semibold text-ui-fg-base text-base">
-                          {appeal.organization_name} / {appeal.store_name}
-                        </h3>
-                        <div className="text-xs text-ui-fg-subtle">
-                          {appeal.stage === "first_appeal" ? t("stores.status.firstAppeal") : t("stores.status.secondReview")}
+              <>
+                {appeals.length === 0 ? (
+                  <div className="p-8 text-center text-ui-fg-muted">{t("stores.alerts.emptyClosings")}</div>
+                ) : (
+                  <div className="p-4 space-y-4">
+                    {appeals.map((appeal) => (
+                      <div key={appeal.source_request_id} className="p-4 border border-ui-border-base rounded-md space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div>
+                            <h3 className="font-semibold text-ui-fg-base text-base">
+                              {appeal.organization_name} / {appeal.store_name}
+                            </h3>
+                            <div className="text-xs text-ui-fg-subtle">
+                              {appeal.stage === "first_appeal" ? t("stores.status.firstAppeal") : t("stores.status.secondReview")}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              type="button"
+                              size="small"
+                              variant="primary"
+                              disabled={inFlight}
+                              onClick={() => {
+                                setReasonModal({
+                                  type: "decide_appeal",
+                                  targetId: appeal.source_request_id,
+                                  sellerId: appeal.seller_id,
+                                  orgId: appeal.organization_id,
+                                  sourceRequestId: appeal.source_request_id,
+                                  appealDecision: "accepted",
+                                })
+                                setReasonText("")
+                                setModalError(null)
+                              }}
+                            >
+                              {t("stores.alerts.decisionAccepted")}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="small"
+                              variant="danger"
+                              disabled={inFlight}
+                              onClick={() => {
+                                setReasonModal({
+                                  type: "decide_appeal",
+                                  targetId: appeal.source_request_id,
+                                  sellerId: appeal.seller_id,
+                                  orgId: appeal.organization_id,
+                                  sourceRequestId: appeal.source_request_id,
+                                  appealDecision: "rejected",
+                                })
+                                setReasonText("")
+                                setModalError(null)
+                              }}
+                            >
+                              {t("stores.alerts.decisionRejected")}
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="text-sm bg-ui-bg-subtle p-3 rounded text-ui-fg-subtle">
+                          <strong>İtiraz Gerekçesi:</strong> {appeal.request_reason}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          type="button"
-                          size="small"
-                          variant="primary"
-                          disabled={inFlight}
-                          onClick={() => {
-                            setReasonModal({
-                              type: "decide_appeal",
-                              targetId: appeal.source_request_id,
-                              sellerId: appeal.seller_id,
-                              orgId: appeal.organization_id,
-                              sourceRequestId: appeal.source_request_id,
-                              appealDecision: "accepted",
-                            })
-                            setReasonText("")
-                          }}
-                        >
-                          {t("stores.alerts.decisionAccepted")}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="small"
-                          variant="danger"
-                          disabled={inFlight}
-                          onClick={() => {
-                            setReasonModal({
-                              type: "decide_appeal",
-                              targetId: appeal.source_request_id,
-                              sellerId: appeal.seller_id,
-                              orgId: appeal.organization_id,
-                              sourceRequestId: appeal.source_request_id,
-                              appealDecision: "rejected",
-                            })
-                            setReasonText("")
-                          }}
-                        >
-                          {t("stores.alerts.decisionRejected")}
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="text-sm bg-ui-bg-subtle p-3 rounded text-ui-fg-subtle">
-                      <strong>İtiraz Gerekçesi:</strong> {appeal.request_reason}
-                    </div>
+                    ))}
                   </div>
-                ))}
+                )}
 
                 {(appealsHasMore || appealsPage > 0) && (
-                  <div className="flex items-center justify-between p-2 border-t border-ui-border-base">
+                  <div className="flex items-center justify-between p-4 border-t border-ui-border-base">
                     <Button
                       type="button"
                       size="small"
@@ -919,7 +938,7 @@ export default function StoresPage() {
                     </Button>
                   </div>
                 )}
-              </div>
+              </>
             )}
           </Container>
 
@@ -943,9 +962,11 @@ export default function StoresPage() {
                   <select
                     id="closing-candidate-select"
                     className="w-full border border-ui-border-base rounded p-2 text-sm bg-ui-bg-base text-ui-fg-base"
-                    defaultValue=""
+                    value={selectedClosingSellerId}
                     onChange={(e) => {
-                      const sel = closingCandidates.find((c) => c.seller_id === e.target.value)
+                      const selId = e.target.value
+                      setSelectedClosingSellerId(selId)
+                      const sel = closingCandidates.find((c) => c.seller_id === selId)
                       if (sel) {
                         setReasonModal({
                           type: "start_closing",
@@ -955,6 +976,7 @@ export default function StoresPage() {
                         })
                         setReasonText("")
                         setClosingConfirmed(false)
+                        setModalError(null)
                       }
                     }}
                   >
@@ -966,30 +988,30 @@ export default function StoresPage() {
                     ))}
                   </select>
                 </div>
+              </div>
+            )}
 
-                {(closingsHasMore || closingsPage > 0) && (
-                  <div className="flex items-center justify-between pt-2">
-                    <Button
-                      type="button"
-                      size="small"
-                      variant="secondary"
-                      disabled={closingsPage === 0 || inFlight}
-                      onClick={() => setClosingsPage((p) => Math.max(0, p - 1))}
-                    >
-                      Önceki Adaylar
-                    </Button>
-                    <span className="text-xs text-ui-fg-subtle">Aday Sayfası {closingsPage + 1}</span>
-                    <Button
-                      type="button"
-                      size="small"
-                      variant="secondary"
-                      disabled={!closingsHasMore || inFlight}
-                      onClick={() => setClosingsPage((p) => p + 1)}
-                    >
-                      Sonraki Adaylar
-                    </Button>
-                  </div>
-                )}
+            {(closingsHasMore || closingsPage > 0) && (
+              <div className="flex items-center justify-between pt-2 max-w-xl">
+                <Button
+                  type="button"
+                  size="small"
+                  variant="secondary"
+                  disabled={closingsPage === 0 || inFlight}
+                  onClick={() => setClosingsPage((p) => Math.max(0, p - 1))}
+                >
+                  Önceki Adaylar
+                </Button>
+                <span className="text-xs text-ui-fg-subtle">Aday Sayfası {closingsPage + 1}</span>
+                <Button
+                  type="button"
+                  size="small"
+                  variant="secondary"
+                  disabled={!closingsHasMore || inFlight}
+                  onClick={() => setClosingsPage((p) => p + 1)}
+                >
+                  Sonraki Adaylar
+                </Button>
               </div>
             )}
           </Container>
@@ -1004,7 +1026,7 @@ export default function StoresPage() {
           aria-modal="true"
           aria-labelledby="reason-modal-title"
           onKeyDown={(e) => {
-            if (e.key === "Escape" && !inFlight) setReasonModal(null)
+            if (e.key === "Escape" && !inFlight) closeReasonModal()
           }}
         >
           <div className="bg-ui-bg-base border border-ui-border-base rounded-lg max-w-lg w-full p-6 shadow-xl space-y-4">
@@ -1020,6 +1042,12 @@ export default function StoresPage() {
                   : t("stores.actions.startClosing")}
               </Heading>
             </div>
+
+            {modalError && (
+              <Alert variant="error" role="alert">
+                {modalError}
+              </Alert>
+            )}
 
             <div className="space-y-3">
               <label htmlFor="modal-reason-input" className="block text-sm font-semibold text-ui-fg-base">
@@ -1055,7 +1083,7 @@ export default function StoresPage() {
                 type="button"
                 variant="secondary"
                 disabled={inFlight}
-                onClick={() => setReasonModal(null)}
+                onClick={closeReasonModal}
               >
                 İptal
               </Button>
