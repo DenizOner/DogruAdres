@@ -59,7 +59,7 @@ const Form = () => {
     >
       <h1 className="heading-md my-0 mb-2 uppercase text-primary">Forgot your password?</h1>
       <p className="text-md">
-        Enter the email you used to sign up and we&#39;ll send you a password reset email. email.
+        Enter the email you used to sign up and we&#39;ll send you a password reset email.
       </p>
       <form
         onSubmit={handleSubmit(submit)}
@@ -86,15 +86,10 @@ const Form = () => {
 
           <Link
             href="/user"
-            className="flex"
+            className="button-text button-tonal flex w-full items-center justify-center rounded-sm py-2.5 text-center uppercase"
             data-testid="forgot-password-back-to-login-link"
           >
-            <Button
-              variant="tonal"
-              className="flex w-full justify-center uppercase"
-            >
-              Back to log in
-            </Button>
+            Back to log in
           </Link>
         </div>
       </form>

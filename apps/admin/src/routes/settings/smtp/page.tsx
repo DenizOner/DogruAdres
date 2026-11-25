@@ -348,7 +348,7 @@ export default function PlatformSmtpSettingsPage() {
       </div>
 
       {authError && (
-        <Alert variant="error" className="p-4 rounded-xl border border-red-200 bg-red-50/50">
+        <Alert variant="error" role="alert" className="p-4 rounded-xl border border-red-200 bg-red-50/50">
           <div className="space-y-2">
             <Text className="text-sm font-semibold text-red-900">{authError}</Text>
             <Text className="text-xs text-red-700">
@@ -370,11 +370,11 @@ export default function PlatformSmtpSettingsPage() {
         </Alert>
       )}
 
-      {loadError && <Alert variant="error">{loadError}</Alert>}
+      {loadError && <Alert variant="error" role="alert">{loadError}</Alert>}
 
       {loading ? (
-        <Container className="p-8 text-center">
-          <div className="w-8 h-8 border-3 border-[#0e66c2]/20 border-t-[#0e66c2] rounded-full animate-spin mx-auto mb-3" />
+        <Container className="p-8 text-center" role="status" aria-live="polite">
+          <div aria-hidden="true" className="w-8 h-8 border-3 border-[#0e66c2]/20 border-t-[#0e66c2] rounded-full animate-spin mx-auto mb-3" />
           <Text className="text-sm text-ui-fg-muted">{t("smtp.loading")}</Text>
         </Container>
       ) : canManage ? (
@@ -388,7 +388,7 @@ export default function PlatformSmtpSettingsPage() {
                 <Label htmlFor="smtp-toggle" className="text-base font-semibold text-ui-fg-base">
                   {t("smtp.serviceStatus")}
                 </Label>
-                <Text className="text-xs text-ui-fg-subtle">
+                <Text id="smtp-service-desc" className="text-xs text-ui-fg-subtle">
                   {t("smtp.serviceDesc")}
                 </Text>
               </div>
@@ -400,6 +400,7 @@ export default function PlatformSmtpSettingsPage() {
                   id="smtp-toggle"
                   checked={enabled}
                   onCheckedChange={setEnabled}
+                  aria-describedby="smtp-service-desc"
                 />
               </div>
             </div>
@@ -520,7 +521,7 @@ export default function PlatformSmtpSettingsPage() {
                     {t("smtp.passLabel")}
                   </Label>
                   {hasExistingPassword && !password && (
-                    <span className="text-[11px] font-medium text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                    <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                       {t("smtp.badgeExistingPass")}
                     </span>
                   )}
@@ -594,6 +595,8 @@ export default function PlatformSmtpSettingsPage() {
             {testResult && (
               <Alert
                 variant={testResult.ok ? "success" : "error"}
+                role={testResult.ok ? "status" : "alert"}
+                aria-live={testResult.ok ? "polite" : "assertive"}
                 className="my-2"
               >
                 {testResult.message}
