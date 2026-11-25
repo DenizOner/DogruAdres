@@ -1,8 +1,8 @@
 import { GET as listVehicles, POST as createVehicle } from "../organizations/[id]/vehicles/route"
 import { GET as getVehicle, PATCH as updateVehicle, DELETE as deleteVehicle } from "../organizations/[id]/vehicles/[vehicle_id]/route"
 import { MedusaError, createMedusaContainer } from "@medusajs/framework/utils"
-import { DOGRUADRES_ACCESS_MODULE } from "../../../modules/dogruadres-access"
-import { DOGRUADRES_VEHICLE_MODULE } from "../../../modules/dogruadres-vehicle"
+import { DOGRUADRES_ACCESS_MODULE } from "../../../modules/dogruadres-access/constants"
+import { DOGRUADRES_VEHICLE_MODULE } from "../../../modules/dogruadres-vehicle/constants"
 
 function mockReq(opts: {
   orgId: string
@@ -105,6 +105,7 @@ function mockReq(opts: {
 
   const res: any = {
     statusCode: 200,
+    setHeader: jest.fn(),
     status(code: number) {
       this.statusCode = code
       return this
@@ -199,6 +200,7 @@ describe("Vehicle HTTP API Routes and Policy Enforcement", () => {
     it("STRICTLY DENIES active Member from deleting vehicle (V-03 / DA-AUTO-006)", async () => {
       const { req, res } = mockReq({ orgId: "daorg_abc", vehicleId: "daveh_1", role: "member" })
       await expect(deleteVehicle(req, res)).rejects.toThrow(MedusaError)
+      expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store")
     })
   })
 })

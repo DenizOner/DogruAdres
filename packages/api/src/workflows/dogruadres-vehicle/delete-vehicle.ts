@@ -1,6 +1,6 @@
 import { createStep, createWorkflow, StepResponse, WorkflowResponse } from "@medusajs/framework/workflows-sdk"
-import VehicleModuleService from "../../modules/dogruadres-vehicle/service"
-import { DOGRUADRES_VEHICLE_MODULE } from "../../modules/dogruadres-vehicle"
+import type VehicleModuleService from "../../modules/dogruadres-vehicle/service"
+import { DOGRUADRES_VEHICLE_MODULE } from "../../modules/dogruadres-vehicle/constants"
 import { withVehicleUnitOfWork } from "./vehicle-uow"
 
 export type DeleteVehicleInput = Readonly<{

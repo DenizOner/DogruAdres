@@ -4,8 +4,8 @@ import {
   authorizeOrganizationAccess,
   type OrganizationAuthorizationResolver,
 } from "../../utils/organization-authorization"
-import DogruAdresAccessModuleService from "../../modules/dogruadres-access/service"
-import { DOGRUADRES_ACCESS_MODULE } from "../../modules/dogruadres-access"
+import type DogruAdresAccessModuleService from "../../modules/dogruadres-access/service"
+import { DOGRUADRES_ACCESS_MODULE } from "../../modules/dogruadres-access/constants"
 import { organizationActionAllowed } from "../../modules/dogruadres-access/role-action-policy"
 import { enabled, sessionToken } from "../personal/security"
 
