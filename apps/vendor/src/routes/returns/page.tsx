@@ -23,6 +23,7 @@ import type {
   ReturnFilters,
   ReturnStatus,
   OrgInfo,
+  StoreInfo,
 } from "./types"
 import { filterReturns } from "./validation"
 import { ReturnDetailModal } from "./components/ReturnDetailModal"
@@ -39,10 +40,20 @@ export default function VendorReturnsPage() {
   tRef.current = t
 
   const [loadingReturns, setLoadingReturns] = useState(false)
+  const [loadingContext, setLoadingContext] = useState(false)
   const [unauthorized, setUnauthorized] = useState(false)
   const [csrfToken, setCsrfToken] = useState<string>("")
-  const [activeOrg, setActiveOrg] = useState<OrgInfo | null>(null)
-  const [activeSellerId, setActiveSellerId] = useState<string>("")
+
+  // Multi-organization and multi-store states
+  const [organizations, setOrganizations] = useState<OrgInfo[]>([])
+  const [selectedOrgId, setSelectedOrgId] = useState<string>("")
+  const [stores, setStores] = useState<StoreInfo[]>([])
+  const [selectedStoreId, setSelectedStoreId] = useState<string>("")
+  const [contextError, setContextError] = useState<string>("")
+
+  // Pagination state (0..4 for backend MAX_ORDERS = 20)
+  const [page, setPage] = useState<number>(0)
+  const [hasMoreReturns, setHasMoreReturns] = useState<boolean>(false)
 
   const [returnsList, setReturnsList] = useState<VendorReturnRequest[]>([])
   const [filters, setFilters] = useState<ReturnFilters>({
@@ -61,10 +72,12 @@ export default function VendorReturnsPage() {
 
   const triggerButtonRef = useRef<HTMLElement | null>(null)
 
-  // 1. Authenticate personal session and fetch CSRF token
+  // 1. Authenticate personal session and fetch user organizations
   const verifySession = useCallback(async () => {
     setUnauthorized(false)
     setErrorMessage("")
+    setContextError("")
+    setLoadingContext(true)
     try {
       const res = await fetch("/personal/session", {
         method: "GET",
@@ -85,40 +98,35 @@ export default function VendorReturnsPage() {
         method: "GET",
         credentials: "include",
         headers: { Accept: "application/json" },
-      })
-      if (orgRes.ok) {
-        const orgData = await orgRes.json()
-        const orgList: OrgInfo[] = Array.isArray(orgData.organizations)
-          ? orgData.organizations
-          : orgData.id
-          ? [{ id: orgData.id, name: orgData.name || orgData.id, role: orgData.role, status: orgData.status }]
-          : []
-        if (orgList.length > 0) {
-          const firstOrg = orgList[0]
-          setActiveOrg(firstOrg)
-          // Resolve authorized seller store from /organization/stores
-          const storeRes = await fetch(
-            `/organization/stores?organization=${encodeURIComponent(firstOrg.id)}`,
-            {
-              method: "GET",
-              credentials: "include",
-              headers: { Accept: "application/json" },
-            }
-          ).catch(() => null)
-          if (storeRes && storeRes.ok) {
-            const storeData = await storeRes.json()
-            if (
-              Array.isArray(storeData?.stores) &&
-              storeData.stores.length > 0 &&
-              typeof storeData.stores[0]?.id === "string"
-            ) {
-              setActiveSellerId(storeData.stores[0].id)
-            }
-          }
-        }
+      }).catch(() => null)
+
+      if (!orgRes || !orgRes.ok) {
+        setContextError(tRef.current("returns.context.errorFetchOrgs"))
+        return
       }
+
+      const orgData = await orgRes.json()
+      const orgList: OrgInfo[] = Array.isArray(orgData?.organizations)
+        ? orgData.organizations
+        : orgData?.id
+        ? [{ id: orgData.id, name: orgData.name || orgData.id, role: orgData.role, status: orgData.status }]
+        : []
+
+      if (orgList.length === 0) {
+        setContextError(tRef.current("returns.context.errorNoOrgs"))
+        setOrganizations([])
+        setSelectedOrgId("")
+        setStores([])
+        setSelectedStoreId("")
+        return
+      }
+
+      setOrganizations(orgList)
+      setSelectedOrgId((prev) => (prev && orgList.some((o) => o.id === prev) ? prev : orgList[0].id))
     } catch {
-      // Network or authorization error
+      setContextError(tRef.current("returns.context.errorFetchOrgs"))
+    } finally {
+      setLoadingContext(false)
     }
   }, [])
 
@@ -126,64 +134,152 @@ export default function VendorReturnsPage() {
     void verifySession()
   }, [verifySession])
 
-  // 2. Fetch returns from backend endpoint if available
-  const fetchBackendReturns = useCallback(async (orgId: string, sellerId: string) => {
-    if (!orgId || !sellerId) return
-    setLoadingReturns(true)
-    setErrorMessage("")
+  // 2. Fetch stores whenever selectedOrgId changes
+  const fetchStoresForOrg = useCallback(async (orgId: string) => {
+    if (!orgId) {
+      setStores([])
+      setSelectedStoreId("")
+      return
+    }
+    setLoadingContext(true)
+    setContextError("")
     try {
-      const res = await fetch(
-        `/organization/return-requests?organization_id=${encodeURIComponent(
-          orgId
-        )}&seller_id=${encodeURIComponent(sellerId)}&page=0`,
+      const storeRes = await fetch(
+        `/organization/stores?organization=${encodeURIComponent(orgId)}`,
         {
           method: "GET",
           credentials: "include",
-          cache: "no-store",
           headers: { Accept: "application/json" },
         }
-      )
-      if (res.ok) {
-        const data = await res.json()
-        if (Array.isArray(data.return_requests)) {
-          const mapped: VendorReturnRequest[] = data.return_requests.map(
-            (bItem: { id: string; status: ReturnStatus; created_at: string }) => ({
-              id: bItem.id,
-              order_id: bItem.id,
-              order_display_id: bItem.id.slice(0, 12),
-              buyer_organization_id: orgId,
-              buyer_organization_name: t("returns.table.notSpecified"),
-              seller_id: sellerId,
-              status: bItem.status,
-              created_at: bItem.created_at,
-              updated_at: bItem.created_at,
-              items: [],
-              review_notes: [],
-              total_refund_amount: 0,
-              currency_code: "TRY",
-            })
-          )
-          setReturnsList(mapped)
-        } else {
-          setReturnsList([])
-        }
-      } else {
-        setReturnsList([])
-        setErrorMessage(t("returns.errorFetchFailed"))
+      ).catch(() => null)
+
+      if (!storeRes || !storeRes.ok) {
+        setContextError(tRef.current("returns.context.errorFetchStores"))
+        setStores([])
+        setSelectedStoreId("")
+        return
       }
+
+      const storeData = await storeRes.json()
+      const storeList: StoreInfo[] = Array.isArray(storeData?.stores)
+        ? storeData.stores
+            .filter((s: any) => typeof s?.id === "string")
+            .map((s: any) => ({
+              id: s.id,
+              name: s.name || s.id,
+            }))
+        : []
+
+      if (storeList.length === 0) {
+        setContextError(tRef.current("returns.context.errorNoStores"))
+        setStores([])
+        setSelectedStoreId("")
+        return
+      }
+
+      setStores(storeList)
+      setSelectedStoreId((prev) =>
+        prev && storeList.some((s) => s.id === prev) ? prev : storeList[0].id
+      )
     } catch {
-      setReturnsList([])
-      setErrorMessage(t("returns.errorFetchFailed"))
+      setContextError(tRef.current("returns.context.errorFetchStores"))
+      setStores([])
+      setSelectedStoreId("")
     } finally {
-      setLoadingReturns(false)
+      setLoadingContext(false)
     }
-  }, [t])
+  }, [])
 
   useEffect(() => {
-    if (activeOrg?.id && activeSellerId) {
-      void fetchBackendReturns(activeOrg.id, activeSellerId)
+    if (selectedOrgId) {
+      void fetchStoresForOrg(selectedOrgId)
     }
-  }, [activeOrg, activeSellerId, fetchBackendReturns])
+  }, [selectedOrgId, fetchStoresForOrg])
+
+  // 3. Fetch returns from backend endpoint if available
+  const fetchBackendReturns = useCallback(
+    async (orgId: string, sellerId: string, pageNum: number) => {
+      if (!orgId || !sellerId) return
+      setLoadingReturns(true)
+      setErrorMessage("")
+      try {
+        const clampedPage = Math.max(0, Math.min(4, pageNum))
+        const res = await fetch(
+          `/organization/return-requests?organization_id=${encodeURIComponent(
+            orgId
+          )}&seller_id=${encodeURIComponent(sellerId)}&page=${clampedPage}`,
+          {
+            method: "GET",
+            credentials: "include",
+            cache: "no-store",
+            headers: { Accept: "application/json" },
+          }
+        )
+        if (res.ok) {
+          const data = await res.json()
+          if (Array.isArray(data.return_requests)) {
+            const mapped: VendorReturnRequest[] = data.return_requests.map(
+              (bItem: { id: string; status: ReturnStatus; created_at: string }) => ({
+                id: bItem.id,
+                order_id: bItem.id,
+                order_display_id: bItem.id.slice(0, 12),
+                buyer_organization_id: orgId,
+                buyer_organization_name: t("returns.table.notSpecified"),
+                seller_id: sellerId,
+                status: bItem.status,
+                created_at: bItem.created_at,
+                updated_at: bItem.created_at,
+                items: [],
+                review_notes: [],
+                total_refund_amount: 0,
+                currency_code: "TRY",
+              })
+            )
+            setReturnsList(mapped)
+            setHasMoreReturns(mapped.length >= 20 && clampedPage < 4)
+          } else {
+            setReturnsList([])
+            setHasMoreReturns(false)
+          }
+        } else {
+          setReturnsList([])
+          setHasMoreReturns(false)
+          setErrorMessage(t("returns.errorFetchFailed"))
+        }
+      } catch {
+        setReturnsList([])
+        setHasMoreReturns(false)
+        setErrorMessage(t("returns.errorFetchFailed"))
+      } finally {
+        setLoadingReturns(false)
+      }
+    },
+    [t]
+  )
+
+  useEffect(() => {
+    if (selectedOrgId && selectedStoreId) {
+      void fetchBackendReturns(selectedOrgId, selectedStoreId, page)
+    }
+  }, [selectedOrgId, selectedStoreId, page, fetchBackendReturns])
+
+  const handleOrgChange = (orgId: string) => {
+    setSelectedOrgId(orgId)
+    setPage(0)
+  }
+
+  const handleStoreChange = (storeId: string) => {
+    setSelectedStoreId(storeId)
+    setPage(0)
+  }
+
+  const activeOrg = useMemo(() => {
+    return organizations.find((o) => o.id === selectedOrgId) || null
+  }, [organizations, selectedOrgId])
+
+  const activeStore = useMemo(() => {
+    return stores.find((s) => s.id === selectedStoreId) || null
+  }, [stores, selectedStoreId])
 
   // Filtered returns list based on status, order number, and date range
   const filteredReturns = useMemo(() => {
@@ -197,6 +293,7 @@ export default function VendorReturnsPage() {
       requested: returnsList.filter((r) => r.status === "requested").length,
       open: returnsList.filter((r) => r.status === "open").length,
       received: returnsList.filter((r) => r.status === "received").length,
+      partially_received: returnsList.filter((r) => r.status === "partially_received").length,
       accepted: returnsList.filter((r) => r.status === "accepted").length,
       canceled: returnsList.filter((r) => r.status === "canceled").length,
     }
@@ -225,7 +322,7 @@ export default function VendorReturnsPage() {
     setErrorMessage("")
     setStatusMessage("")
     try {
-      if (!csrfToken || !activeOrg || !activeSellerId) {
+      if (!csrfToken || !selectedOrgId || !selectedStoreId) {
         setErrorMessage(t("returns.feedback.actionPendingBackend"))
         return false
       }
@@ -240,8 +337,8 @@ export default function VendorReturnsPage() {
         body: JSON.stringify({
           action: "approve",
           return_id: returnId,
-          organization_id: activeOrg.id,
-          seller_id: activeSellerId,
+          organization_id: selectedOrgId,
+          seller_id: selectedStoreId,
         }),
       }).catch(() => null)
 
@@ -290,7 +387,7 @@ export default function VendorReturnsPage() {
     setErrorMessage("")
     setStatusMessage("")
     try {
-      if (!csrfToken || !activeOrg || !activeSellerId) {
+      if (!csrfToken || !selectedOrgId || !selectedStoreId) {
         setErrorMessage(t("returns.feedback.actionPendingBackend"))
         return false
       }
@@ -306,8 +403,8 @@ export default function VendorReturnsPage() {
           action: "reject",
           return_id: returnId,
           reason,
-          organization_id: activeOrg.id,
-          seller_id: activeSellerId,
+          organization_id: selectedOrgId,
+          seller_id: selectedStoreId,
         }),
       }).catch(() => null)
 
@@ -356,7 +453,7 @@ export default function VendorReturnsPage() {
     setErrorMessage("")
     setStatusMessage("")
     try {
-      if (!csrfToken || !activeOrg || !activeSellerId) {
+      if (!csrfToken || !selectedOrgId || !selectedStoreId) {
         setErrorMessage(t("returns.feedback.actionPendingBackend"))
         return false
       }
@@ -372,8 +469,8 @@ export default function VendorReturnsPage() {
           action: "add_note",
           return_id: returnId,
           note,
-          organization_id: activeOrg.id,
-          seller_id: activeSellerId,
+          organization_id: selectedOrgId,
+          seller_id: selectedStoreId,
         }),
       }).catch(() => null)
 
@@ -430,6 +527,8 @@ export default function VendorReturnsPage() {
         return <Badge color="blue">{t("returns.status.open")}</Badge>
       case "received":
         return <Badge color="purple">{t("returns.status.received")}</Badge>
+      case "partially_received":
+        return <Badge color="orange">{t("returns.status.partially_received")}</Badge>
       case "accepted":
         return <Badge color="green">{t("returns.status.accepted")}</Badge>
       case "canceled":
@@ -451,7 +550,7 @@ export default function VendorReturnsPage() {
         {statusMessage || errorMessage}
       </div>
 
-      {/* Header & Seller Context */}
+      {/* Header & Multi-Org / Store Selector */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-ui-border-base pb-6">
         <div>
           <div className="flex items-center gap-3">
@@ -469,15 +568,62 @@ export default function VendorReturnsPage() {
           </div>
         </div>
 
-        {activeOrg && (
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-ui-bg-subtle border border-ui-border-base text-xs">
-            <span className="font-semibold text-ui-fg-muted uppercase">
-              {t("returns.orgLabel")}:
-            </span>
-            <span className="font-medium text-ui-fg-base">{activeOrg.name}</span>
-            <span className="text-ui-fg-muted font-mono">({activeOrg.id})</span>
-          </div>
-        )}
+        {/* Multi-Org & Multi-Store Selector */}
+        <div className="flex flex-wrap items-center gap-3">
+          {organizations.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="select-organization" className="text-xs font-semibold text-ui-fg-muted uppercase">
+                {t("returns.context.orgSelectLabel")}
+              </Label>
+              {organizations.length > 1 ? (
+                <select
+                  id="select-organization"
+                  value={selectedOrgId}
+                  onChange={(e) => handleOrgChange(e.target.value)}
+                  disabled={loadingContext}
+                  className="min-h-[40px] px-3 py-1.5 text-xs rounded-lg border border-ui-border-base bg-ui-bg-base text-ui-fg-base focus-visible:ring-2 focus-visible:ring-violet-600 focus-visible:outline-none"
+                >
+                  {organizations.map((org) => (
+                    <option key={org.id} value={org.id}>
+                      {org.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="flex items-center gap-2 p-2 rounded-lg bg-ui-bg-subtle border border-ui-border-base text-xs">
+                  <span className="font-medium text-ui-fg-base">{activeOrg?.name}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {stores.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="select-store" className="text-xs font-semibold text-ui-fg-muted uppercase">
+                {t("returns.context.storeSelectLabel")}
+              </Label>
+              {stores.length > 1 ? (
+                <select
+                  id="select-store"
+                  value={selectedStoreId}
+                  onChange={(e) => handleStoreChange(e.target.value)}
+                  disabled={loadingContext}
+                  className="min-h-[40px] px-3 py-1.5 text-xs rounded-lg border border-ui-border-base bg-ui-bg-base text-ui-fg-base focus-visible:ring-2 focus-visible:ring-violet-600 focus-visible:outline-none"
+                >
+                  {stores.map((st) => (
+                    <option key={st.id} value={st.id}>
+                      {st.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="flex items-center gap-2 p-2 rounded-lg bg-ui-bg-subtle border border-ui-border-base text-xs">
+                  <span className="font-medium text-ui-fg-base">{activeStore?.name}</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Information Banner on Policy A Read-only Phase */}
@@ -491,11 +637,23 @@ export default function VendorReturnsPage() {
         <Alert variant="warning" className="flex items-center justify-between">
           <span>{t("returns.unauthorizedWarning")}</span>
           <a
-            href="/personal/login"
+            href="/personal"
             className="text-violet-600 underline font-semibold focus-visible:ring-2 focus-visible:ring-violet-600"
           >
             {t("returns.actions.loginBtn")}
           </a>
+        </Alert>
+      )}
+
+      {/* Context Error Banner (Finding 3) */}
+      {contextError && (
+        <Alert
+          variant="error"
+          role="alert"
+          aria-live="assertive"
+          className="flex items-center gap-2"
+        >
+          {contextError}
         </Alert>
       )}
 
@@ -522,7 +680,7 @@ export default function VendorReturnsPage() {
       )}
 
       {/* Overview Statistics Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
         <button
           type="button"
           onClick={() => setFilters((prev) => ({ ...prev, status: "all" }))}
@@ -586,6 +744,23 @@ export default function VendorReturnsPage() {
           </Text>
           <Text className="text-2xl font-bold text-purple-700 dark:text-purple-400 mt-1">
             {stats.received}
+          </Text>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setFilters((prev) => ({ ...prev, status: "partially_received" }))}
+          className={`p-4 rounded-xl border text-left transition-all min-h-[44px] focus-visible:ring-2 focus-visible:ring-orange-600 focus-visible:outline-none ${
+            filters.status === "partially_received"
+              ? "border-orange-600 bg-orange-50/50 dark:bg-orange-950/20 shadow-sm"
+              : "border-ui-border-base bg-ui-bg-base hover:bg-ui-bg-subtle"
+          }`}
+        >
+          <Text className="text-xs font-semibold text-orange-700 dark:text-orange-400 uppercase">
+            {t("returns.status.partially_received")}
+          </Text>
+          <Text className="text-2xl font-bold text-orange-700 dark:text-orange-400 mt-1">
+            {stats.partially_received}
           </Text>
         </button>
 
@@ -693,6 +868,7 @@ export default function VendorReturnsPage() {
               <option value="requested">{t("returns.status.requested")}</option>
               <option value="open">{t("returns.status.open")}</option>
               <option value="received">{t("returns.status.received")}</option>
+              <option value="partially_received">{t("returns.status.partially_received")}</option>
               <option value="accepted">{t("returns.status.accepted")}</option>
               <option value="canceled">{t("returns.status.canceled")}</option>
             </select>
@@ -750,7 +926,7 @@ export default function VendorReturnsPage() {
               {t("returns.table.emptyHeading")}
             </Heading>
             <Text className="text-sm text-ui-fg-subtle max-w-md mx-auto">
-              {t("returns.table.emptyDescription")}
+              {contextError || t("returns.table.emptyDescription")}
             </Text>
           </div>
         ) : (
@@ -835,6 +1011,35 @@ export default function VendorReturnsPage() {
             </table>
           </div>
         )}
+
+        {/* Pagination Window Controls */}
+        <div className="px-6 py-3 border-t border-ui-border-base bg-ui-bg-subtle flex flex-wrap items-center justify-between gap-3 text-xs">
+          <Text className="text-ui-fg-muted font-medium">
+            {t("returns.pagination.pageInfo", { current: page + 1, total: 5 })}
+          </Text>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="small"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0 || loadingReturns}
+              className="min-h-[36px] px-3 text-xs"
+            >
+              {t("returns.pagination.prev")}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="small"
+              onClick={() => setPage((p) => Math.min(4, p + 1))}
+              disabled={page >= 4 || loadingReturns || (!hasMoreReturns && returnsList.length < 20)}
+              className="min-h-[36px] px-3 text-xs"
+            >
+              {t("returns.pagination.next")}
+            </Button>
+          </div>
+        </div>
       </div>
 
       {/* Detail & Action Accessible Modal */}

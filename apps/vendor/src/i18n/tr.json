@@ -170,11 +170,25 @@
       "requested": "Talep Edildi",
       "open": "İnceleniyor",
       "received": "Ürün Ulaştı",
+      "partially_received": "Kısmen Ulaştı",
       "accepted": "Onaylandı",
       "canceled": "Reddedildi"
     },
     "stats": {
       "total": "Toplam Talep"
+    },
+    "context": {
+      "orgSelectLabel": "Kuruluş Seçimi",
+      "storeSelectLabel": "Mağaza Seçimi",
+      "errorFetchOrgs": "Kuruluş bilgileri yüklenirken bir hata oluştu.",
+      "errorNoOrgs": "Hesabınıza bağlı yetkili bir kuruluş bulunamadı.",
+      "errorFetchStores": "Mağaza listesi yüklenirken bir hata oluştu.",
+      "errorNoStores": "Seçili kuruluşa bağlı bir mağaza bulunamadı."
+    },
+    "pagination": {
+      "prev": "Önceki Pencere",
+      "next": "Sonraki Pencere",
+      "pageInfo": "Pencere {{current}} / {{total}}"
     },
     "filters": {
       "title": "Filtreler ve Arama",

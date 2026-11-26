@@ -127,6 +127,8 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
         return <Badge color="blue">{t("returns.status.open")}</Badge>
       case "received":
         return <Badge color="purple">{t("returns.status.received")}</Badge>
+      case "partially_received":
+        return <Badge color="orange">{t("returns.status.partially_received")}</Badge>
       case "accepted":
         return <Badge color="green">{t("returns.status.accepted")}</Badge>
       case "canceled":

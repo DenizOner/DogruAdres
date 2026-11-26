@@ -1,4 +1,10 @@
-export type ReturnStatus = "requested" | "open" | "received" | "accepted" | "canceled"
+export type ReturnStatus =
+  | "requested"
+  | "open"
+  | "received"
+  | "partially_received"
+  | "accepted"
+  | "canceled"
 
 export type ReturnReasonCode =
   | "incompatible_part"
@@ -56,4 +62,9 @@ export interface OrgInfo {
   name: string
   role?: string
   status?: string
+}
+
+export interface StoreInfo {
+  id: string
+  name: string
 }

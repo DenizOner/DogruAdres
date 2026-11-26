@@ -99,18 +99,28 @@ export function validateReviewNote(
 
 /**
  * Returns true if the return request can be approved.
- * Only requested, open, or received requests can be approved.
+ * Only requested, open, received, or partially_received requests can be approved.
  */
 export function canApproveReturn(status: ReturnStatus): boolean {
-  return status === "requested" || status === "open" || status === "received"
+  return (
+    status === "requested" ||
+    status === "open" ||
+    status === "received" ||
+    status === "partially_received"
+  )
 }
 
 /**
  * Returns true if the return request can be rejected.
- * Only requested, open, or received requests can be rejected.
+ * Only requested, open, received, or partially_received requests can be rejected.
  */
 export function canRejectReturn(status: ReturnStatus): boolean {
-  return status === "requested" || status === "open" || status === "received"
+  return (
+    status === "requested" ||
+    status === "open" ||
+    status === "received" ||
+    status === "partially_received"
+  )
 }
 
 /**

@@ -170,11 +170,25 @@
       "requested": "Requested",
       "open": "Under Review",
       "received": "Received",
+      "partially_received": "Partially Received",
       "accepted": "Accepted",
       "canceled": "Rejected"
     },
     "stats": {
       "total": "Total Requests"
+    },
+    "context": {
+      "orgSelectLabel": "Select Organization",
+      "storeSelectLabel": "Select Store",
+      "errorFetchOrgs": "Failed to load organizations.",
+      "errorNoOrgs": "No authorized organization found for your account.",
+      "errorFetchStores": "Failed to load stores.",
+      "errorNoStores": "No store found for the selected organization."
+    },
+    "pagination": {
+      "prev": "Previous Window",
+      "next": "Next Window",
+      "pageInfo": "Window {{current}} of {{total}}"
     },
     "filters": {
       "title": "Filters & Search",

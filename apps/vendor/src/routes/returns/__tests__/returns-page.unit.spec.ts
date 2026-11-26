@@ -196,6 +196,24 @@ describe("Vendor Returns - filterReturns", () => {
     expect(result[0].id).toBe("return_01JBMRET003")
   })
 
+  it("filters by status partially_received correctly", () => {
+    const itemWithPartiallyReceived: VendorReturnRequest = {
+      ...mockReturns[0],
+      id: "return_partial_01",
+      status: "partially_received",
+    }
+    const filters: ReturnFilters = {
+      status: "partially_received",
+      searchOrder: "",
+      startDate: "",
+      endDate: "",
+    }
+    const result = filterReturns([...mockReturns, itemWithPartiallyReceived], filters)
+    expect(result).toHaveLength(1)
+    expect(result[0].id).toBe("return_partial_01")
+    expect(result[0].status).toBe("partially_received")
+  })
+
   it("filters by status accepted correctly", () => {
     const filters: ReturnFilters = {
       status: "accepted",
@@ -350,10 +368,11 @@ describe("Vendor Returns - validateReviewNote", () => {
 })
 
 describe("Vendor Returns - Action Eligibility Guards", () => {
-  it("allows approve for requested, open, and received statuses", () => {
+  it("allows approve for requested, open, received, and partially_received statuses", () => {
     expect(canApproveReturn("requested")).toBe(true)
     expect(canApproveReturn("open")).toBe(true)
     expect(canApproveReturn("received")).toBe(true)
+    expect(canApproveReturn("partially_received")).toBe(true)
   })
 
   it("denies approve for already accepted or canceled statuses", () => {
@@ -361,10 +380,11 @@ describe("Vendor Returns - Action Eligibility Guards", () => {
     expect(canApproveReturn("canceled")).toBe(false)
   })
 
-  it("allows reject for requested, open, and received statuses", () => {
+  it("allows reject for requested, open, received, and partially_received statuses", () => {
     expect(canRejectReturn("requested")).toBe(true)
     expect(canRejectReturn("open")).toBe(true)
     expect(canRejectReturn("received")).toBe(true)
+    expect(canRejectReturn("partially_received")).toBe(true)
   })
 
   it("denies reject for already accepted or canceled statuses", () => {
