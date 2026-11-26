@@ -2023,7 +2023,7 @@ export function renderPersonalConsole(nonce: string): string {
     el('platform-launcher-status').textContent='';
     el('platform-launcher-reset').disabled=true;
     const existingPlatBtn=document.getElementById('org-platform-launcher-btn');
-    if(existingPlatBtn)existingPlatBtn.remove();
+    if(existingPlatBtn && typeof existingPlatBtn.remove === 'function')existingPlatBtn.remove();
   }
   function validPlatformLauncherResponse(data){
     return data &&
@@ -2057,7 +2057,7 @@ export function renderPersonalConsole(nonce: string): string {
       el('platform-launcher-status').textContent='Yalnız bu platform yöneticisi için kayıtlı düzen.';
       renderPlatformLauncher();
       const existingPlatBtn=document.getElementById('org-platform-launcher-btn');
-      if(existingPlatBtn)existingPlatBtn.remove();
+      if(existingPlatBtn && typeof existingPlatBtn.remove === 'function')existingPlatBtn.remove();
       const platBtn=document.createElement('button');
       platBtn.type='button';platBtn.id='org-platform-launcher-btn';
       platBtn.textContent='★ DogruAdres — Platform Yönetimi';
@@ -2073,7 +2073,7 @@ export function renderPersonalConsole(nonce: string): string {
       platformLauncherData=null;el('platform-launcher-panel').hidden=true;
       el('platform-launcher-list').replaceChildren();
       const existingPlatBtn=document.getElementById('org-platform-launcher-btn');
-      if(existingPlatBtn)existingPlatBtn.remove();
+      if(existingPlatBtn && typeof existingPlatBtn.remove === 'function')existingPlatBtn.remove();
     }
   }
   async function savePlatformLauncher(apps,collapsed,notice){
