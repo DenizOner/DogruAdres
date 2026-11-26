@@ -134,7 +134,13 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/mfa/enroll" && req.method==="POST") ||
       (path==="/personal/mfa/manage" && req.method==="POST") ||
       ((path==="/health" || path==="/cloud/auth") && req.method==="GET") ||
-      (anonymous && /^\/dashboard(?:\/.*)?$/.test(path) && req.method==="GET") ||
+      // MİMARİ NOT (DA-ARCH-INGRESS-001 - Issue #217, #252, #482, #255):
+      // DoğruAdres mimarisinde bağımsız Admin (/dashboard) veya Satıcı (/seller) giriş kapıları
+      // kaldırılmıştır. Bu rotaların GET isteklerine yalnız 'apps/admin' ve 'apps/vendor' içindeki
+      // bilgilendirme ve '/personal' tek giriş kapısına yönlendirme ekranını sunabilmeleri için
+      // anonim GET izni verilir. Tüm gerçek operasyonlar tek girişli Kişisel Çalışma Alanı (/personal),
+      // Şirket Çalışma Alanı (/organization) ve Platform Operatörü (/platform) üzerinden yürütülür.
+      (anonymous && /^\/(?:dashboard|seller)(?:\/.*)?$/.test(path) && req.method==="GET") ||
       (anonymous && publicAuth.test(path) && ["GET","POST"].includes(req.method)) ||
       (anonymous && /^\/auth\/(user|member|customer)\/emailpass\/(register|reset-password)$/.test(path) && req.method==="POST") ||
       (anonymous && /^\/auth\/(user|member|customer)\/providers$/.test(path) && req.method==="GET") ||
