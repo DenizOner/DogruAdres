@@ -21,14 +21,46 @@ export const CACHE_TAGS = {
 } as const;
 
 /**
- * Heavy, indefinite caching: `revalidate: false` caches the fetch forever, with
- * the ONLY invalidation path being a `revalidateTag` on one of these tags
- * (pushed from the backend webhook). No time-based revalidation.
+ * Default fallback time-to-live (TTL) in seconds for catalog data.
+ * Even if an on-demand cache invalidation webhook or event is missed,
+ * cached catalog data will not remain stale indefinitely (#171).
+ * Default is 900 seconds (15 minutes).
+ */
+export const DEFAULT_CATALOG_CACHE_TTL_SECONDS = 900;
+
+/**
+ * Parses and validates a catalog cache TTL value.
+ * Falls back to DEFAULT_CATALOG_CACHE_TTL_SECONDS if invalid, non-positive, or NaN.
+ */
+export const parseCatalogCacheTtl = (
+  rawTtl?: string | number | null
+): number => {
+  if (typeof rawTtl === 'number') {
+    return Number.isFinite(rawTtl) && rawTtl > 0 ? Math.floor(rawTtl) : DEFAULT_CATALOG_CACHE_TTL_SECONDS;
+  }
+  if (typeof rawTtl === 'string') {
+    const trimmed = rawTtl.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const parsed = parseInt(trimmed, 10);
+      if (parsed > 0) {
+        return parsed;
+      }
+    }
+  }
+  return DEFAULT_CATALOG_CACHE_TTL_SECONDS;
+};
+
+/**
+ * Bounded catalog caching options (#171).
+ * Caches fetch requests with on-demand tag revalidation AND a bounded fallback TTL.
+ * This guarantees that even if a backend invalidation event is dropped or delayed,
+ * stale prices, offers, and products will expire within the configured TTL.
  */
 export const getGlobalCacheOptions = (
   base: string,
-  scoped?: string
-): { revalidate: false; tags: string[] } => {
+  scoped?: string,
+  ttlSeconds: number = parseCatalogCacheTtl(process.env.CATALOG_CACHE_TTL_SECONDS)
+): { revalidate: number; tags: string[] } => {
   const tags = scoped ? [base, scoped] : [base];
-  return { revalidate: false, tags };
+  return { revalidate: ttlSeconds, tags };
 };
