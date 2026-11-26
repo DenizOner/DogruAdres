@@ -70,7 +70,10 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
   const authorization=req.headers.authorization??""
   const nativeSession = "session" in req && !!(req.session as {auth_context?:unknown}|undefined)?.auth_context
   const anonymous = !authorization && !nativeSession && !("auth_context" in req && req.auth_context)
-  const publicAuth = /^\/auth\/(user|member|customer)\/emailpass(?:\/callback)?$/
+  // In DoğruAdres single ingress (#217, #252, #255), direct anonymous HTTP auth
+  // for legacy 'user' (admin) and 'member' (seller) actors is closed.
+  // Interactive sessions MUST authenticate via /personal/session.
+  const publicAuth = /^\/auth\/customer\/emailpass(?:\/callback)?$/
   // #217 closed B4B: a publishable key or native Customer token is not a
   // verified Buyer Organization. Keep only region bootstrap for login locale.
   // All native catalog, Store, Offer, search and checkout routes stay closed
@@ -134,10 +137,16 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/mfa/enroll" && req.method==="POST") ||
       (path==="/personal/mfa/manage" && req.method==="POST") ||
       ((path==="/health" || path==="/cloud/auth") && req.method==="GET") ||
-      (anonymous && /^\/dashboard(?:\/.*)?$/.test(path) && req.method==="GET") ||
+      // MİMARİ NOT (DA-ARCH-INGRESS-001 - Issue #217, #252, #482, #255):
+      // DoğruAdres mimarisinde bağımsız Admin (/dashboard) veya Satıcı (/seller) giriş kapıları
+      // kaldırılmıştır. Bu rotaların GET isteklerine yalnız 'apps/admin' ve 'apps/vendor' içindeki
+      // bilgilendirme ve '/personal' tek giriş kapısına yönlendirme ekranını sunabilmeleri için
+      // anonim GET izni verilir. Tüm gerçek operasyonlar tek girişli Kişisel Çalışma Alanı (/personal),
+      // Şirket Çalışma Alanı (/organization) ve Platform Operatörü (/platform) üzerinden yürütülür.
+      (anonymous && /^\/(?:dashboard|seller)(?:\/.*)?$/.test(path) && req.method==="GET") ||
       (anonymous && publicAuth.test(path) && ["GET","POST"].includes(req.method)) ||
-      (anonymous && /^\/auth\/(user|member|customer)\/emailpass\/(register|reset-password)$/.test(path) && req.method==="POST") ||
-      (anonymous && /^\/auth\/(user|member|customer)\/providers$/.test(path) && req.method==="GET") ||
+      (anonymous && /^\/auth\/customer\/emailpass\/(register|reset-password)$/.test(path) && req.method==="POST") ||
+      (anonymous && /^\/auth\/customer\/providers$/.test(path) && req.method==="GET") ||
       // Confirm accepts an anonymous single-use verification code. Request does NOT.
       (anonymous && path==="/auth/verification/confirm" && req.method==="POST") ||
       (anonymous && path==="/auth/verify-email" && ["GET","POST"].includes(req.method)) ||

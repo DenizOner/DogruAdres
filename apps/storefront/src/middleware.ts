@@ -24,7 +24,9 @@ const makeAuthRedirect = (
   locale: string,
   reason: 'sessionRequired' | 'sessionExpired'
 ) => {
-  const redirectUrl = new URL(`/${locale}/login`, req.url);
+  // Single Personal Ingress: In DoğruAdres B4B architecture (#217, #243, #255),
+  // there is no standalone customer login. Redirect directly to /personal.
+  const redirectUrl = new URL('/personal', req.url);
 
   redirectUrl.searchParams.set(reason, 'true');
 
@@ -185,7 +187,8 @@ export async function middleware(request: NextRequest) {
       status: 503,
       headers: { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow, noarchive' }
     });
-    const response = NextResponse.redirect(new URL('/' + locale + '/login', request.url), 307);
+    // #243 closed B4B: redirect unauthenticated demo route access directly to /personal single ingress (#217, #243, #255)
+    const response = NextResponse.redirect(new URL('/personal', request.url), 307);
     response.headers.set('Cache-Control', 'private, no-store');
     response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
     response.headers.set('Referrer-Policy', 'no-referrer');
