@@ -2022,6 +2022,8 @@ export function renderPersonalConsole(nonce: string): string {
     el('platform-launcher-list').replaceChildren();
     el('platform-launcher-status').textContent='';
     el('platform-launcher-reset').disabled=true;
+    const existingPlatBtn=document.getElementById('org-platform-launcher-btn');
+    if(existingPlatBtn && typeof existingPlatBtn.remove === 'function')existingPlatBtn.remove();
   }
   function validPlatformLauncherResponse(data){
     return data &&
@@ -2054,10 +2056,24 @@ export function renderPersonalConsole(nonce: string): string {
       platformLauncherData=data;el('platform-launcher-panel').hidden=false;
       el('platform-launcher-status').textContent='Yalnız bu platform yöneticisi için kayıtlı düzen.';
       renderPlatformLauncher();
+      const existingPlatBtn=document.getElementById('org-platform-launcher-btn');
+      if(existingPlatBtn && typeof existingPlatBtn.remove === 'function')existingPlatBtn.remove();
+      const platBtn=document.createElement('button');
+      platBtn.type='button';platBtn.id='org-platform-launcher-btn';
+      platBtn.textContent='★ DogruAdres — Platform Yönetimi';
+      platBtn.style.fontWeight='bold';platBtn.style.borderColor='#1d4ed8';platBtn.style.color='#1d4ed8';
+      platBtn.onclick=()=>{
+        el('platform-launcher-panel').hidden=false;
+        el('platform-launcher-panel').scrollIntoView({behavior:'smooth'});
+        const title=el('platform-launcher-title');if(title)title.focus();
+      };
+      el('organizations').prepend(platBtn);
     }catch{
       if(seq!==platformLauncherRequest||epoch!==viewEpoch||person!==currentPersonId)return;
       platformLauncherData=null;el('platform-launcher-panel').hidden=true;
       el('platform-launcher-list').replaceChildren();
+      const existingPlatBtn=document.getElementById('org-platform-launcher-btn');
+      if(existingPlatBtn && typeof existingPlatBtn.remove === 'function')existingPlatBtn.remove();
     }
   }
   async function savePlatformLauncher(apps,collapsed,notice){
