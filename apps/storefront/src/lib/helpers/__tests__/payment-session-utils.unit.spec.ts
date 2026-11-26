@@ -31,14 +31,36 @@ describe('payment-session-utils (#165)', () => {
       expect(active?.status).toBe('authorized');
     });
 
-    it('falls back to index 0 when neither pending nor authorized sessions exist', () => {
+    it('returns requires_more session when neither pending nor authorized exists', () => {
       const sessions: PaymentSessionLike[] = [
-        { id: 'sess_1', provider_id: 'pp_system_default', status: 'initiated' },
-        { id: 'sess_2', provider_id: 'pp_stripe_stripe', status: 'canceled' },
+        { id: 'sess_1', provider_id: 'pp_system_default', status: 'canceled' },
+        { id: 'sess_2', provider_id: 'pp_stripe_stripe', status: 'requires_more' },
       ];
 
       const active = getActivePaymentSession(sessions);
-      expect(active?.id).toBe('sess_1');
+      expect(active?.id).toBe('sess_2');
+      expect(active?.status).toBe('requires_more');
+    });
+
+    it('falls back to non-terminal session when neither pending, authorized, nor requires_more exists', () => {
+      const sessions: PaymentSessionLike[] = [
+        { id: 'sess_1', provider_id: 'pp_stripe_stripe', status: 'canceled' },
+        { id: 'sess_2', provider_id: 'pp_system_default', status: 'initiated' },
+      ];
+
+      const active = getActivePaymentSession(sessions);
+      expect(active?.id).toBe('sess_2');
+      expect(active?.status).toBe('initiated');
+    });
+
+    it('returns undefined when all sessions are terminal (canceled or error)', () => {
+      const sessions: PaymentSessionLike[] = [
+        { id: 'sess_1', provider_id: 'pp_stripe_stripe', status: 'canceled' },
+        { id: 'sess_2', provider_id: 'manual', status: 'error' },
+      ];
+
+      const active = getActivePaymentSession(sessions);
+      expect(active).toBeUndefined();
     });
 
     it('returns undefined for empty array, null, or undefined', () => {
