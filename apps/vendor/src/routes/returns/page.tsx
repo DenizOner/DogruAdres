@@ -232,20 +232,21 @@ export default function VendorReturnsPage() {
 
           if (Array.isArray(data.return_requests)) {
             const mapped: VendorReturnRequest[] = data.return_requests.map(
-              (bItem: { id: string; status: ReturnStatus; created_at: string }) => ({
+              (bItem: any) => ({
                 id: bItem.id,
-                order_id: bItem.id,
-                order_display_id: bItem.id.slice(0, 12),
-                buyer_organization_id: orgId,
-                buyer_organization_name: t("returns.table.notSpecified"),
+                order_id: bItem.order_id || bItem.id,
+                order_display_id: bItem.order_display_id || bItem.id.slice(0, 12),
+                buyer_organization_id: bItem.buyer_organization_id || orgId,
+                buyer_organization_name: bItem.buyer_organization_name || t("returns.table.notSpecified"),
                 seller_id: sellerId,
                 status: bItem.status,
                 created_at: bItem.created_at,
-                updated_at: bItem.created_at,
-                items: [],
-                review_notes: [],
-                total_refund_amount: 0,
-                currency_code: "TRY",
+                updated_at: bItem.updated_at || bItem.created_at,
+                items: Array.isArray(bItem.items) ? bItem.items : [],
+                review_notes: Array.isArray(bItem.review_notes) ? bItem.review_notes : [],
+                tracking_number: typeof bItem.tracking_number === "string" ? bItem.tracking_number : undefined,
+                total_refund_amount: typeof bItem.total_refund_amount === "number" ? bItem.total_refund_amount : 0,
+                currency_code: bItem.currency_code || "TRY",
               })
             )
             setReturnsList(mapped)

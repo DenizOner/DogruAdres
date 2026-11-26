@@ -249,6 +249,8 @@
       "rejectionReasonTitle": "Seller Rejection Reason",
       "noNotes": "No seller review notes added yet.",
       "itemsPendingBackend": "Part and order details for this return record are currently pending backend integration.",
+      "trackingPendingBackend": "Shipping and tracking details are pending backend integration.",
+      "amountPendingBackend": "Refund amount details are pending backend integration.",
       "trackingTitle": "Shipping & Return Tracking",
       "trackingNumber": "Tracking Number",
       "noTrackingNumber": "Tracking code has not been provided yet.",

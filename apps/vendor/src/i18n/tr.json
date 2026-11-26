@@ -249,6 +249,8 @@
       "rejectionReasonTitle": "Satıcı Reddetme Gerekçesi",
       "noNotes": "Henüz satıcı inceleme notu eklenmemiş.",
       "itemsPendingBackend": "Bu iade kaydının parça ve sipariş ayrıntıları sunucu entegrasyonu aşamasındadır.",
+      "trackingPendingBackend": "Kargo ve lojistik takip bilgisi arka uç entegrasyonu aşamasındadır.",
+      "amountPendingBackend": "İade tutarı arka uç entegrasyonu aşamasındadır.",
       "trackingTitle": "Kargo ve İade Takibi",
       "trackingNumber": "Kargo Takip Kodu",
       "noTrackingNumber": "Kargo takip kodu henüz girilmemiş.",

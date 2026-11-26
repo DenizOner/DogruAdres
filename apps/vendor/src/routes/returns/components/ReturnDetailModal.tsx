@@ -304,7 +304,7 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
                       </span>
                     ) : (
                       <Text className="text-xs text-ui-fg-muted italic">
-                        {t("returns.detail.noTrackingNumber")}
+                        {t("returns.detail.trackingPendingBackend")}
                       </Text>
                     )}
                   </div>
@@ -313,11 +313,17 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
                   <Text className="text-xs font-semibold text-ui-fg-muted uppercase tracking-wider">
                     {t("returns.detail.totalRefundAmount")}
                   </Text>
-                  <Text className="text-base font-bold text-ui-fg-base mt-1">
-                    {returnRequest.total_refund_amount > 0
-                      ? `${returnRequest.total_refund_amount.toFixed(2)} ${returnRequest.currency_code}`
-                      : "-"}
-                  </Text>
+                  <div className="mt-1">
+                    {returnRequest.total_refund_amount > 0 ? (
+                      <Text className="text-base font-bold text-ui-fg-base">
+                        {returnRequest.total_refund_amount.toFixed(2)} {returnRequest.currency_code}
+                      </Text>
+                    ) : (
+                      <Text className="text-xs text-ui-fg-muted italic">
+                        {t("returns.detail.amountPendingBackend")}
+                      </Text>
+                    )}
+                  </div>
                 </div>
               </div>
 
