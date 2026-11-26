@@ -7,6 +7,10 @@ import { HttpTypes } from "@medusajs/types"
 import { useElements, useStripe } from "@stripe/react-stripe-js"
 import React, { useEffect, useState } from "react"
 import { Button } from "@/components/atoms"
+import {
+  buildStripeBillingName,
+  evaluateStripePaymentResult,
+} from "./stripe-payment-utils"
 
 type PaymentButtonProps = {
   cart: HttpTypes.StoreCart
@@ -93,22 +97,34 @@ const StripePaymentButton = ({
   }, [card, stripe, elements, cart])
 
   const handlePayment = async () => {
+    if (submitting || disabled || notReady) return
+
     setSubmitting(true)
+    setErrorMessage(null)
 
     if (!stripe || !elements || !card || !cart) {
       setSubmitting(false)
       return
     }
 
-    await stripe
-      .confirmCardPayment(session?.data.client_secret as string, {
+    const clientSecret = session?.data?.client_secret as string | undefined
+    if (!clientSecret) {
+      setErrorMessage("Payment session client secret is missing")
+      setSubmitting(false)
+      return
+    }
+
+    try {
+      const billingName = buildStripeBillingName(
+        cart.billing_address?.first_name,
+        cart.billing_address?.last_name
+      )
+
+      const result = await stripe.confirmCardPayment(clientSecret, {
         payment_method: {
           card: card,
           billing_details: {
-            name:
-              cart.billing_address?.first_name +
-              " " +
-              cart.billing_address?.last_name,
+            name: billingName,
             address: {
               city: cart.billing_address?.city ?? undefined,
               country: cart.billing_address?.country_code ?? undefined,
@@ -122,30 +138,24 @@ const StripePaymentButton = ({
           },
         },
       })
-      .then(({ error, paymentIntent }) => {
-        if (error) {
-          const pi = error.payment_intent
 
-          if (
-            (pi && pi.status === "requires_capture") ||
-            (pi && pi.status === "succeeded")
-          ) {
-            onPaymentCompleted()
-          }
+      const evaluation = evaluateStripePaymentResult(result)
 
-          setErrorMessage(error.message || null)
-          return
-        }
+      if (evaluation.errorMessage) {
+        setErrorMessage(evaluation.errorMessage)
+      }
 
-        if (
-          (paymentIntent && paymentIntent.status === "requires_capture") ||
-          paymentIntent.status === "succeeded"
-        ) {
-          return onPaymentCompleted()
-        }
-
-        return
-      })
+      if (evaluation.shouldPlaceOrder) {
+        await onPaymentCompleted()
+      } else {
+        setSubmitting(false)
+      }
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Payment confirmation failed"
+      setErrorMessage(message)
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -191,6 +201,9 @@ const ManualTestPaymentButton = ({ notReady }: { notReady: boolean }) => {
   }
 
   const handlePayment = () => {
+    if (submitting || notReady) return
+    setSubmitting(true)
+    setErrorMessage(null)
     onPaymentCompleted()
   }
 
