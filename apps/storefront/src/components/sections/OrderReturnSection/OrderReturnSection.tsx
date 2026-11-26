@@ -30,6 +30,8 @@ export const OrderReturnSection = ({
   }>>([])
   const [error, setError] = useState<boolean>(false)
   const [returnMethod, setReturnMethod] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const router = useRouter()
 
   const handleTabChange = (tab: number) => {
@@ -47,6 +49,7 @@ export const OrderReturnSection = ({
 
   const handleSelectItem = (item: HttpTypes.StoreOrderLineItem, reason_id: string = "") => {
     setError(false)
+    setSubmitError(null)
     if (!reason_id && selectedItems.some((i) => i.line_item_id === item.id)) {
       setSelectedItems(selectedItems.filter((i) => i.line_item_id !== item.id))
     } else {
@@ -67,20 +70,38 @@ export const OrderReturnSection = ({
   }
 
   const handleSubmit = async () => {
-    const data = {
-      order_id: order.id,
-      customer_note: "",
-      shipping_option_id: returnMethod,
-      line_items: selectedItems,
+    // IR-10: Prevent double submit / duplicate concurrent requests
+    if (isSubmitting) return
+
+    setSubmitError(null)
+    setIsSubmitting(true)
+
+    try {
+      const data = {
+        order_id: order.id,
+        customer_note: "",
+        shipping_option_id: returnMethod,
+        line_items: selectedItems,
+      }
+
+      const response = await createReturnRequest(data)
+      const returnRequestId = response?.order_return_request?.id
+
+      if (!returnRequestId) {
+        setSubmitError("Return request could not be processed. Please try again.")
+        setIsSubmitting(false)
+        return
+      }
+
+      router.push(`/user/orders/${returnRequestId}/request-success`)
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : "An unexpected error occurred while creating your return request. Please try again."
+      setSubmitError(message)
+      setIsSubmitting(false)
     }
-
-    const { order_return_request } = await createReturnRequest(data)
-
-    if (!order_return_request.id) {
-      return console.log("Error creating return request")
-    }
-
-    router.push(`/user/orders/${order_return_request.id}/request-success`)
   }
 
   return (
@@ -143,6 +164,8 @@ export const OrderReturnSection = ({
               tab={tab}
               returnMethod={returnMethod}
               handleSubmit={handleSubmit}
+              isSubmitting={isSubmitting}
+              submitError={submitError}
             />
           </div>
         </div>
