@@ -42,6 +42,7 @@ export function Checkbox({
             props.disabled && "cursor-default"
           )}
           data-testid={dataTestId ?? 'checkbox'}
+          checked={checked}
           {...props}
         />
       </span>

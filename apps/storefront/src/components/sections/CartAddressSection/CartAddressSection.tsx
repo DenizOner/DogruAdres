@@ -10,6 +10,7 @@ import { Button } from "@/components/atoms"
 import ErrorMessage from "@/components/molecules/ErrorMessage/ErrorMessage"
 import Spinner from "@/icons/spinner"
 import ShippingAddress from "@/components/organisms/ShippingAddress/ShippingAddress"
+import BillingAddress from "@/components/organisms/BillingAddress/BillingAddress"
 import { CheckCircleSolid } from "@medusajs/icons"
 import LocalizedClientLink from "@/components/molecules/LocalizedLink/LocalizedLink"
 
@@ -77,6 +78,11 @@ export const CartAddressSection = ({
           router.refresh()
         }}
       >
+        <input
+          type="hidden"
+          name="same_as_billing"
+          value={sameAsBilling ? "true" : "false"}
+        />
         {isOpen ? (
           <div className="pb-8">
             <ShippingAddress
@@ -85,6 +91,14 @@ export const CartAddressSection = ({
               onChange={toggleSameAsBilling}
               cart={cart}
             />
+            {!sameAsBilling && (
+              <div className="pt-6 border-t mt-6" data-testid="billing-address-section">
+                <Heading level="h3" className="text-xl-semi pb-4">
+                  Billing Address
+                </Heading>
+                <BillingAddress cart={cart} />
+              </div>
+            )}
             <Button
               className="mt-6"
               data-testid="submit-address-button"
@@ -118,6 +132,21 @@ export const CartAddressSection = ({
                       <Text>
                         {cart.email}, {cart.shipping_address.phone}
                       </Text>
+                      {cart.billing_address && !compareAddresses(cart.shipping_address, cart.billing_address) && (
+                        <div className="mt-4 pt-4 border-t" data-testid="billing-address-summary">
+                          <Text className="txt-medium-plus font-bold">
+                            Billing Address: {cart.billing_address.first_name}{" "}
+                            {cart.billing_address.last_name}
+                          </Text>
+                          <Text>
+                            {cart.billing_address.address_1}{" "}
+                            {cart.billing_address.address_2 ? `${cart.billing_address.address_2}, ` : ""}
+                            {cart.billing_address.postal_code}{" "}
+                            {cart.billing_address.city},{" "}
+                            {cart.billing_address.country_code?.toUpperCase()}
+                          </Text>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
