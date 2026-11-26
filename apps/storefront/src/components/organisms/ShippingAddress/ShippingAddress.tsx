@@ -2,7 +2,7 @@ import { HttpTypes } from "@medusajs/types"
 import { Container } from "@medusajs/ui"
 import { mapKeys } from "lodash"
 import React, { useCallback, useEffect, useMemo, useState } from "react"
-import { Input } from "@/components/atoms"
+import { Checkbox, Input } from "@/components/atoms"
 import AddressSelect from "@/components/cells/AddressSelect/AddressSelect"
 import CountrySelect from "@/components/cells/CountrySelect/CountrySelect"
 import { usePathname } from "next/navigation"
@@ -23,6 +23,7 @@ const ShippingAddress = ({
     "shipping_address.first_name": cart?.shipping_address?.first_name || "",
     "shipping_address.last_name": cart?.shipping_address?.last_name || "",
     "shipping_address.address_1": cart?.shipping_address?.address_1 || "",
+    "shipping_address.address_2": cart?.shipping_address?.address_2 || "",
     "shipping_address.company": cart?.shipping_address?.company || "",
     "shipping_address.postal_code": cart?.shipping_address?.postal_code || "",
     "shipping_address.city": cart?.shipping_address?.city || "",
@@ -58,6 +59,7 @@ const ShippingAddress = ({
         "shipping_address.first_name": address.first_name || "",
         "shipping_address.last_name": address.last_name || "",
         "shipping_address.address_1": address.address_1 || "",
+        "shipping_address.address_2": address.address_2 || "",
         "shipping_address.company": address.company || "",
         "shipping_address.postal_code": address.postal_code || "",
         "shipping_address.city": address.city || "",
@@ -212,6 +214,15 @@ const ShippingAddress = ({
           value={formData["shipping_address.phone"]}
           onChange={handleChange}
           data-testid="shipping-phone-input"
+        />
+      </div>
+      <div className="my-4">
+        <Checkbox
+          label="Billing address same as shipping address"
+          name="same_as_billing"
+          checked={checked}
+          onChange={onChange}
+          data-testid="billing-address-checkbox"
         />
       </div>
     </>

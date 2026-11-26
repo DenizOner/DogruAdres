@@ -8,6 +8,7 @@ import medusaError from '@/lib/helpers/medusa-error';
 import { parseVariantIdsFromError } from '@/lib/helpers/parse-variant-error';
 
 import { sdk } from '../client';
+import { parseCartAddresses } from './cart-address-utils';
 import {
   getAuthHeaders,
   getCacheOptions,
@@ -390,27 +391,12 @@ export async function setAddresses(currentState: unknown, formData: FormData) {
       throw new Error('No existing cart found when setting addresses');
     }
 
-    const textField = (key: string): string | undefined => {
-      const value = formData.get(key);
-      return typeof value === 'string' ? value : undefined;
-    };
+    const { shipping_address, billing_address, email } = parseCartAddresses(formData);
 
-    const shippingAddress = {
-      first_name: textField('shipping_address.first_name'),
-      last_name: textField('shipping_address.last_name'),
-      address_1: textField('shipping_address.address_1'),
-      address_2: '',
-      company: textField('shipping_address.company'),
-      postal_code: textField('shipping_address.postal_code'),
-      city: textField('shipping_address.city'),
-      country_code: textField('shipping_address.country_code'),
-      province: textField('shipping_address.province'),
-      phone: textField('shipping_address.phone')
-    };
     const data: HttpTypes.StoreUpdateCart = {
-      shipping_address: shippingAddress,
-      billing_address: shippingAddress,
-      email: textField('email')
+      shipping_address: shipping_address as HttpTypes.StoreCartAddress,
+      billing_address: billing_address as HttpTypes.StoreCartAddress,
+      email
     };
 
     await updateCart(data);
