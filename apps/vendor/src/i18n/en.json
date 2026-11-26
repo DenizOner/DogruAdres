@@ -157,5 +157,118 @@
         "desc": "Optional promotional messages (off by default)."
       }
     }
+  },
+  "returns": {
+    "pageTitle": "Returns & Customer Requests Management",
+    "pageDescription": "Review, approve, or reject with a reason parts return requests received from buyer companies for your store.",
+    "orgLabel": "Active Business",
+    "infoBanner": "Customer return requests are currently in view and review mode. Seller approve and reject decisions will be directly persisted upon completion of server-side authorization (Policy A).",
+    "unauthorizedWarning": "You must log in with your personal session to view return requests and take action.",
+    "errorFetchFailed": "Failed to load return requests. Please check your connection.",
+    "status": {
+      "all": "All Statuses",
+      "requested": "Requested",
+      "open": "Under Review",
+      "received": "Received",
+      "partially_received": "Partially Received",
+      "accepted": "Accepted",
+      "canceled": "Rejected"
+    },
+    "stats": {
+      "total": "Total Requests"
+    },
+    "context": {
+      "orgSelectLabel": "Select Organization",
+      "storeSelectLabel": "Select Store",
+      "errorFetchOrgs": "Failed to load organizations.",
+      "errorNoOrgs": "No authorized organization found for your account.",
+      "errorFetchStores": "Failed to load stores.",
+      "errorNoStores": "No store found for the selected organization."
+    },
+    "pagination": {
+      "prev": "Previous Window",
+      "next": "Next Window",
+      "pageInfo": "Window {{current}} of {{total}}"
+    },
+    "filters": {
+      "title": "Filters & Search",
+      "reset": "Reset Filters",
+      "searchLabel": "Search (Order ID, Buyer Organization, Part or SKU)",
+      "searchPlaceholder": "e.g., 10042, Brake Disc, BRK-...",
+      "statusLabel": "Return Status",
+      "startDateLabel": "Start Date",
+      "endDateLabel": "End Date"
+    },
+    "table": {
+      "title": "Incoming Return Requests",
+      "loading": "Loading requests...",
+      "emptyHeading": "No Return Requests Found",
+      "emptyDescription": "There are no return requests matching your search criteria or directed to your business.",
+      "orderId": "Order No",
+      "buyerOrg": "Buyer Organization",
+      "items": "Returned Part(s)",
+      "moreItems": "more parts",
+      "date": "Request Date",
+      "status": "Status",
+      "actions": "Actions",
+      "notSpecified": "Not specified"
+    },
+    "actions": {
+      "viewDetail": "Review",
+      "viewDetailAria": "Review return request for order #{{id}}",
+      "closeModal": "Close Dialog",
+      "approveReturn": "Approve Return",
+      "rejectReturn": "Reject Return",
+      "cancel": "Cancel",
+      "submitting": "Processing...",
+      "loginBtn": "Log In with Personal Session →",
+      "addNoteLabel": "New Seller Review Note",
+      "addNotePlaceholder": "Add seller notes regarding review status, part condition, or shipping...",
+      "saveNoteBtn": "Save Note",
+      "rejectWarningTitle": "Return Rejection Notice",
+      "rejectWarningDesc": "Rejecting the return closes the request. Providing a justification to be forwarded to the buyer organization is required.",
+      "rejectReasonLabel": "Rejection Justification",
+      "rejectReasonPlaceholder": "Explain why the part return is being rejected (e.g., installation marks present, 14-day statutory limit exceeded, etc.)...",
+      "confirmRejectBtn": "Yes, Reject Return",
+      "sellerAuthor": "Seller Representative",
+      "approveSystemNote": "Return request was reviewed and approved by the seller.",
+      "rejectSystemNotePrefix": "Return rejected. Reason"
+    },
+    "detail": {
+      "modalTitle": "Return Details — Order #{{id}}",
+      "tabDetails": "Part & Order Details",
+      "tabNotes": "Review Notes",
+      "itemsTitle": "Returned Parts",
+      "quantity": "Quantity",
+      "reasonLabel": "Return Reason",
+      "rejectionReasonTitle": "Seller Rejection Reason",
+      "noNotes": "No seller review notes added yet.",
+      "itemsPendingBackend": "Part and order details for this return record are currently pending backend integration."
+    },
+    "reasons": {
+      "incompatible_part": "Incompatible Part",
+      "incorrect_order": "Incorrect Order",
+      "damaged_in_shipping": "Damaged in Shipping",
+      "defective_item": "Defective / Faulty Item",
+      "not_as_described": "Not as Described / Pictured",
+      "other": "Other Reason"
+    },
+    "feedback": {
+      "approvedSuccess": "Return request was successfully approved.",
+      "approveError": "An error occurred while approving the return.",
+      "rejectedSuccess": "Return request was rejected with the provided reason.",
+      "rejectError": "An error occurred while rejecting the return.",
+      "noteAddedSuccess": "Review note was successfully added.",
+      "noteError": "An error occurred while adding the note.",
+      "actionPendingBackend": "Return actions are temporarily in read-only mode until server-side write authorization (Policy A) is complete. The change was not saved to the database."
+    },
+    "validation": {
+      "reasonRequired": "Providing a reason is required for return rejection.",
+      "reasonMinLength": "Rejection reason must be at least 5 characters.",
+      "reasonMaxLength": "Rejection reason can be at most 1000 characters.",
+      "noteRequired": "Review note cannot be blank.",
+      "noteMinLength": "Review note must be at least 2 characters.",
+      "noteMaxLength": "Review note can be at most 1000 characters."
+    }
   }
 }
