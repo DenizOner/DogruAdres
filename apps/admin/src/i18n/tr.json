@@ -160,5 +160,153 @@
         "desc": "İsteğe bağlı kampanya ve tanıtım mesajları (varsayılan kapalı)."
       }
     }
+  },
+  "organizations": {
+    "label": "Şirketler & Başvurular",
+    "title": "Şirket & Başvuru Yönetimi",
+    "description": "Platforma başvuran veya aktif olan tüzel kişiliklerin (şirketlerin) inceleme ve onay süreçleri.",
+    "tabs": {
+      "all": "Tüm Başvurular",
+      "submitted": "Onay Bekleyenler",
+      "in_review": "İncelemedekiler",
+      "processed": "Sonuçlananlar"
+    },
+    "table": {
+      "legalName": "Şirket / İşletme Adı",
+      "businessKind": "İşletme Türü",
+      "taxIdentifier": "VKN / TCKN",
+      "phone": "Sabit Telefon",
+      "activities": "Faaliyet Alanları",
+      "status": "Durum",
+      "document": "Vergi Levhası",
+      "date": "Başvuru Tarihi",
+      "actions": "İşlemler"
+    },
+    "status": {
+      "submitted": "Onay Bekliyor",
+      "in_review": "İncelemede",
+      "approved": "Onaylandı",
+      "rejected": "Reddedildi",
+      "correction_requested": "Düzeltme İstendi",
+      "draft": "Taslak",
+      "withdrawn": "Geri Çekildi",
+      "active": "Aktif",
+      "suspended": "Askıda"
+    },
+    "businessKind": {
+      "legal_company": "Tüzel Kişilik (A.Ş. / Ltd. Şti.)",
+      "individual_business": "Şahıs İşletmesi"
+    },
+    "activity": {
+      "service_repair": "Servis & Onarım",
+      "retail_store": "Perakende Satış",
+      "wholesale_distribution": "Toptan Dağıtım",
+      "manufacturing": "İmalat & Üretim",
+      "fleet_operations": "Filo Operasyonları",
+      "insurance_claims": "Sigorta & Hasar"
+    },
+    "badges": {
+      "duplicateReview": "Mükerrerlik İncelemesi Gerekli",
+      "hasDocument": "Belge Yüklendi",
+      "noDocument": "Belge Yok",
+      "scannedSafe": "Taranmış Güvenli Önizleme"
+    },
+    "modal": {
+      "reviewTitle": "Şirket Başvurusu İnceleme & Karar",
+      "detailsTitle": "Başvuru Bilgileri",
+      "documentPreviewTitle": "Vergi Levhası Güvenli Önizleme",
+      "documentNotice": "Vergi levhası yüklendi. Güvenli önizleme açıldığında virüs taraması ve güvenli görsel üretimi gerçekleştirilir.",
+      "documentPendingNotice": "Vergi levhası yüklendi. Güvenli önizleme açıldığında virüs taraması ve güvenli görsel üretimi gerçekleştirilir. Ham belge indirmesi kapalıdır.",
+      "documentVerifiedNotice": "Virüs taramasından geçirilmiştir: ClamAV ile tehdit tespit edilmedi. Ham belge indirmesi güvenlik nedeniyle kapalıdır.",
+      "loadPreviewBtn": "Güvenli Önizlemeyi Göster",
+      "notesLabel": "İnceleme / Ret / Düzeltme Notu",
+      "notesPlaceholder": "Karar gerekçesi veya düzeltme notu yazın (en az 2 karakter)...",
+      "startReviewBtn": "İncelemeye Al",
+      "requestCorrectionBtn": "Düzeltme İste",
+      "rejectBtn": "Gerekçeyle Reddet",
+      "approveBtn": "Şirketi Onayla",
+      "closeBtn": "Kapat",
+      "notesRequired": "Ret veya düzeltme işlemi için gerekçe notu girilmesi zorunludur.",
+      "confirmApprove": "Bu şirketi onaylamak üzeresiniz. Sistemde aktif tüzel kişilik kaydı oluşturulacaktır. Onaylıyor musunuz?",
+      "confirmStartReview": "Bu başvuruyu incelemeye almak istiyor musunuz?",
+      "viewModalBtn": "İncele ve Karar Ver"
+    },
+    "alerts": {
+      "loadError": "Şirket başvuruları yüklenirken hata oluştu.",
+      "actionSuccess": "İşlem başarıyla gerçekleştirildi.",
+      "actionError": "İşlem başarısız oldu: {{error}}",
+      "conflictError": "Başvuru başka bir oturumda güncellendi. Liste yenilendi, lütfen tekrar deneyin.",
+      "emptyList": "Bu filtreye uygun şirket başvurusu bulunamadı.",
+      "loading": "Başvurular yükleniyor...",
+      "refreshBtn": "Listeyi Yenile"
+    }
+  },
+  "stores": {
+    "label": "Mağazalar & Talepler",
+    "title": "Mağaza & Talep Yönetimi",
+    "description": "Yeni mağaza açılış başvuruları, askıdaki mağazalar, ad/bağlantı değişiklikleri ve kapatma süreçleri.",
+    "tabs": {
+      "applications": "Yeni Mağaza Başvuruları",
+      "suspended": "Askıdaki & Uzlaştırma Mağazaları",
+      "renames": "Ad Değişiklik Talepleri",
+      "closings": "Platform Mağaza Kapatma & İtirazlar"
+    },
+    "table": {
+      "storeName": "Mağaza Adı",
+      "organization": "Bağlı Şirket",
+      "sellerId": "Satıcı ID",
+      "appId": "Başvuru ID",
+      "status": "Durum",
+      "actions": "İşlemler",
+      "oldName": "Mevcut Ad & Bağlantı",
+      "proposedName": "Önerilen Ad & Bağlantı",
+      "stage": "İtiraz Aşaması",
+      "reason": "Gerekçe"
+    },
+    "actions": {
+      "approveStore": "Mağazayı Onayla",
+      "rejectStore": "Gerekçeyle Reddet",
+      "unsuspendStore": "Askı Nedeni Giderildi, Mağazayı Aç",
+      "releaseStore": "Önceki Denemeyi Güvenle Kapat",
+      "reconcileStore": "Açılma Karar Kaydını Doğrula",
+      "approveRename": "Yeni Adı Onayla",
+      "rejectRename": "Talebi Reddet",
+      "decideAppeal": "İtiraz Kararını Kaydet",
+      "startClosing": "Gerekçeli Kapatma Başlat",
+      "refresh": "Yenile",
+      "older": "Daha Eski",
+      "newer": "İlk Sayfa"
+    },
+    "status": {
+      "pending_approval": "Onay Bekliyor",
+      "open": "Açık / Aktif",
+      "suspended": "Askıda",
+      "onHold": "Başvuru Hakkı Kapalı (İnceleme Bekletiliyor)",
+      "nameReviewRequired": "Ad/URL Hakkı İncelemesi Gerekli",
+      "reconciliationRequired": "Açılma Kaydı Tamamlama Gerekli",
+      "releasePending": "Önceki Deneme Belirsiz (Kapatma Bekliyor)",
+      "firstAppeal": "İlk İtiraz",
+      "secondReview": "Bağımsız Üst İnceleme"
+    },
+    "alerts": {
+      "loadError": "Mağaza verileri yüklenemedi.",
+      "actionSuccess": "İşlem başarıyla gerçekleştirildi.",
+      "actionError": "İşlem gerçekleştirilemedi: {{error}}",
+      "emptyPending": "Onay bekleyen mağaza başvurusu bulunmuyor.",
+      "emptySuspended": "Askıda veya uzlaştırma bekleyen mağaza bulunmuyor.",
+      "emptyRenames": "İnceleme bekleyen ad/bağlantı değişikliği talebi bulunmuyor.",
+      "emptyClosings": "İşlem bekleyen itiraz veya kapatma talebi bulunmuyor.",
+      "confirmUnsuspend": "Askı nedeni giderildi mi? Bu mağazanın ad ve bağlantı hakkı denetlenip aynı Store kimliğiyle açılacaktır.",
+      "confirmRelease": "Mağaza hâlâ askıda mı? Sistem önceki açılma isteğini denetim iziyle kapatır; mağazayı açmaz.",
+      "confirmReconcile": "Mağazanın daha önce açıldığı ve kaynak kararının bulunduğu yeniden denetlenecektir.",
+      "confirmRename": "Bu onay mağazanın adını ve URL bağlantısını birlikte değiştirir. Eski bağlantı yeni adrese yönlendirilmez. Onaylıyor musunuz?",
+      "confirmClosing": "Gerekçe ile yeni satışları derhal durdurmak istediğinize emin misiniz? Kesin kapanış henüz etkinleşmez.",
+      "reasonLengthError": "Gerekçe en az 10, en fazla 500 karakter olmalıdır.",
+      "reasonPlaceholder": "Gerekçe açıklaması giriniz (en az 10 karakter)...",
+      "decisionAccepted": "İtirazı Kabul Et",
+      "decisionRejected": "İtirazı Reddet",
+      "selectStore": "İşlem yapılacak mağazayı seçiniz...",
+      "closingConfirmed": "Platform mağaza kapatma sürecinin başlatılacağını onaylıyorum."
+    }
   }
 }

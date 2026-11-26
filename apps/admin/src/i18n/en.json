@@ -160,5 +160,153 @@
         "desc": "Optional promotional messages (off by default)."
       }
     }
+  },
+  "organizations": {
+    "label": "Organizations & Applications",
+    "title": "Organization & Application Management",
+    "description": "Review and approval workflows for legal organizations applying or active on the platform.",
+    "tabs": {
+      "all": "All Applications",
+      "submitted": "Pending Approval",
+      "in_review": "In Review",
+      "processed": "Processed"
+    },
+    "table": {
+      "legalName": "Company / Business Name",
+      "businessKind": "Business Type",
+      "taxIdentifier": "Tax ID (VKN / TCKN)",
+      "phone": "Landline Phone",
+      "activities": "Activities",
+      "status": "Status",
+      "document": "Tax Certificate",
+      "date": "Application Date",
+      "actions": "Actions"
+    },
+    "status": {
+      "submitted": "Pending Approval",
+      "in_review": "In Review",
+      "approved": "Approved",
+      "rejected": "Rejected",
+      "correction_requested": "Correction Requested",
+      "draft": "Draft",
+      "withdrawn": "Withdrawn",
+      "active": "Active",
+      "suspended": "Suspended"
+    },
+    "businessKind": {
+      "legal_company": "Legal Company (Corp / Ltd)",
+      "individual_business": "Individual Business"
+    },
+    "activity": {
+      "service_repair": "Service & Repair",
+      "retail_store": "Retail Store",
+      "wholesale_distribution": "Wholesale Distribution",
+      "manufacturing": "Manufacturing",
+      "fleet_operations": "Fleet Operations",
+      "insurance_claims": "Insurance Claims"
+    },
+    "badges": {
+      "duplicateReview": "Duplicate Review Required",
+      "hasDocument": "Document Uploaded",
+      "noDocument": "No Document",
+      "scannedSafe": "Scanned Safe Preview"
+    },
+    "modal": {
+      "reviewTitle": "Organization Application Review & Decision",
+      "detailsTitle": "Application Details",
+      "documentPreviewTitle": "Tax Certificate Safe Preview",
+      "documentNotice": "Tax certificate uploaded. Virus scanning and safe rasterization will run when safe preview is opened.",
+      "documentPendingNotice": "Tax certificate uploaded. Virus scanning and safe rasterization will run when safe preview is opened. Raw downloads are restricted.",
+      "documentVerifiedNotice": "Scanned for malware: no threats detected by ClamAV. Raw document downloads are restricted for security.",
+      "loadPreviewBtn": "Show Safe Preview",
+      "notesLabel": "Review / Rejection / Correction Notes",
+      "notesPlaceholder": "Enter decision rationale or correction notes (min 2 characters)...",
+      "startReviewBtn": "Start Review",
+      "requestCorrectionBtn": "Request Correction",
+      "rejectBtn": "Reject with Reason",
+      "approveBtn": "Approve Organization",
+      "closeBtn": "Close",
+      "notesRequired": "Notes or rationale are required for rejection or correction requests.",
+      "confirmApprove": "You are about to approve this organization. An active legal entity will be created. Confirm?",
+      "confirmStartReview": "Do you want to start reviewing this application?",
+      "viewModalBtn": "Review & Decide"
+    },
+    "alerts": {
+      "loadError": "Error loading organization applications.",
+      "actionSuccess": "Operation completed successfully.",
+      "actionError": "Operation failed: {{error}}",
+      "conflictError": "Application was modified in another session. Queue reloaded, please try again.",
+      "emptyList": "No organization applications found matching this filter.",
+      "loading": "Loading applications...",
+      "refreshBtn": "Reload List"
+    }
+  },
+  "stores": {
+    "label": "Stores & Requests",
+    "title": "Store & Request Management",
+    "description": "Manage new store openings, suspended stores, rename requests, and platform closing workflows.",
+    "tabs": {
+      "applications": "Store Applications",
+      "suspended": "Suspended & Reconciliation",
+      "renames": "Rename Requests",
+      "closings": "Platform Closings & Appeals"
+    },
+    "table": {
+      "storeName": "Store Name",
+      "organization": "Organization",
+      "sellerId": "Seller ID",
+      "appId": "Application ID",
+      "status": "Status",
+      "actions": "Actions",
+      "oldName": "Current Name & URL",
+      "proposedName": "Proposed Name & URL",
+      "stage": "Appeal Stage",
+      "reason": "Reason"
+    },
+    "actions": {
+      "approveStore": "Approve Store",
+      "rejectStore": "Reject with Reason",
+      "unsuspendStore": "Reopen Store",
+      "releaseStore": "Close Uncertain Attempt",
+      "reconcileStore": "Verify Decision Record",
+      "approveRename": "Approve New Name",
+      "rejectRename": "Reject Request",
+      "decideAppeal": "Record Appeal Decision",
+      "startClosing": "Initiate Platform Closing",
+      "refresh": "Refresh",
+      "older": "Older",
+      "newer": "First Page"
+    },
+    "status": {
+      "pending_approval": "Pending Approval",
+      "open": "Open / Active",
+      "suspended": "Suspended",
+      "onHold": "Application Rights On Hold (Policy)",
+      "nameReviewRequired": "Name/URL Rights Review Required",
+      "reconciliationRequired": "Opening Record Reconciliation Required",
+      "releasePending": "Previous Attempt Uncertain (Release Pending)",
+      "firstAppeal": "First Appeal",
+      "secondReview": "Independent Second Review"
+    },
+    "alerts": {
+      "loadError": "Failed to load store data.",
+      "actionSuccess": "Operation completed successfully.",
+      "actionError": "Operation failed: {{error}}",
+      "emptyPending": "No pending store applications found.",
+      "emptySuspended": "No suspended or reconciliation stores found.",
+      "emptyRenames": "No pending rename requests found.",
+      "emptyClosings": "No pending appeals or closing candidates found.",
+      "confirmUnsuspend": "Has the suspension reason been resolved? The store will reopen with the same ID.",
+      "confirmRelease": "Is the store still suspended? This will record and close the previous intent without opening the store.",
+      "confirmReconcile": "The store opening will be verified against the source decision without retrying native opening.",
+      "confirmRename": "This will update both the store name and URL handle. Old URL will not redirect. Confirm?",
+      "confirmClosing": "Are you sure you want to halt new sales for this store? Final closing is not yet enabled.",
+      "reasonLengthError": "Reason must be between 10 and 500 characters.",
+      "reasonPlaceholder": "Enter reason or rationale (min 10 characters)...",
+      "decisionAccepted": "Accept Appeal",
+      "decisionRejected": "Reject Appeal",
+      "selectStore": "Select store for action...",
+      "closingConfirmed": "I confirm initiating the platform store closing process."
+    }
   }
 }
