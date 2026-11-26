@@ -35,9 +35,14 @@ export const OrderCancel = ({
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
+  const isEffectiveAvailable = Boolean(isCancellationAvailable && onCancelRequest)
+
   const handleCancel = async () => {
-    // IR-09: Prevent fake / no-op submissions and double clicks
-    if (!isCancellationAvailable || isSubmitting || selectedItems.length === 0) {
+    // IR-09: Prevent fake / no-op submissions, unhandled flows and double clicks
+    if (!isEffectiveAvailable || !onCancelRequest || isSubmitting || selectedItems.length === 0) {
+      if (!onCancelRequest) {
+        setError("Cancellation service is not configured. Please contact the seller directly.")
+      }
       return
     }
 
@@ -45,12 +50,10 @@ export const OrderCancel = ({
     setError(null)
 
     try {
-      if (onCancelRequest) {
-        const result = await onCancelRequest(selectedItems)
-        if (!result.success) {
-          setError(result.message || "Cancellation request failed.")
-          return
-        }
+      const result = await onCancelRequest(selectedItems)
+      if (!result?.success) {
+        setError(result?.message || "Cancellation request failed.")
+        return
       }
 
       setOpen(false)
@@ -88,6 +91,7 @@ export const OrderCancel = ({
   const { isDisabled, buttonText } = getOrderCancelButtonState(
     selectedItems.length,
     isCancellationAvailable,
+    Boolean(onCancelRequest),
     isSubmitting
   )
 
@@ -97,7 +101,7 @@ export const OrderCancel = ({
         <div className="mb-4 md:mb-0">
           <h2 className="text-primary label-lg uppercase">Cancel Order</h2>
           <p className="text-secondary label-md max-w-sm">
-            {isCancellationAvailable
+            {isEffectiveAvailable
               ? "Once you place your order, you can cancel it until the seller begins preparation for shipment."
               : CANCELLATION_DISABLED_DISCLAIMER}
           </p>
@@ -105,17 +109,17 @@ export const OrderCancel = ({
         <Button
           variant="tonal"
           className="uppercase"
-          disabled={!isCancellationAvailable}
+          disabled={!isEffectiveAvailable}
           onClick={() => {
-            if (isCancellationAvailable) setOpen(true)
+            if (isEffectiveAvailable) setOpen(true)
           }}
           title={
-            !isCancellationAvailable
+            !isEffectiveAvailable
               ? "Self-service cancellation is disabled"
               : undefined
           }
         >
-          {isCancellationAvailable ? "Cancel" : "Unavailable"}
+          {isEffectiveAvailable ? "Cancel" : "Unavailable"}
         </Button>
       </div>
 

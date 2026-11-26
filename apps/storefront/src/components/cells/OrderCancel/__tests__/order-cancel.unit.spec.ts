@@ -6,7 +6,16 @@ import {
 
 describe("Storefront Order Cancel Button State & Guards (IR-09)", () => {
   it("disables cancellation when self-service cancellation is unavailable", () => {
-    const state = getOrderCancelButtonState(2, false, false)
+    const state = getOrderCancelButtonState(2, false, true, false)
+    expect(state).toEqual({
+      isDisabled: true,
+      buttonText: "Cancellation Unavailable",
+    })
+  })
+
+  it("disables cancellation when handler is not provided even if isCancellationAvailable is true", () => {
+    // IR-09 / Codex bot finding: Must not allow submission or fake success when no handler exists
+    const state = getOrderCancelButtonState(2, true, false, false)
     expect(state).toEqual({
       isDisabled: true,
       buttonText: "Cancellation Unavailable",
@@ -14,15 +23,15 @@ describe("Storefront Order Cancel Button State & Guards (IR-09)", () => {
   })
 
   it("disables button when no items are selected in modal", () => {
-    const state = getOrderCancelButtonState(0, true, false)
+    const state = getOrderCancelButtonState(0, true, true, false)
     expect(state).toEqual({
       isDisabled: true,
       buttonText: "Select Items to Cancel",
     })
   })
 
-  it("enables button when cancellation is available and at least one item is selected", () => {
-    const state = getOrderCancelButtonState(1, true, false)
+  it("enables button when cancellation is available, handler is provided, and items are selected", () => {
+    const state = getOrderCancelButtonState(1, true, true, false)
     expect(state).toEqual({
       isDisabled: false,
       buttonText: "Request Cancellation",
@@ -30,7 +39,7 @@ describe("Storefront Order Cancel Button State & Guards (IR-09)", () => {
   })
 
   it("disables button and updates label to 'Submitting...' while request is in flight", () => {
-    const state = getOrderCancelButtonState(2, true, true)
+    const state = getOrderCancelButtonState(2, true, true, true)
     expect(state).toEqual({
       isDisabled: true,
       buttonText: "Submitting...",
@@ -101,6 +110,25 @@ describe("Storefront Order Cancel Submission & Error Handling (IR-09)", () => {
 
     expect(isSubmitting).toBe(false)
     expect(errorMessage).toBe("Order already packaged by seller.")
+  })
+
+  it("handles missing handler by preventing fake success and surfacing error", async () => {
+    let isSubmitting = false
+    let errorMessage: string | null = null
+    const onCancelRequest = undefined
+
+    const triggerCancel = async () => {
+      if (!onCancelRequest) {
+        errorMessage = "Cancellation service is not configured. Please contact the seller directly."
+        return
+      }
+      isSubmitting = true
+    }
+
+    await triggerCancel()
+
+    expect(isSubmitting).toBe(false)
+    expect(errorMessage).toBe("Cancellation service is not configured. Please contact the seller directly.")
   })
 
   it("handles unexpected network exception without leaving user locked in submission state", async () => {

@@ -12,14 +12,16 @@ export interface OrderCancelButtonState {
 
 /**
  * Determines button enabled/disabled state and action label for order cancellation (IR-09).
- * Prevents misleading users when cancellation is not permitted or when no items are selected.
+ * Prevents misleading users when cancellation is not permitted, when no handler is provided,
+ * or when no items are selected.
  */
 export const getOrderCancelButtonState = (
   selectedCount: number,
   isCancellationAvailable: boolean,
+  hasCancelHandler: boolean,
   isSubmitting: boolean
 ): OrderCancelButtonState => {
-  if (!isCancellationAvailable) {
+  if (!isCancellationAvailable || !hasCancelHandler) {
     return {
       isDisabled: true,
       buttonText: "Cancellation Unavailable",
