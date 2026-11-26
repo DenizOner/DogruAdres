@@ -1,15 +1,14 @@
-import {
-  BannerSection,
-  BlogSection,
-  Hero,
-  HomeCategories,
-  HomeProductSection,
-  ShopByStyleSection,
-} from "@/components/sections"
-
 import type { Metadata } from "next"
 import { headers } from "next/headers"
 import Script from "next/script"
+
+import {
+  WelcomeHero,
+  TargetAudienceSection,
+  IntegratedSolutionsSection,
+  HowItWorksSection,
+  TrustAndFaqSection,
+} from "@/components/sections/WelcomePage"
 import { serializeJsonLd } from "@/lib/helpers/serialize-json-ld"
 import { listRegions } from "@/lib/data/regions"
 import {
@@ -44,10 +43,11 @@ export async function generateMetadata({
     locales,
   })
 
-  const title = "Home"
+  const title = "DoğruAdres | Kurumsal Otomotiv B4B Platformu"
   const description =
-    "Welcome to Mercur B2C Demo! Create a modern marketplace that you own and customize in every aspect with high-performance, fully customizable storefront."
-  const ogImage = "/B2C_Storefront_Open_Graph.png"
+    "Doğru müşteriye, doğru tedarikçiye, doğru fiyatla DoğruAdres’te ulaşın. Otomotiv sektöründeki profesyonel işletmeler için kapalı B4B ticaret, tedarik ve entegre çözüm platformu."
+  const ogImage = "/Logo.svg"
+  const siteName = process.env.NEXT_PUBLIC_SITE_NAME || "DoğruAdres"
 
   return {
     title,
@@ -68,24 +68,17 @@ export async function generateMetadata({
       languages,
     },
     openGraph: {
-      title: `${title} | ${
-        process.env.NEXT_PUBLIC_SITE_NAME ||
-        "Mercur B2C Demo - Marketplace Storefront"
-      }`,
+      title: `${title} | ${siteName}`,
       description,
       url: canonical,
-      siteName:
-        process.env.NEXT_PUBLIC_SITE_NAME ||
-        "Mercur B2C Demo - Marketplace Storefront",
+      siteName,
       type: "website",
       images: [
         {
           url: ogImage.startsWith("http") ? ogImage : `${baseUrl}${ogImage}`,
           width: 1200,
           height: 630,
-          alt:
-            process.env.NEXT_PUBLIC_SITE_NAME ||
-            "Mercur B2C Demo - Marketplace Storefront",
+          alt: `${siteName} Kurumsal Tanıtım`,
         },
       ],
     },
@@ -110,19 +103,13 @@ export default async function Home({
   const protocol = headersList.get("x-forwarded-proto") || "https"
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || `${protocol}://${host}`
 
-  const siteName =
-    process.env.NEXT_PUBLIC_SITE_NAME ||
-    "Mercur B2C Demo - Marketplace Storefront"
+  const siteName = process.env.NEXT_PUBLIC_SITE_NAME || "DoğruAdres"
 
   return (
-    <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start text-primary">
-      <link
-        rel="preload"
-        as="image"
-        href="/images/hero/Image.jpg"
-        imageSrcSet="/images/hero/Image.jpg 700w"
-        imageSizes="(min-width: 1024px) 50vw, 100vw"
-      />
+    <main
+      className="flex flex-col w-full text-primary"
+      data-testid="welcome-page-main"
+    >
       <Script
         id="ld-org"
         type="application/ld+json"
@@ -132,7 +119,9 @@ export default async function Home({
             "@type": "Organization",
             name: siteName,
             url: `${baseUrl}/${locale}`,
-            logo: `${baseUrl}/favicon.ico`,
+            logo: `${baseUrl}/Logo.svg`,
+            description:
+              "Otomotiv sektöründeki profesyonel işletmeler için kapalı B4B ticaret, tedarik ve entegre çözüm platformu.",
           }),
         }}
       />
@@ -150,29 +139,20 @@ export default async function Home({
         }}
       />
 
-      <Hero
-        image="/images/hero/Image.jpg"
-        heading="Snag your style in a flash"
-        paragraph="Buy, sell, and discover pre-loved gems from the trendiest brands."
-        buttons={[
-          { label: "Buy now", path: "/categories" },
-          {
-            label: "Sell now",
-            path:
-              process.env.NEXT_PUBLIC_VENDOR_URL ||
-              "https://vendor.mercurjs.com",
-          },
-        ]}
-      />
-      <div className="px-4 lg:px-8 w-full">
-        <HomeProductSection heading="trending listings" locale={locale} home />
-      </div>
-      <div className="px-4 lg:px-8 w-full">
-        <HomeCategories heading="SHOP BY CATEGORY" />
-      </div>
-      <BannerSection />
-      <ShopByStyleSection />
-      <BlogSection />
+      {/* Bölüm 2: Ana Tanıtım (Hero) */}
+      <WelcomeHero />
+
+      {/* Bölüm 3: DoğruAdres Kimler İçin? (6 Onaylı Faaliyet Grubu) */}
+      <TargetAudienceSection />
+
+      {/* Bölüm 4: Tek Platform, Bütünleşik Çözümler (6 Modül) */}
+      <IntegratedSolutionsSection />
+
+      {/* Bölüm 5: DoğruAdres Nasıl Çalışır? (4 Adımlı Süreç) */}
+      <HowItWorksSection />
+
+      {/* Bölüm 6: Kurumsal Güven Yaklaşımı ve SSS (6 Soru-Cevap) */}
+      <TrustAndFaqSection />
     </main>
   )
 }

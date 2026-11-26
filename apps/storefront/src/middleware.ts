@@ -161,16 +161,13 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // #243 closed B4B: these are unapproved Mercur B2C demo pages, not the
-  // accepted Organization-scoped /personal/catalog reader. Deny their SSR,
-  // metadata and external links before region lookup or the dot-path bypass.
+  // #243 closed B4B: deny unapproved Mercur B2C demo commerce routes (catalog,
+  // categories, cart, checkout, order), preserving server-side data isolation.
+  // The approved corporate welcome page at / and /[locale] is public under #255.
   // Preserve the independently accepted Seller rename 404/200 HTTP contract:
   // /sellers/[handle] is excluded, with native /store/sellers still closed.
-  // This is deliberately all-session until an approved Buyer-specific page
-  // exists; a Medusa JWT alone is not Buyer Organization authorization.
   const demoPath = pathnameWithoutLocale.toLowerCase();
-  if (demoPath === '' || demoPath === '/' ||
-      /^\/(?:products|categories|collections|cart|checkout|order)(?:\/|$)/.test(demoPath)) {
+  if (/^\/(?:products|categories|collections|cart|checkout|order)(?:\/|$)/.test(demoPath)) {
     // Default or URL-supplied country is not necessarily a configured region.
     // Reuse the existing public region bootstrap, not a new auth mechanism.
     let locale: string | undefined;

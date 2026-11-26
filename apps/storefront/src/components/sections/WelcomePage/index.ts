@@ -1,0 +1,7 @@
+export { WelcomeHeader } from "./WelcomeHeader"
+export { WelcomeHero } from "./WelcomeHero"
+export { TargetAudienceSection } from "./TargetAudienceSection"
+export { IntegratedSolutionsSection } from "./IntegratedSolutionsSection"
+export { HowItWorksSection } from "./HowItWorksSection"
+export { TrustAndFaqSection } from "./TrustAndFaqSection"
+export { WelcomeFooter } from "./WelcomeFooter"

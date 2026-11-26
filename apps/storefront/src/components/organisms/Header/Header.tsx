@@ -25,38 +25,104 @@ export const Header = async ({}: { locale: string }) => {
     categories: HttpTypes.StoreProductCategory[]
     parentCategories: HttpTypes.StoreProductCategory[]
   }
+
   return (
-    <header data-testid="header">
-      <div className="flex py-2 lg:px-8 px-4 md:px-5" data-testid="header-top">
-        <div className="flex items-center lg:w-1/3">
-          <MobileNavbar
-            parentCategories={parentCategories}
-            categories={categories}
-          />
-          <ParentCategoryLinks
-            parentCategories={parentCategories}
-            categories={categories}
-          />
-        </div>
-        <div className="flex lg:justify-center lg:w-1/3 items-center pl-4 lg:pl-0">
-          <LocalizedClientLink href="/" className="text-2xl font-bold" data-testid="header-logo-link">
+    <header data-testid="header" className="border-b border-primary bg-primary/95 backdrop-blur-xs sticky top-0 z-40">
+      <div className="flex items-center justify-between py-3 lg:px-8 px-4 md:px-5" data-testid="header-top">
+        {/* Sol Alan: Logo & Kurumsal Etiket */}
+        <div className="flex items-center gap-4">
+          <LocalizedClientLink href="/" className="flex items-center gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-sm" data-testid="header-logo-link">
             <Image
               src="/Logo.svg"
-              width={126}
+              width={130}
               height={40}
-              alt="Logo"
+              alt="DoğruAdres Logo"
               priority
+              className="h-9 w-auto"
             />
           </LocalizedClientLink>
+          <span className="hidden xl:inline-block border-l border-primary pl-3 text-xs font-semibold text-secondary uppercase tracking-wider">
+            Kurumsal Otomotiv B4B
+          </span>
         </div>
-        <div className="flex items-center justify-end gap-2 lg:gap-4 w-full lg:w-1/3 py-2" data-testid="header-actions">
+
+        {/* Orta Alan: Misafir için Kurumsal Gezinme; Girişli için Kategori Navigasyonu */}
+        {!isLoggedIn ? (
+          <nav
+            className="hidden md:flex items-center gap-6 text-sm font-medium text-secondary"
+            aria-label="Kurumsal bölümler"
+            data-testid="header-corporate-nav"
+          >
+            <a
+              href="#kimler-icin"
+              className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs px-1"
+            >
+              Kimler İçin?
+            </a>
+            <a
+              href="#cozumler"
+              className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs px-1"
+            >
+              Bütünleşik Çözümler
+            </a>
+            <a
+              href="#nasil-calisir"
+              className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs px-1"
+            >
+              Nasıl Çalışır?
+            </a>
+            <a
+              href="#guven-ve-sss"
+              className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs px-1"
+            >
+              Kurumsal Güven & SSS
+            </a>
+          </nav>
+        ) : (
+          <div className="flex items-center">
+            <MobileNavbar
+              parentCategories={parentCategories}
+              categories={categories}
+            />
+            <ParentCategoryLinks
+              parentCategories={parentCategories}
+              categories={categories}
+            />
+          </div>
+        )}
+
+        {/* Sağ Alan: Ülke Seçici ve Kullanıcı Aksiyonları */}
+        <div className="flex items-center justify-end gap-3" data-testid="header-actions">
           <CountrySelector regions={regions} />
-          {isLoggedIn && <MessageButton />}
-          <UserDropdown isLoggedIn={isLoggedIn} />
-          <CartDropdown />
+          {isLoggedIn ? (
+            <>
+              <MessageButton />
+              <UserDropdown isLoggedIn={isLoggedIn} />
+              <CartDropdown />
+            </>
+          ) : (
+            <div className="flex items-center gap-2" data-testid="header-guest-auth-actions">
+              <LocalizedClientLink
+                href="/login"
+                className="inline-flex items-center justify-center rounded-sm px-3.5 py-1.5 text-sm font-medium border border-primary text-primary hover:bg-component transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                data-testid="header-login-btn"
+              >
+                Giriş Yap
+              </LocalizedClientLink>
+              <LocalizedClientLink
+                href="/register"
+                className="inline-flex items-center justify-center rounded-sm px-3.5 py-1.5 text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 transition-colors shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                data-testid="header-register-btn"
+              >
+                Hesap Oluştur
+              </LocalizedClientLink>
+            </div>
+          )}
         </div>
       </div>
-      <Navbar categories={categories} parentCategories={parentCategories} />
+      {isLoggedIn && categories.length > 0 && (
+        <Navbar categories={categories} parentCategories={parentCategories} />
+      )}
     </header>
   )
 }
