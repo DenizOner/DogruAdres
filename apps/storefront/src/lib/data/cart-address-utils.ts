@@ -20,6 +20,11 @@ export type ParsedCartAddresses = {
   isSameAsBilling: boolean;
 };
 
+export type SetAddressesResult = {
+  success: boolean;
+  error?: string | null;
+};
+
 export interface FormDataLike {
   get(name: string): unknown;
 }
@@ -82,4 +87,12 @@ export function parseCartAddresses(formData: FormDataLike): ParsedCartAddresses 
     email: textField(formData, 'email'),
     isSameAsBilling,
   };
+}
+
+/**
+ * Evaluates whether checkout address submission should proceed to delivery step (#163).
+ * Guarantees that only confirmed successful saves trigger navigation.
+ */
+export function shouldNavigateToDelivery(result?: SetAddressesResult | null): boolean {
+  return result?.success === true;
 }

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'bun:test';
 import {
   isSameAsBillingSelected,
   parseCartAddresses,
+  shouldNavigateToDelivery,
   type FormDataLike,
+  type SetAddressesResult,
 } from '../cart-address-utils';
 
 class MockFormData implements FormDataLike {
@@ -143,6 +145,35 @@ describe('cart-address-utils (#164)', () => {
       expect(result.shipping_address.address_1).toBe('Bagdat Cad.');
       expect(result.email).toBe('ayse@example.com');
       expect(result.billing_address.first_name).toBe('Ayse');
+    });
+  });
+
+  describe('shouldNavigateToDelivery (#163)', () => {
+    it('returns true only when result is explicitly successful', () => {
+      const successResult: SetAddressesResult = { success: true };
+      expect(shouldNavigateToDelivery(successResult)).toBe(true);
+    });
+
+    it('returns false when result indicates failure with error message', () => {
+      const failureResult: SetAddressesResult = {
+        success: false,
+        error: 'Postal code is invalid',
+      };
+      expect(shouldNavigateToDelivery(failureResult)).toBe(false);
+    });
+
+    it('returns false when result is null, undefined, or empty', () => {
+      expect(shouldNavigateToDelivery(null)).toBe(false);
+      expect(shouldNavigateToDelivery(undefined)).toBe(false);
+      expect(shouldNavigateToDelivery({ success: false })).toBe(false);
+    });
+
+    it('prevents navigation on backend network/server error (#163)', () => {
+      const serverError: SetAddressesResult = {
+        success: false,
+        error: 'Unable to save address',
+      };
+      expect(shouldNavigateToDelivery(serverError)).toBe(false);
     });
   });
 });
