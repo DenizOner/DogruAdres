@@ -71,6 +71,8 @@ export default function VendorReturnsPage() {
   const [errorMessage, setErrorMessage] = useState<string>("")
 
   const triggerButtonRef = useRef<HTMLElement | null>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
+  const fetchReqIdRef = useRef(0)
 
   // 1. Authenticate personal session and fetch user organizations
   const verifySession = useCallback(async () => {
@@ -198,7 +200,13 @@ export default function VendorReturnsPage() {
 
   // 3. Fetch returns from backend endpoint if available
   const fetchBackendReturns = useCallback(
-    async (orgId: string, sellerId: string, pageNum: number) => {
+    async (
+      orgId: string,
+      sellerId: string,
+      pageNum: number,
+      reqId: number,
+      signal?: AbortSignal
+    ) => {
       if (!orgId || !sellerId) return
       setLoadingReturns(true)
       setErrorMessage("")
@@ -212,11 +220,16 @@ export default function VendorReturnsPage() {
             method: "GET",
             credentials: "include",
             cache: "no-store",
+            signal,
             headers: { Accept: "application/json" },
           }
         )
+        if (reqId !== fetchReqIdRef.current) return
+
         if (res.ok) {
           const data = await res.json()
+          if (reqId !== fetchReqIdRef.current) return
+
           if (Array.isArray(data.return_requests)) {
             const mapped: VendorReturnRequest[] = data.return_requests.map(
               (bItem: { id: string; status: ReturnStatus; created_at: string }) => ({
@@ -246,30 +259,61 @@ export default function VendorReturnsPage() {
           setHasMoreReturns(false)
           setErrorMessage(t("returns.errorFetchFailed"))
         }
-      } catch {
-        setReturnsList([])
-        setHasMoreReturns(false)
-        setErrorMessage(t("returns.errorFetchFailed"))
+      } catch (err: unknown) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          return
+        }
+        if (reqId === fetchReqIdRef.current) {
+          setReturnsList([])
+          setHasMoreReturns(false)
+          setErrorMessage(t("returns.errorFetchFailed"))
+        }
       } finally {
-        setLoadingReturns(false)
+        if (reqId === fetchReqIdRef.current) {
+          setLoadingReturns(false)
+        }
       }
     },
     [t]
   )
 
   useEffect(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
     if (selectedOrgId && selectedStoreId) {
-      void fetchBackendReturns(selectedOrgId, selectedStoreId, page)
+      const nextId = ++fetchReqIdRef.current
+      void fetchBackendReturns(
+        selectedOrgId,
+        selectedStoreId,
+        page,
+        nextId,
+        controller.signal
+      )
+    } else {
+      setReturnsList([])
+      setSelectedReturn(null)
+    }
+
+    return () => {
+      controller.abort()
     }
   }, [selectedOrgId, selectedStoreId, page, fetchBackendReturns])
 
   const handleOrgChange = (orgId: string) => {
     setSelectedOrgId(orgId)
+    setReturnsList([])
+    setSelectedReturn(null)
     setPage(0)
   }
 
   const handleStoreChange = (storeId: string) => {
     setSelectedStoreId(storeId)
+    setReturnsList([])
+    setSelectedReturn(null)
     setPage(0)
   }
 
