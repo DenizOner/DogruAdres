@@ -78,6 +78,11 @@ export const CartAddressSection = ({
           router.refresh()
         }}
       >
+        <input
+          type="hidden"
+          name="same_as_billing"
+          value={sameAsBilling ? "true" : "false"}
+        />
         {isOpen ? (
           <div className="pb-8">
             <ShippingAddress
