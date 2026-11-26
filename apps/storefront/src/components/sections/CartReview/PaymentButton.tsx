@@ -7,6 +7,7 @@ import { HttpTypes } from "@medusajs/types"
 import { useElements, useStripe } from "@stripe/react-stripe-js"
 import React, { useEffect, useState } from "react"
 import { Button } from "@/components/atoms"
+import { getActivePaymentSession } from "@/lib/helpers/payment-session-utils"
 import {
   buildStripeBillingName,
   evaluateStripePaymentResult,
@@ -28,7 +29,9 @@ const PaymentButton: React.FC<PaymentButtonProps> = ({
     !cart.email ||
     (cart.shipping_methods?.length ?? 0) < 1
 
-  const paymentSession = cart.payment_collection?.payment_sessions?.[0]
+  const paymentSession = getActivePaymentSession(
+    cart.payment_collection?.payment_sessions
+  )
 
   switch (true) {
     case isStripe(paymentSession?.provider_id):
@@ -88,8 +91,8 @@ const StripePaymentButton = ({
   const elements = useElements()
   const card = elements?.getElement("card")
 
-  const session = cart.payment_collection?.payment_sessions?.find(
-    (s) => s.status === "pending"
+  const session = getActivePaymentSession(
+    cart.payment_collection?.payment_sessions
   )
 
   useEffect(() => {
