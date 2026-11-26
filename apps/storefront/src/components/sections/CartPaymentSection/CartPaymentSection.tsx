@@ -11,6 +11,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/atoms';
 import ErrorMessage from '@/components/molecules/ErrorMessage/ErrorMessage';
 import { initiatePaymentSession } from '@/lib/data/cart';
+import { getActivePaymentSession } from '@/lib/helpers/payment-session-utils';
 
 import { isStripe as isStripeFunc, paymentInfoMap } from '../../../lib/constants';
 import PaymentContainer, {
@@ -26,8 +27,8 @@ const CartPaymentSection = ({
   cart: HttpTypes.StoreCart;
   availablePaymentMethods: StoreCardPaymentMethod[] | null;
 }) => {
-  const activeSession = cart.payment_collection?.payment_sessions?.find(
-    (paymentSession) => paymentSession.status === 'pending'
+  const activeSession = getActivePaymentSession(
+    cart.payment_collection?.payment_sessions
   );
 
   const [isLoading, setIsLoading] = useState(false);
@@ -37,6 +38,12 @@ const CartPaymentSection = ({
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState(
     activeSession?.provider_id ?? ''
   );
+
+  useEffect(() => {
+    if (activeSession?.provider_id) {
+      setSelectedPaymentMethod(activeSession.provider_id);
+    }
+  }, [activeSession?.provider_id]);
 
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -50,9 +57,16 @@ const CartPaymentSection = ({
     setError(null);
     setSelectedPaymentMethod(method);
     if (isStripeFunc(method)) {
-      await initiatePaymentSession(cart, {
-        provider_id: method
-      });
+      setIsLoading(true);
+      try {
+        await initiatePaymentSession(cart, {
+          provider_id: method
+        });
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Unable to initialize payment session');
+      } finally {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -78,13 +92,17 @@ const CartPaymentSection = ({
   };
 
   const handleSubmit = async () => {
+    if (!selectedPaymentMethod && !paidByGiftcard) {
+      setError('Please select a payment method');
+      return;
+    }
     setIsLoading(true);
     try {
       const shouldInputCard = isStripeFunc(selectedPaymentMethod) && !activeSession;
 
       const checkActiveSession = activeSession?.provider_id === selectedPaymentMethod;
 
-      if (!checkActiveSession) {
+      if (!checkActiveSession && !paidByGiftcard) {
         await initiatePaymentSession(cart, {
           provider_id: selectedPaymentMethod
         });
@@ -210,10 +228,10 @@ const CartPaymentSection = ({
                   data-testid="payment-details-summary"
                 >
                   <Container className="bg-ui-button-neutral-hover flex h-7 w-fit items-center p-2"     data-testid="payment-details-summary">
-                    {paymentInfoMap[selectedPaymentMethod]?.icon || <CreditCard />}
+                    {paymentInfoMap[activeSession?.provider_id ?? selectedPaymentMethod]?.icon || <CreditCard />}
                   </Container>
                   <Text>
-                    {isStripeFunc(selectedPaymentMethod) && cardBrand
+                    {isStripeFunc(activeSession?.provider_id ?? selectedPaymentMethod) && cardBrand
                       ? cardBrand
                       : 'Another step will appear'}
                   </Text>
