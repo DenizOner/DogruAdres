@@ -211,7 +211,8 @@
       "date": "Talep Tarihi",
       "status": "Durum",
       "actions": "İşlemler",
-      "notSpecified": "Belirtilmedi"
+      "notSpecified": "Belirtilmedi",
+      "itemsPendingBackend": "Parça ayrıntısı bekleniyor"
     },
     "actions": {
       "viewDetail": "İncele",
@@ -232,7 +233,11 @@
       "confirmRejectBtn": "Evet, İadeyi Reddet",
       "sellerAuthor": "Satıcı Yetkilisi",
       "approveSystemNote": "İade talebi satıcı tarafından incelendi ve onaylandı.",
-      "rejectSystemNotePrefix": "İade reddedildi. Gerekçe"
+      "rejectSystemNotePrefix": "İade reddedildi. Gerekçe",
+      "confirmApproveTitle": "İadeyi Onaylama",
+      "confirmApproveDesc": "Bu parçaların iadesini onaylamak istediğinize emin misiniz? Alıcı kuruluşa iade talebinin kabul edildiği bildirilecektir.",
+      "confirmApproveBtn": "Evet, İadeyi Onayla",
+      "cancelApproveBtn": "Vazgeç"
     },
     "detail": {
       "modalTitle": "İade Detayı — Sipariş #{{id}}",
@@ -243,7 +248,13 @@
       "reasonLabel": "İade Nedeni",
       "rejectionReasonTitle": "Satıcı Reddetme Gerekçesi",
       "noNotes": "Henüz satıcı inceleme notu eklenmemiş.",
-      "itemsPendingBackend": "Bu iade kaydının parça ve sipariş ayrıntıları sunucu entegrasyonu aşamasındadır."
+      "itemsPendingBackend": "Bu iade kaydının parça ve sipariş ayrıntıları sunucu entegrasyonu aşamasındadır.",
+      "trackingPendingBackend": "Kargo ve lojistik takip bilgisi arka uç entegrasyonu aşamasındadır.",
+      "amountPendingBackend": "İade tutarı arka uç entegrasyonu aşamasındadır.",
+      "trackingTitle": "Kargo ve İade Takibi",
+      "trackingNumber": "Kargo Takip Kodu",
+      "noTrackingNumber": "Kargo takip kodu henüz girilmemiş.",
+      "totalRefundAmount": "Toplam İade Tutarı"
     },
     "reasons": {
       "incompatible_part": "Uyumsuz Parça",

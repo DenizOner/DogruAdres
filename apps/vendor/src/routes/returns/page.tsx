@@ -25,7 +25,7 @@ import type {
   OrgInfo,
   StoreInfo,
 } from "./types"
-import { filterReturns } from "./validation"
+import { filterReturns, formatSafeDate } from "./validation"
 import { ReturnDetailModal } from "./components/ReturnDetailModal"
 
 export const config = defineRouteConfig({
@@ -232,20 +232,21 @@ export default function VendorReturnsPage() {
 
           if (Array.isArray(data.return_requests)) {
             const mapped: VendorReturnRequest[] = data.return_requests.map(
-              (bItem: { id: string; status: ReturnStatus; created_at: string }) => ({
+              (bItem: any) => ({
                 id: bItem.id,
-                order_id: bItem.id,
-                order_display_id: bItem.id.slice(0, 12),
-                buyer_organization_id: orgId,
-                buyer_organization_name: t("returns.table.notSpecified"),
+                order_id: bItem.order_id || bItem.id,
+                order_display_id: bItem.order_display_id || bItem.id.slice(0, 12),
+                buyer_organization_id: bItem.buyer_organization_id || orgId,
+                buyer_organization_name: bItem.buyer_organization_name || t("returns.table.notSpecified"),
                 seller_id: sellerId,
                 status: bItem.status,
                 created_at: bItem.created_at,
-                updated_at: bItem.created_at,
-                items: [],
-                review_notes: [],
-                total_refund_amount: 0,
-                currency_code: "TRY",
+                updated_at: bItem.updated_at || bItem.created_at,
+                items: Array.isArray(bItem.items) ? bItem.items : [],
+                review_notes: Array.isArray(bItem.review_notes) ? bItem.review_notes : [],
+                tracking_number: typeof bItem.tracking_number === "string" ? bItem.tracking_number : undefined,
+                total_refund_amount: typeof bItem.total_refund_amount === "number" ? bItem.total_refund_amount : 0,
+                currency_code: bItem.currency_code || "TRY",
               })
             )
             setReturnsList(mapped)
@@ -1017,20 +1018,28 @@ export default function VendorReturnsPage() {
                       <div className="text-xs text-ui-fg-muted">{item.buyer_organization_id}</div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="font-medium text-ui-fg-base">
-                        {item.items[0]?.title}
-                        {item.items.length > 1 && (
-                          <span className="text-xs text-violet-600 font-semibold ml-1.5">
-                            +{item.items.length - 1} {t("returns.table.moreItems")}
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs text-ui-fg-subtle">
-                        SKU: {item.items[0]?.sku}
-                      </div>
+                      {item.items.length > 0 ? (
+                        <>
+                          <div className="font-medium text-ui-fg-base">
+                            {item.items[0]?.title}
+                            {item.items.length > 1 && (
+                              <span className="text-xs text-violet-600 font-semibold ml-1.5">
+                                +{item.items.length - 1} {t("returns.table.moreItems")}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-ui-fg-subtle">
+                            SKU: {item.items[0]?.sku}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-xs text-ui-fg-muted italic">
+                          {t("returns.table.itemsPendingBackend")}
+                        </div>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-ui-fg-subtle text-xs">
-                      {new Date(item.created_at).toLocaleDateString()}
+                      {formatSafeDate(item.created_at)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       {getStatusBadge(item.status)}

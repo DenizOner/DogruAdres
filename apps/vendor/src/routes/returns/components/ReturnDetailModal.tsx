@@ -9,6 +9,8 @@ import {
   getReasonLabel,
   validateRejectionReason,
   validateReviewNote,
+  formatSafeDate,
+  formatSafeDateTime,
 } from "../validation"
 
 interface ReturnDetailModalProps {
@@ -36,6 +38,7 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
   const [rejectionError, setRejectionError] = useState("")
   const [newNote, setNewNote] = useState("")
   const [noteError, setNoteError] = useState("")
+  const [confirmingApprove, setConfirmingApprove] = useState(false)
 
   const modalRef = useRef<HTMLDivElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
@@ -52,10 +55,12 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
         setRejectionError("")
         setNewNote("")
         setNoteError("")
+        setConfirmingApprove(false)
         prevReturnIdRef.current = returnRequest?.id ?? null
       }
     } else {
       prevReturnIdRef.current = null
+      setConfirmingApprove(false)
     }
   }, [isOpen, returnRequest?.id])
 
@@ -70,7 +75,11 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (!submitting) {
-          onClose()
+          if (confirmingApprove) {
+            setConfirmingApprove(false)
+          } else {
+            onClose()
+          }
         }
         return
       }
@@ -115,7 +124,7 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
       clearTimeout(timer)
       window.removeEventListener("keydown", handleKeyDown)
     }
-  }, [isOpen, submitting, onClose])
+  }, [isOpen, submitting, confirmingApprove, onClose])
 
   if (!isOpen || !returnRequest) return null
 
@@ -139,7 +148,10 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
   }
 
   const handleApprove = async () => {
-    await onApprove(returnRequest.id)
+    const success = await onApprove(returnRequest.id)
+    if (success) {
+      setConfirmingApprove(false)
+    }
   }
 
   const handleRejectSubmit = async (e: React.FormEvent) => {
@@ -205,7 +217,10 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
         <div className="flex border-b border-ui-border-base bg-ui-bg-subtle px-6 gap-2">
           <button
             type="button"
-            onClick={() => setActiveTab("details")}
+            onClick={() => {
+              setActiveTab("details")
+              setConfirmingApprove(false)
+            }}
             className={`min-h-[44px] px-4 py-2 text-sm font-medium border-b-2 transition-colors focus-visible:ring-2 focus-visible:ring-violet-600 focus-visible:outline-none ${
               activeTab === "details"
                 ? "border-violet-600 text-violet-600 font-semibold"
@@ -216,7 +231,10 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab("notes")}
+            onClick={() => {
+              setActiveTab("notes")
+              setConfirmingApprove(false)
+            }}
             className={`min-h-[44px] px-4 py-2 text-sm font-medium border-b-2 transition-colors focus-visible:ring-2 focus-visible:ring-violet-600 focus-visible:outline-none ${
               activeTab === "notes"
                 ? "border-violet-600 text-violet-600 font-semibold"
@@ -228,7 +246,10 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
           {canRejectReturn(returnRequest.status) && (
             <button
               type="button"
-              onClick={() => setActiveTab("reject")}
+              onClick={() => {
+                setActiveTab("reject")
+                setConfirmingApprove(false)
+              }}
               className={`min-h-[44px] px-4 py-2 text-sm font-medium border-b-2 transition-colors focus-visible:ring-2 focus-visible:ring-violet-600 focus-visible:outline-none ${
                 activeTab === "reject"
                   ? "border-red-600 text-red-600 font-semibold"
@@ -265,8 +286,44 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
                     #{returnRequest.order_display_id}
                   </Text>
                   <Text className="text-xs text-ui-fg-subtle">
-                    {t("returns.table.date")}: {new Date(returnRequest.created_at).toLocaleDateString()}
+                    {t("returns.table.date")}: {formatSafeDate(returnRequest.created_at)}
                   </Text>
+                </div>
+              </div>
+
+              {/* Shipping & Refund Info Card */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-lg bg-ui-bg-subtle border border-ui-border-base">
+                <div>
+                  <Text className="text-xs font-semibold text-ui-fg-muted uppercase tracking-wider">
+                    {t("returns.detail.trackingTitle")}
+                  </Text>
+                  <div className="mt-1">
+                    {returnRequest.tracking_number ? (
+                      <span className="inline-block font-mono bg-ui-bg-base px-2.5 py-1 rounded border border-ui-border-base text-violet-700 dark:text-violet-300 font-semibold text-xs">
+                        {returnRequest.tracking_number}
+                      </span>
+                    ) : (
+                      <Text className="text-xs text-ui-fg-muted italic">
+                        {t("returns.detail.trackingPendingBackend")}
+                      </Text>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <Text className="text-xs font-semibold text-ui-fg-muted uppercase tracking-wider">
+                    {t("returns.detail.totalRefundAmount")}
+                  </Text>
+                  <div className="mt-1">
+                    {returnRequest.total_refund_amount > 0 ? (
+                      <Text className="text-base font-bold text-ui-fg-base">
+                        {returnRequest.total_refund_amount.toFixed(2)} {returnRequest.currency_code}
+                      </Text>
+                    ) : (
+                      <Text className="text-xs text-ui-fg-muted italic">
+                        {t("returns.detail.amountPendingBackend")}
+                      </Text>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -349,7 +406,7 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
                     >
                       <div className="flex items-center justify-between text-xs text-ui-fg-subtle">
                         <span className="font-semibold text-ui-fg-base">{note.author}</span>
-                        <span>{new Date(note.created_at).toLocaleString()}</span>
+                        <span>{formatSafeDateTime(note.created_at)}</span>
                       </div>
                       <Text className="text-sm text-ui-fg-base mt-1 whitespace-pre-wrap">
                         {note.note}
@@ -454,43 +511,75 @@ export const ReturnDetailModal: React.FC<ReturnDetailModalProps> = ({
 
         {/* Modal Footer with Primary Actions */}
         {activeTab === "details" && (
-          <div className="flex flex-wrap items-center justify-between px-6 py-4 border-t border-ui-border-base bg-ui-bg-subtle gap-3">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={onClose}
-              disabled={submitting}
-              className="min-h-[44px] min-w-[44px] px-4 font-medium"
-            >
-              {t("returns.actions.closeModal")}
-            </Button>
-
-            <div className="flex flex-wrap items-center gap-3">
-              {canRejectReturn(returnRequest.status) && (
+          <div className="px-6 py-4 border-t border-ui-border-base bg-ui-bg-subtle">
+            {confirmingApprove ? (
+              <div className="w-full p-3.5 rounded-lg bg-green-50/90 dark:bg-green-950/40 border border-green-200 dark:border-green-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="text-xs text-green-900 dark:text-green-200">
+                  <strong className="block text-sm font-semibold">{t("returns.actions.confirmApproveTitle")}</strong>
+                  {t("returns.actions.confirmApproveDesc")}
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setConfirmingApprove(false)}
+                    disabled={submitting}
+                    className="min-h-[44px] min-w-[44px] px-3 text-xs"
+                  >
+                    {t("returns.actions.cancelApproveBtn")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    onClick={handleApprove}
+                    disabled={submitting}
+                    className="min-h-[44px] min-w-[44px] px-4 text-xs font-semibold bg-green-600 hover:bg-green-700 text-white focus-visible:ring-2 focus-visible:ring-green-600 inline-flex items-center gap-1.5"
+                  >
+                    <Check className="w-4 h-4" />
+                    {submitting ? t("returns.actions.submitting") : t("returns.actions.confirmApproveBtn")}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <Button
                   type="button"
-                  variant="danger"
-                  onClick={() => setActiveTab("reject")}
+                  variant="secondary"
+                  onClick={onClose}
                   disabled={submitting}
-                  className="min-h-[44px] min-w-[44px] px-4 font-medium focus-visible:ring-2 focus-visible:ring-red-600"
+                  className="min-h-[44px] min-w-[44px] px-4 font-medium"
                 >
-                  {t("returns.actions.rejectReturn")}
+                  {t("returns.actions.closeModal")}
                 </Button>
-              )}
 
-              {canApproveReturn(returnRequest.status) && (
-                <Button
-                  type="button"
-                  variant="primary"
-                  onClick={handleApprove}
-                  disabled={submitting}
-                  className="min-h-[44px] min-w-[44px] px-5 font-semibold bg-green-600 hover:bg-green-700 text-white focus-visible:ring-2 focus-visible:ring-green-600 inline-flex items-center gap-2"
-                >
-                  <Check className="w-4 h-4" />
-                  {submitting ? t("returns.actions.submitting") : t("returns.actions.approveReturn")}
-                </Button>
-              )}
-            </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  {canRejectReturn(returnRequest.status) && (
+                    <Button
+                      type="button"
+                      variant="danger"
+                      onClick={() => setActiveTab("reject")}
+                      disabled={submitting}
+                      className="min-h-[44px] min-w-[44px] px-4 font-medium focus-visible:ring-2 focus-visible:ring-red-600"
+                    >
+                      {t("returns.actions.rejectReturn")}
+                    </Button>
+                  )}
+
+                  {canApproveReturn(returnRequest.status) && (
+                    <Button
+                      type="button"
+                      variant="primary"
+                      onClick={() => setConfirmingApprove(true)}
+                      disabled={submitting}
+                      className="min-h-[44px] min-w-[44px] px-5 font-semibold bg-green-600 hover:bg-green-700 text-white focus-visible:ring-2 focus-visible:ring-green-600 inline-flex items-center gap-2"
+                    >
+                      <Check className="w-4 h-4" />
+                      {t("returns.actions.approveReturn")}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

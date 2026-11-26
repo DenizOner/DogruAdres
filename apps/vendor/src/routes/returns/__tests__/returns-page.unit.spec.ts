@@ -7,6 +7,8 @@ import {
   canApproveReturn,
   canRejectReturn,
   getReasonLabel,
+  formatSafeDate,
+  formatSafeDateTime,
 } from "../validation"
 import trJson from "../../../i18n/tr.json"
 import enJson from "../../../i18n/en.json"
@@ -37,6 +39,7 @@ const mockReturns: VendorReturnRequest[] = [
     review_notes: [],
     total_refund_amount: 3700.0,
     currency_code: "TRY",
+    tracking_number: "YRT-9482710492",
   },
   {
     id: "return_01JBMRET002",
@@ -69,6 +72,7 @@ const mockReturns: VendorReturnRequest[] = [
     ],
     total_refund_amount: 1800.0,
     currency_code: "TRY",
+    tracking_number: "ARAS-401928371",
   },
   {
     id: "return_01JBMRET003",
@@ -250,6 +254,43 @@ describe("Vendor Returns - filterReturns", () => {
     expect(result[0].order_display_id).toBe("10042")
   })
 
+  it("filters by order display ID with leading # query symbol", () => {
+    const filters: ReturnFilters = {
+      status: "all",
+      searchOrder: "#10042",
+      startDate: "",
+      endDate: "",
+    }
+    const result = filterReturns(mockReturns, filters)
+    expect(result).toHaveLength(1)
+    expect(result[0].order_display_id).toBe("10042")
+  })
+
+  it("filters by cargo tracking number", () => {
+    const filters: ReturnFilters = {
+      status: "all",
+      searchOrder: "YRT-9482710492",
+      startDate: "",
+      endDate: "",
+    }
+    const result = filterReturns(mockReturns, filters)
+    expect(result).toHaveLength(1)
+    expect(result[0].id).toBe("return_01JBMRET001")
+    expect(result[0].tracking_number).toBe("YRT-9482710492")
+  })
+
+  it("filters by partial cargo tracking number case-insensitively", () => {
+    const filters: ReturnFilters = {
+      status: "all",
+      searchOrder: "aras",
+      startDate: "",
+      endDate: "",
+    }
+    const result = filterReturns(mockReturns, filters)
+    expect(result).toHaveLength(1)
+    expect(result[0].id).toBe("return_01JBMRET002")
+  })
+
   it("filters by buyer organization name case-insensitively", () => {
     const filters: ReturnFilters = {
       status: "all",
@@ -408,6 +449,38 @@ describe("Vendor Returns - getReasonLabel", () => {
     expect(getReasonLabel("incompatible_part", mockT)).toBe(
       "translated_returns.reasons.incompatible_part"
     )
+  })
+})
+
+describe("Vendor Returns - formatSafeDate & formatSafeDateTime", () => {
+  it("formats valid ISO date string correctly", () => {
+    const formatted = formatSafeDate("2026-11-23T14:30:00.000Z", "tr-TR")
+    expect(formatted).not.toBe("-")
+    expect(formatted).toContain("2026")
+  })
+
+  it("formats valid numeric timestamp correctly", () => {
+    const ts = new Date("2026-11-20T10:00:00Z").getTime()
+    const formatted = formatSafeDate(ts, "tr-TR")
+    expect(formatted).not.toBe("-")
+  })
+
+  it("returns '-' for null, undefined, empty, or invalid date values", () => {
+    expect(formatSafeDate(null)).toBe("-")
+    expect(formatSafeDate(undefined)).toBe("-")
+    expect(formatSafeDate("")).toBe("-")
+    expect(formatSafeDate("invalid-date-format")).toBe("-")
+  })
+
+  it("formats safe date and time string", () => {
+    const formatted = formatSafeDateTime("2026-11-23T14:30:00.000Z", "tr-TR")
+    expect(formatted).not.toBe("-")
+    expect(formatted).toContain("2026")
+  })
+
+  it("returns '-' for invalid date in formatSafeDateTime", () => {
+    expect(formatSafeDateTime(null)).toBe("-")
+    expect(formatSafeDateTime("not-a-date")).toBe("-")
   })
 })
 
