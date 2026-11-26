@@ -18,18 +18,26 @@ export function filterReturns(
       return false
     }
 
-    // 2. Order Search (matches order_id or order_display_id or buyer organization name)
+    // 2. Order Search (matches order_id, order_display_id, buyer organization, part title/SKU, tracking number)
     if (filters.searchOrder.trim()) {
       const q = filters.searchOrder.trim().toLowerCase()
-      const matchOrderId = item.order_id.toLowerCase().includes(q)
-      const matchDisplayId = item.order_display_id.toLowerCase().includes(q)
+      const cleanQ = q.startsWith("#") ? q.slice(1).trim() : q
+      const matchOrderId =
+        item.order_id.toLowerCase().includes(q) ||
+        (cleanQ ? item.order_id.toLowerCase().includes(cleanQ) : false)
+      const matchDisplayId =
+        item.order_display_id.toLowerCase().includes(q) ||
+        (cleanQ ? item.order_display_id.toLowerCase().includes(cleanQ) : false)
       const matchBuyer = item.buyer_organization_name.toLowerCase().includes(q)
+      const matchTracking = item.tracking_number
+        ? item.tracking_number.toLowerCase().includes(q)
+        : false
       const matchPart = item.items.some(
         (part) =>
           part.title.toLowerCase().includes(q) ||
           part.sku.toLowerCase().includes(q)
       )
-      if (!matchOrderId && !matchDisplayId && !matchBuyer && !matchPart) {
+      if (!matchOrderId && !matchDisplayId && !matchBuyer && !matchPart && !matchTracking) {
         return false
       }
     }
@@ -148,4 +156,31 @@ export function getReasonLabel(
     default:
       return "Diğer Neden"
   }
+}
+
+/**
+ * Safely format an ISO date string or timestamp into local calendar date format.
+ * Returns "-" for null/undefined/invalid dates to prevent UI crashes or "Invalid Date" output.
+ */
+export function formatSafeDate(
+  dateValue: string | number | Date | null | undefined,
+  locale = "tr-TR"
+): string {
+  if (!dateValue) return "-"
+  const d = new Date(dateValue)
+  if (Number.isNaN(d.getTime())) return "-"
+  return d.toLocaleDateString(locale)
+}
+
+/**
+ * Safely format an ISO date string or timestamp into local date & time format.
+ */
+export function formatSafeDateTime(
+  dateValue: string | number | Date | null | undefined,
+  locale = "tr-TR"
+): string {
+  if (!dateValue) return "-"
+  const d = new Date(dateValue)
+  if (Number.isNaN(d.getTime())) return "-"
+  return d.toLocaleString(locale)
 }

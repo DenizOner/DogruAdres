@@ -25,7 +25,7 @@ import type {
   OrgInfo,
   StoreInfo,
 } from "./types"
-import { filterReturns } from "./validation"
+import { filterReturns, formatSafeDate } from "./validation"
 import { ReturnDetailModal } from "./components/ReturnDetailModal"
 
 export const config = defineRouteConfig({
@@ -1017,20 +1017,28 @@ export default function VendorReturnsPage() {
                       <div className="text-xs text-ui-fg-muted">{item.buyer_organization_id}</div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="font-medium text-ui-fg-base">
-                        {item.items[0]?.title}
-                        {item.items.length > 1 && (
-                          <span className="text-xs text-violet-600 font-semibold ml-1.5">
-                            +{item.items.length - 1} {t("returns.table.moreItems")}
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs text-ui-fg-subtle">
-                        SKU: {item.items[0]?.sku}
-                      </div>
+                      {item.items.length > 0 ? (
+                        <>
+                          <div className="font-medium text-ui-fg-base">
+                            {item.items[0]?.title}
+                            {item.items.length > 1 && (
+                              <span className="text-xs text-violet-600 font-semibold ml-1.5">
+                                +{item.items.length - 1} {t("returns.table.moreItems")}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-ui-fg-subtle">
+                            SKU: {item.items[0]?.sku}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-xs text-ui-fg-muted italic">
+                          {t("returns.table.itemsPendingBackend")}
+                        </div>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-ui-fg-subtle text-xs">
-                      {new Date(item.created_at).toLocaleDateString()}
+                      {formatSafeDate(item.created_at)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       {getStatusBadge(item.status)}

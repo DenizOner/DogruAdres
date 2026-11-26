@@ -211,7 +211,8 @@
       "date": "Request Date",
       "status": "Status",
       "actions": "Actions",
-      "notSpecified": "Not specified"
+      "notSpecified": "Not specified",
+      "itemsPendingBackend": "Part details pending"
     },
     "actions": {
       "viewDetail": "Review",
@@ -232,7 +233,11 @@
       "confirmRejectBtn": "Yes, Reject Return",
       "sellerAuthor": "Seller Representative",
       "approveSystemNote": "Return request was reviewed and approved by the seller.",
-      "rejectSystemNotePrefix": "Return rejected. Reason"
+      "rejectSystemNotePrefix": "Return rejected. Reason",
+      "confirmApproveTitle": "Approve Return",
+      "confirmApproveDesc": "Are you sure you want to approve this return? The buyer organization will be notified that the return is accepted.",
+      "confirmApproveBtn": "Yes, Approve Return",
+      "cancelApproveBtn": "Cancel"
     },
     "detail": {
       "modalTitle": "Return Details — Order #{{id}}",
@@ -243,7 +248,11 @@
       "reasonLabel": "Return Reason",
       "rejectionReasonTitle": "Seller Rejection Reason",
       "noNotes": "No seller review notes added yet.",
-      "itemsPendingBackend": "Part and order details for this return record are currently pending backend integration."
+      "itemsPendingBackend": "Part and order details for this return record are currently pending backend integration.",
+      "trackingTitle": "Shipping & Return Tracking",
+      "trackingNumber": "Tracking Number",
+      "noTrackingNumber": "Tracking code has not been provided yet.",
+      "totalRefundAmount": "Total Refund Amount"
     },
     "reasons": {
       "incompatible_part": "Incompatible Part",
