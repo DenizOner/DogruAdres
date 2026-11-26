@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createContext, runInContext } from 'node:vm'
+import { renderPersonalConsole } from '../console-view'
 
 // Execute the shipped UI functions, with controlled response scheduling only.
 // This is a UI race regression, not browser/HTTP/database authorization proof.
 function harness() {
-  const source=readFileSync(join(__dirname,'../console-view.ts'),'utf8')
+  const source = renderPersonalConsole('${nonce}')
   const begin=source.indexOf("let currentOrg=''")
   const end=source.indexOf('  async function load()',begin)
   const nodes=new Map<string,any>()
