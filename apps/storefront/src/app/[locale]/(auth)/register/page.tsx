@@ -34,7 +34,7 @@ export default function RegisterPage() {
         </div>
 
         <div className="mb-4 rounded-md border-l-4 border-blue-700 bg-blue-50 p-3 text-sm font-semibold text-blue-900">
-          Tekil Kurumsal Kişi Kaydı (Issue #217, #267)
+          Tekil Kurumsal Kişi Kaydı
         </div>
 
         <p className="mb-3 text-sm leading-relaxed text-neutral-600">
@@ -51,7 +51,7 @@ export default function RegisterPage() {
 
         <a
           href="/personal?action=register#register-details"
-          className="block w-full rounded-lg bg-blue-700 py-3 text-center text-sm font-semibold text-white hover:bg-blue-800 transition-colors"
+          className="block w-full rounded-lg bg-blue-700 py-3 text-center text-sm font-semibold text-white hover:bg-blue-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
         >
           Kişisel Hesap Oluşturma Formuna Git
         </a>
