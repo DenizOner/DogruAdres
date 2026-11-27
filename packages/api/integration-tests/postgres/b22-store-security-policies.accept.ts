@@ -129,7 +129,7 @@ export async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, conta
   // can expire on navigation. Retain separate Chrome console leak checks.
   assert.equal(guard.secret,secret)
   const assertPrivateResponses=()=>guard.assertNoLeaks()
-  const path="/dashboard/settings/smtp"
+  const path="/personal"
   const evidence=process.env.B06_EVIDENCE_DIR!
   assert.equal(evidence,join(process.env.RUNNER_TEMP!,"b22-admin-smtp-evidence"))
   mkdirSync(evidence,{recursive:true})
@@ -142,14 +142,14 @@ export async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, conta
     assertPrivateResponses()
     b.phase='native-admin-smtp-navigation'
     await b.send("Page.navigate",{url:b.origin+path})
-    try {await b.wait("document.body.textContent.includes('Platform SMTP Ayarları') || document.body.textContent.includes('Platform SMTP Settings')")}
+    try {await b.wait("location.pathname==='/personal' && !!document.querySelector('#workspace:not([hidden])') && document.body.textContent.includes('Platform SMTP ve Bildirim Ayarları')")}
     catch(error){
       // Before any SMTP secret input: bounded diagnostics of this one native
       // navigation. No cookies, headers, HTML source or input values retained.
       await b.screenshot(join(evidence,"native-navigation-failed.png"))
       writeFileSync(join(evidence,"native-navigation-failed.json"),JSON.stringify({
         source:process.env.GITHUB_SHA,
-        document:await b.eval("({onExpectedPath:location.pathname==='/dashboard/settings/smtp',headingPresent:document.body.textContent.includes('Platform SMTP Ayarları') || document.body.textContent.includes('Platform SMTP Settings')})"),
+        document:await b.eval("({onExpectedPath:location.pathname==='/personal',headingPresent:document.body.textContent.includes('Platform SMTP ve Bildirim Ayarları')})"),
         errors:b.runtimeErrors,
         http:b.http.filter(r=>r.phase===b.phase).map(({method,path,status})=>({method,path,status})),
       },null,2))
@@ -163,7 +163,7 @@ export async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, conta
     assertPrivateResponses()
     return response
   }
-  const hidden=async(b:B06Chrome)=>b.wait("!document.querySelector('#smtp-host') && !document.body.textContent.includes('Yapılandırma yükleniyor') && !document.body.textContent.includes('Loading configuration')")
+  const hidden=async(b:B06Chrome)=>b.wait("document.querySelector('#smtp-platform')?.hidden===true")
   const reload=async(b:B06Chrome,status:number)=>{
     // Inspect response bodies before navigating away from their document.
     assertPrivateResponses()
@@ -178,11 +178,11 @@ export async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, conta
   // Negative checks precede any valid settings write.
   await verifyPanelCspModes(denied,container)
   await open(denied);await hidden(denied)
-  // Test the actual production dashboard document, not a mocked header.
+  // Test the actual production /personal CSP header, not a mocked header.
   // Only a synthetic .invalid host is attempted; no private information is
   // submitted to Mercur or any real remote service during this check.
-  const policy=await denied.eval("document.querySelector('meta[http-equiv=Content-Security-Policy]')?.content||''")
-  assert.ok(policy.includes("connect-src 'self'"),"Admin panel CSP must restrict external connections")
+  const policy=await denied.eval("(async()=>{const r=await fetch('/personal',{cache:'no-store'});return r.headers.get('content-security-policy')||''})()")
+  assert.ok(policy.includes("connect-src 'self'"),"Personal console CSP must restrict external connections")
   const externalDenied=await denied.eval(`(async()=>{
     const testOrigin='https://dogruadres-csp-check.invalid';
     return await new Promise(resolve=>{
@@ -208,35 +208,35 @@ export async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, conta
   await q(`insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason)
     values($1,$2,'platform.smtp.manage','platform',$2,'B22 disposable SMTP acceptance fixture')`,[grant,person])
   await open(browser)
-  await browser.wait("!!document.querySelector('#smtp-host')")
+  await browser.wait("document.querySelector('#smtp-platform')?.hidden===false && !!document.querySelector('#smtp-form input[name=host]')")
   const first=await read(browser)
   assert.equal(first.status,200);assert.equal(first.body.can_manage,true)
   assert.equal(first.body.settings.version,0)
-  assert.equal(await browser.eval("document.querySelector('#smtp-host').value"),first.body.settings.host)
+  assert.equal(await browser.eval("document.querySelector('#smtp-form input[name=host]').value"),first.body.settings.host)
   mark("Native Admin render and explicitly granted MFA session GET200")
   await browser.screenshot(join(evidence,"authorized-read.png"))
   writeFileSync(join(evidence,"authorized-read.json"),JSON.stringify({
-    source:process.env.GITHUB_SHA,nativeModule:"admin_ui",sameOrigin:true,
+    source:process.env.GITHUB_SHA,nativeModule:"personal_console",sameOrigin:true,
     realMfa:true,unauthorizedStatus:403,authorizedStatus:first.status,version:first.body.settings.version,
   },null,2))
   // DOM inputs and submit use real Chrome input events. SMTP remains disabled;
   // neither the separate send-test control nor any provider is invoked.
-  if(await browser.eval("document.querySelector('#smtp-toggle').getAttribute('aria-checked')==='true'"))
-    await browser.click("#smtp-toggle")
+  if(await browser.eval("document.querySelector('#smtp-form input[name=enabled]').checked===true"))
+    await browser.click("#smtp-form input[name=enabled]")
   const replace=async(selector:string,value:string)=>{
     await browser.click(selector)
     await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:"a",code:"KeyA",modifiers:2,windowsVirtualKeyCode:65})
     await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:"a",code:"KeyA",modifiers:2,windowsVirtualKeyCode:65})
     await browser.send("Input.insertText",{text:value})
   }
-  await replace("#smtp-host","smtp.b22.example.invalid")
-  await replace("#smtp-from-email","b22@example.invalid")
-  await replace("#smtp-pass",secret)
-  assert.equal(await browser.eval("document.querySelector('#smtp-host').value==='smtp.b22.example.invalid'"),true)
-  assert.equal(await browser.eval("document.querySelector('#smtp-from-email').value==='b22@example.invalid'"),true)
-  assert.equal(await browser.eval("document.querySelector('form').checkValidity()"),true)
+  await replace("#smtp-form input[name=host]","smtp.b22.example.invalid")
+  await replace("#smtp-form input[name=from_email]","b22@example.invalid")
+  await replace("#smtp-form input[name=password]",secret)
+  assert.equal(await browser.eval("document.querySelector('#smtp-form input[name=host]').value==='smtp.b22.example.invalid'"),true)
+  assert.equal(await browser.eval("document.querySelector('#smtp-form input[name=from_email]').value==='b22@example.invalid'"),true)
+  assert.equal(await browser.eval("document.querySelector('#smtp-form').checkValidity()"),true)
   const saveStart=browser.http.length
-  await browser.click("form button[type=submit]")
+  await browser.click("#smtp-form button")
   try {await browser.wait("document.body.textContent.includes('Ayar sürümü: 1') || document.body.textContent.includes('Config version: 1')")}
   catch(error){
     // Read back this one ambiguous attempt before the dedicated DB is retired.
@@ -246,9 +246,9 @@ export async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, conta
     const responses=posts.map(post=>({status:post.status}))
     const state=await browser.eval(`({
       versionRendered:document.body.textContent.includes('Ayar sürümü: 1') || document.body.textContent.includes('Config version: 1'),
-      hostMatches:document.querySelector('#smtp-host')?.value==='smtp.b22.example.invalid',
-      senderMatches:document.querySelector('#smtp-from-email')?.value==='b22@example.invalid',
-      validity:Array.from(document.querySelectorAll('form input')).map(e=>({id:e.id,valid:e.validity.valid})),
+      hostMatches:document.querySelector('#smtp-form input[name=host]')?.value==='smtp.b22.example.invalid',
+      senderMatches:document.querySelector('#smtp-form input[name=from_email]')?.value==='b22@example.invalid',
+      validity:Array.from(document.querySelectorAll('#smtp-form input')).map(e=>({name:e.name,valid:e.validity.valid})),
     })`)
     const rows=await q("select id,enabled,version,host from da_platform_smtp_settings order by id")
     writeFileSync(join(evidence,"save-failed.json"),JSON.stringify({source:process.env.GITHUB_SHA,
@@ -269,8 +269,8 @@ export async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, conta
   mark("Real browser save HTTP200; PG16 version1, disabled, encrypted password; GET secret null")
   await reload(browser,200)
   await browser.wait("document.body.textContent.includes('Ayar sürümü: 1') || document.body.textContent.includes('Config version: 1')")
-  assert.equal(await browser.eval("document.querySelector('#smtp-host').value"),saved[0].host)
-  assert.equal(await browser.eval("document.querySelector('#smtp-pass').value"),"")
+  assert.equal(await browser.eval("document.querySelector('#smtp-form input[name=host]').value"),saved[0].host)
+  assert.equal(await browser.eval("document.querySelector('#smtp-form input[name=password]').value"),"")
   await browser.screenshot(join(evidence,"saved-refreshed.png"))
   mark("New document refresh GET200 and persisted settings rendered; password input empty")
   // A stale real HTTP writer must not overwrite the newer browser save.
