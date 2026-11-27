@@ -1,4 +1,8 @@
 /// <reference lib="es2022.intl" />
+import { toHandle } from "@medusajs/framework/utils"
+import { queueDigestIfEligible } from "./notification-preferences"
+import { organizationActionAllowed } from "./role-action-policy"
+import { platformApprovedSellerIds } from "./legal-store-ownership"
 import { randomUUID } from "node:crypto"
 import type { Context } from "@medusajs/framework/types"
 import {
@@ -19,10 +23,18 @@ import {
 import type { FoundationAuditInput } from "./service"
 import { DOGRUADRES_AUDIT_MODULE } from "./service"
 
+
+const acceptedInviteEmailPattern = "^[A-Za-z0-9_+%-]+([.][A-Za-z0-9_+%-]+)*@[A-Za-z0-9]+([-][A-Za-z0-9]+)*([.][A-Za-z0-9]+([-][A-Za-z0-9]+)*)*[.][A-Za-z]{2,}$"
+function acceptedInviteSqlLabel(alias: string) {
+  return `case when length(btrim(${alias}.recipient_email))<=254
+    and btrim(${alias}.recipient_email) collate "C" ~ '${acceptedInviteEmailPattern}'
+    then lower(btrim(${alias}.recipient_email) collate "C") else '' end`
+}
+
 export class StoreApplicationOperations {
   constructor(
     private db: SecuritySql,
-    private persistAuditEventsWithOutbox: (input: FoundationAuditInput[], sharedContext: Context) => Promise<unknown>,
+    private persistAuditEventsWithOutbox: (input: FoundationAuditInput[], sharedContext: Context) => Promise<any[]>,
     private reviewableStoreApplications: (token: string, target?: any, context?: Context) => Promise<any>,
     private sharedContext: Context
   ) {}

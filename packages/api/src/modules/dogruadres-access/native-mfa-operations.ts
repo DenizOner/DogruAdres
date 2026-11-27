@@ -6,6 +6,7 @@ import {
   IdentitySessions,
   securitySql,
   type SecuritySql,
+  IdentityAccessDenied,
 } from "./identity-session"
 import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
 import { MfaEnrollmentTickets } from "./mfa-enrollment-ticket"

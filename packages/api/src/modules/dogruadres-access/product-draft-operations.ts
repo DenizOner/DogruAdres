@@ -1,5 +1,5 @@
 /// <reference lib="es2022.intl" />
-import { randomUUID } from "node:crypto"
+import { randomUUID , createHash } from "node:crypto"
 import type { Context } from "@medusajs/framework/types"
 import {
   IdentitySessions,
@@ -16,7 +16,7 @@ import { DOGRUADRES_AUDIT_MODULE } from "./service"
 export class ProductDraftOperations {
   constructor(
     private db: SecuritySql,
-    private persistAuditEventsWithOutbox: (input: FoundationAuditInput[], sharedContext: Context) => Promise<unknown>,
+    private persistAuditEventsWithOutbox: (input: FoundationAuditInput[], sharedContext: Context) => Promise<any[]>,
     private readablePersonalOrganizations: (token: string, organizationId: string, managerOnly: boolean, context: Context) => Promise<any>,
     private sharedContext: Context
   ) {}
@@ -244,28 +244,4 @@ export class ProductDraftOperations {
   // Recheck session, active Organization and current protected Owner on every
   // read/write. The membership/Organization SHARE locks serialize with revoke.
   // ---------------------------------------------------------------------------
-  private async companyLauncherActor_(
-    token: string, org: string, context: Context
-  ): Promise<{person_id:string;role:string}|null> {
-    if (!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org)) throw new IdentityAccessDenied()
-    const decision = await this.readablePersonalOrganizations_(token,org,true,context)
-    if (!decision || decision.organizations.length !== 1) return null
-    const candidate=decision.organizations[0]
-    const db=securitySql(context.transactionManager)
-    const rows=await db.execute(`select m.id,m.role from da_organization_membership m
-      join da_organization o on o.id=m.organization_id
-      join da_person p on p.id=m.person_id
-      where m.id=? and m.person_id=? and m.organization_id=? and
-        m.status='active' and m.revoked_at is null and m.deleted_at is null and
-        o.status='active' and o.deleted_at is null and
-        p.disabled_at is null and p.deleted_at is null
-      for share of m,o`,
-      [candidate.membership_id,decision.person_id,org])
-    if (rows.length !== 1 || rows[0].role !== candidate.role) return null
-    if (candidate.role==="owner" &&
-       !await isCurrentProtectedOwner(db,decision.person_id,org))return null
-    return {person_id:decision.person_id,role:candidate.role}
   }
-
-  
-}

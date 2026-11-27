@@ -3,6 +3,7 @@ import type { Context } from "@medusajs/framework/types"
 import {
   securitySql,
   type SecuritySql,
+  IdentitySessions,
 } from "./identity-session"
 import {
   PlatformSmtpPersistence,

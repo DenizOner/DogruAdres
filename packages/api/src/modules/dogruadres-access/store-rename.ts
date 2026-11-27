@@ -1,4 +1,6 @@
 /// <reference lib="es2022.intl" />
+import { toHandle } from "@medusajs/framework/utils"
+import { ActorDelegation } from "./actor-delegation"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import type { Context } from "@medusajs/framework/types"
 import {
@@ -42,7 +44,7 @@ const authorizedTransferredOldNameHoldExclusion = `
 export class StoreRenameOperations {
   constructor(
     private db: SecuritySql,
-    private persistAuditEventsWithOutbox: (input: FoundationAuditInput[], sharedContext: Context) => Promise<unknown>,
+    private persistAuditEventsWithOutbox: (input: FoundationAuditInput[], sharedContext: Context) => Promise<any[]>,
     private sharedContext: Context
   ) {}
 

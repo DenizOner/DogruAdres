@@ -844,78 +844,6 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   }
 
   /**
-   * Settings are always scoped to the current canonical Person. No Person or
-   * native actor selector is accepted from the client.
-   * This source path remains unreachable until MFA settings ingress is enabled.
-   */
-  /** These internal helpers never accept client Person or actor selectors. */
-  private nativeMfa_(context: Context) {
-    return new NativeMfaOperations(
-      securitySql(context.transactionManager),
-      context
-    )
-  }
-
-  @InjectTransactionManager()
-  async personalBeginMfaEnrollment(token: string, authIdentityId: string, factorId: string, @MedusaContext() context: Context = {}) {
-    return this.nativeMfa_(context).personalBeginMfaEnrollment(token, authIdentityId, factorId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalRevokePendingMfaEnrollment(token: string, factorId: string, @MedusaContext() context: Context = {}) {
-    return this.nativeMfa_(context).personalRevokePendingMfaEnrollment(token, factorId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalClaimMfaVerification(token: string, ticket: string, @MedusaContext() context: Context = {}) {
-    return this.nativeMfa_(context).personalClaimMfaVerification(token, ticket, context)
-  }
-
-  @InjectTransactionManager()
-  async personalCompleteMfaEnrollment(token: string, ticket: string, factorId: string, @MedusaContext() context: Context = {}) {
-    return this.nativeMfa_(context).personalCompleteMfaEnrollment(token, ticket, factorId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalMfaSettings(token: string, @MedusaContext() context: Context = {}) {
-    return this.nativeMfa_(context).personalMfaSettings(token, context)
-  }
-
-  @InjectTransactionManager()
-  async personalSetMfaPreference(token: string, enabled: boolean, expectedVersion: number, @MedusaContext() context: Context = {}) {
-    return this.nativeMfa_(context).personalSetMfaPreference(token, enabled, expectedVersion, context)
-  }
-
-  @InjectTransactionManager()
-  async personalManageNativeMfa(token: string, action: string, operation: (authIdentityId: string) => Promise<unknown>, @MedusaContext() context: Context = {}) {
-    return this.nativeMfa_(context).personalManageNativeMfa(token, action, operation, context)
-  }
-
-  @InjectTransactionManager()
-  async personalPrepareNativeMfaDisable(token: string, @MedusaContext() context: Context = {}) {
-    return this.nativeMfa_(context).personalPrepareNativeMfaDisable(token, context)
-  }
-
-  @InjectTransactionManager()
-  async personalCompletePreparedNativeMfaDisable(
-    prepared: Readonly<{ session_id: string; person_id: string; auth_identity_id: string; actor_type: MfaAuditActor["actor_type"]; actor_id: string }>,
-    operation: (identityId: string) => Promise<unknown>,
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.nativeMfa_(context).personalCompletePreparedNativeMfaDisable(prepared, operation, context)
-  }
-
-  @InjectTransactionManager()
-  async personalSetPlatformMfaMode(
-    token: string,
-    mode: MfaPlatformMode,
-    expectedVersion: number,
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.nativeMfa_(context).personalSetPlatformMfaMode(token, mode, expectedVersion, context)
-  }
-
-  /**
    * Existing native Owner evidence checks, shared by ordinary provisioning
    * and approved B22 applications. Never infer ownership from an email,
    * an applicant-submitted Person ID, or unverified actor mapping.
@@ -996,7 +924,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return ownerPersonIds
   }
 
-    async provisionPersonalOrganization(token: string, input: Omit<ProvisionOrganizationInput,"provisioned_by">, @MedusaContext() context:Context={}) {
+    @InjectTransactionManager()
+  async provisionPersonalOrganization(token: string, input: Omit<ProvisionOrganizationInput,"provisioned_by">, @MedusaContext() context:Context={}) {
     const sql=securitySql(context.transactionManager)
     const staff=await new IdentitySessions(sql).staff(token,"organization.provision","platform")
     if(!staff)throw new MedusaError(MedusaError.Types.FORBIDDEN,"Platform staff grant and strong authentication required")
@@ -1540,6 +1469,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return { membership, invitation: accepted }
   }
 
+  private nativeMfa_(context: Context) {
+    return new NativeMfaOperations(
+      securitySql(context.transactionManager),
+      context
+    )
+  }
+
   private smtpOperations_(context: Context) {
     return new SmtpOperations(
       securitySql(context.transactionManager),
@@ -1547,244 +1483,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     )
   }
 
-  @InjectTransactionManager()
-  async getActiveSmtpConfig(@MedusaContext() context: Context = {}) {
-    return this.smtpOperations_(context).getActiveSmtpConfig(context)
-  }
-
-  @InjectTransactionManager()
-  async personalPlatformSmtpSettings(token: string, @MedusaContext() context: Context = {}) {
-    return this.smtpOperations_(context).personalPlatformSmtpSettings(token, context)
-  }
-
-  @InjectTransactionManager()
-  async personalUpdatePlatformSmtpSettings(token: string, input: UpdateSmtpSettingsInput, @MedusaContext() context: Context = {}) {
-    return this.smtpOperations_(context).personalUpdatePlatformSmtpSettings(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalTestPlatformSmtpSettings(
-    token: string,
-    targetRecipient: string,
-    candidateSettings?: Partial<UpdateSmtpSettingsInput>,
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.smtpOperations_(context).personalTestPlatformSmtpSettings(token, targetRecipient, candidateSettings, context)
-  }
-
-    private storeApplication_(context: Context) {
+  private storeApplication_(context: Context) {
     return new StoreApplicationOperations(
       securitySql(context.transactionManager),
       this.persistAuditEventsWithOutbox_.bind(this),
       this.personalReviewableStoreApplications.bind(this),
       context
     )
-  }
-
-  @InjectTransactionManager()
-  async personalStoreApplications(token: string, organizationId: string, @MedusaContext() context: Context = {}) {
-    return this.storeApplication_(context).personalStoreApplications(token, organizationId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalSaveStoreApplicationDraft(
-    token: string,
-    organizationId: string,
-    draft: StoreDraftInput,
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeApplication_(context).personalSaveStoreApplicationDraft(token, organizationId, draft, context)
-  }
-
-  @InjectTransactionManager()
-  async personalListStoreDraftPermissions(token: string, organizationId: string, @MedusaContext() context: Context = {}) {
-    return this.storeApplication_(context).personalListStoreDraftPermissions(token, organizationId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalChangeStoreDraftPermission(
-    token: string,
-    input: { action: "grant" | "revoke"; organization_id: string; membership_id: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeApplication_(context).personalChangeStoreDraftPermission(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalPlatformStoreApplicationRight(token: string, organizationId: string, @MedusaContext() context: Context = {}) {
-    return this.storeApplication_(context).personalPlatformStoreApplicationRight(token, organizationId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalSetStoreApplicationRight(
-    token: string,
-    input: { organization_id: string; enabled: boolean; reason_code: string; summary_text?: string; admin_task?: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeApplication_(context).personalSetStoreApplicationRight(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalPrepareStoreApplicationFromDraft(
-    token: string,
-    organizationId: string,
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeApplication_(context).personalPrepareStoreApplicationFromDraft(token, organizationId, context)
-  }
-
-  @InjectTransactionManager()
-  async reserveStoreApplication(
-    token: string,
-    request: StoreRequest,
-    execute: (context: Context) => Promise<unknown>,
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeApplication_(context).reserveStoreApplication(token, request, execute, context)
-  }
-
-  @InjectTransactionManager()
-  async claimStoreApplication(token: string, sellerId: string, @MedusaContext() context: Context = {}) {
-    return this.storeApplication_(context).claimStoreApplication(token, sellerId, context)
-  }
-
-  @InjectTransactionManager()
-  async finishStoreApplication(
-    token: string,
-    target: { seller_id: string; decision?: "approved" },
-    execute: (context: Context) => Promise<unknown>,
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeApplication_(context).finishStoreApplication(token, target, execute, context)
-  }
-
-    private storeRename_(context: Context) {
-    return new StoreRenameOperations(
-      securitySql(context.transactionManager),
-      this.persistAuditEventsWithOutbox_.bind(this),
-      context
-    )
-  }
-
-  @InjectTransactionManager()
-  async personalAssignSuspendedStoreNameRight(
-    token: string,
-    input: { target_organization_id: string; source_seller_id: string; target_seller_id: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeRename_(context).personalAssignSuspendedStoreNameRight(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalCurrentSuspendedStoreName(
-    token: string,
-    organizationId: string,
-    sellerId: string,
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeRename_(context).personalCurrentSuspendedStoreName(token, organizationId, sellerId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalClaimStoreReactivation(
-    token: string,
-    input: { seller_id: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeRename_(context).personalClaimStoreReactivation(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalUnresolvedStoreReactivationClaim(sellerId: string, @MedusaContext() context: Context = {}) {
-    return this.storeRename_(context).personalUnresolvedStoreReactivationClaim(sellerId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalReleaseSuspendedStoreReactivationClaim(sellerId: string, @MedusaContext() context: Context = {}) {
-    return this.storeRename_(context).personalReleaseSuspendedStoreReactivationClaim(sellerId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalRecordStoreReactivation(
-    token: string,
-    input: { seller_id: string; admin_task: "store.reactivate" },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeRename_(context).personalRecordStoreReactivation(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalRecordStoreApplicationRejection(
-    token: string,
-    input: { application_id: string; reason_code: string; summary_text?: string; admin_task: "store.reject" },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeRename_(context).personalRecordStoreApplicationRejection(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalReviewableStoreApplications(token: string, applicationId?: string, @MedusaContext() context: Context = {}) {
-    return this.storeRename_(context).personalReviewableStoreApplications(token, applicationId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalReviewableStoreRenameRequests(token: string, @MedusaContext() context: Context = {}) {
-    return this.storeRename_(context).personalReviewableStoreRenameRequests(token, context)
-  }
-
-  @InjectTransactionManager()
-  async personalRejectStoreRenameRequest(
-    token: string,
-    input: { request_id: string; reason_code: string; summary_text?: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeRename_(context).personalRejectStoreRenameRequest(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalClaimStoreRenameApproval(
-    token: string,
-    input: { request_id: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeRename_(context).personalClaimStoreRenameApproval(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalRecordStoreRenameApproval(
-    token: string,
-    input: { request_id: string; target_name?: string; target_handle?: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeRename_(context).personalRecordStoreRenameApproval(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalRequestStoreRename(
-    token: string,
-    input: { organization_id: string; seller_id: string; requested_name: string; requested_handle: string; rationale: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeRename_(context).personalRequestStoreRename(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalWithdrawStoreRenameRequest(
-    token: string,
-    input: { organization_id: string; seller_id: string; request_id: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeRename_(context).personalWithdrawStoreRenameRequest(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalStoreRenameCandidateIds(token: string, organizationId: string, @MedusaContext() context: Context = {}) {
-    return this.storeRename_(context).personalStoreRenameCandidateIds(token, organizationId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalStoreRenameRequests(token: string, organizationId: string, @MedusaContext() context: Context = {}) {
-    return this.storeRename_(context).personalStoreRenameRequests(token, organizationId, context)
   }
 
   private storeProductPermissions_(context: Context) {
@@ -1803,249 +1508,20 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     )
   }
 
-  @InjectTransactionManager()
-  async personalLegalSellerIds(token: string, organizationId: string, @MedusaContext() context: Context = {}) {
-    return this.storeProductPermissions_(context).personalLegalSellerIds(token, organizationId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalChangeStoreProductPermission(
-    token: string,
-    input: { action: "grant" | "revoke"; organization_id: string; seller_id: string; membership_id: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeProductPermissions_(context).personalChangeStoreProductPermission(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalWithStoreMemberConnectionLock(
-    token: string,
-    input: { organization_id: string; seller_id: string; member_id: string },
-    execute: (memberId: string, context: Context) => Promise<{ created: boolean }>,
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeProductPermissions_(context).personalWithStoreMemberConnectionLock(token, input, execute, context)
-  }
-
-  @InjectTransactionManager()
-  async personalListStoreProductPermissions(token: string, organizationId: string, @MedusaContext() context: Context = {}) {
-    return this.storeProductPermissions_(context).personalListStoreProductPermissions(token, organizationId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalChangeBuyerPermission(
-    token: string,
-    input: { action: "grant" | "revoke"; organization_id: string; membership_id: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.buyerOperations_(context).personalChangeBuyerPermission(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalListBuyerPermissions(token: string, organizationId: string, @MedusaContext() context: Context = {}) {
-    return this.buyerOperations_(context).personalListBuyerPermissions(token, organizationId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalChangeStoreBuyerBlock(
-    token: string,
-    input: { action: "block" | "unblock"; organization_id: string; seller_id: string; buyer_organization_id: string; reason?: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.buyerOperations_(context).personalChangeStoreBuyerBlock(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalStorePriceGroupAccess(
-    token: string,
-    input: { organization_id: string; seller_id: string; buyer_organization_id?: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.buyerOperations_(context).personalStorePriceGroupAccess(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalBuyerStorePriceGroupIds(
-    token: string,
-    input: { organization_id: string; seller_id: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.buyerOperations_(context).personalBuyerStorePriceGroupIds(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalStoreBuyerBlockDecision(sellerId: string, buyerOrganizationId: string, @MedusaContext() context: Context = {}) {
-    return this.buyerOperations_(context).personalStoreBuyerBlockDecision(sellerId, buyerOrganizationId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalBuyerStoreFollowState(token: string, organizationId: string, sellerId: string, @MedusaContext() context: Context = {}) {
-    return this.buyerOperations_(context).personalBuyerStoreFollowState(token, organizationId, sellerId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalBuyerStoreFollows(token: string, organizationId: string, @MedusaContext() context: Context = {}) {
-    return this.buyerOperations_(context).personalBuyerStoreFollows(token, organizationId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalChangeBuyerStoreFollow(
-    token: string,
-    input: { action: "follow" | "unfollow"; organization_id: string; seller_id: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.buyerOperations_(context).personalChangeBuyerStoreFollow(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalBuyerOrganization(token: string, organizationId: string, @MedusaContext() context: Context = {}) {
-    return this.buyerOperations_(context).personalBuyerOrganization(token, organizationId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalClaimBuyerCart(
-    token: string,
-    input: { organization_id: string; cart_id: string; customer_id: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.buyerOperations_(context).personalClaimBuyerCart(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalBuyerCartAttribution(cartId: string, customerId: string, @MedusaContext() context: Context = {}) {
-    return this.buyerOperations_(context).personalBuyerCartAttribution(cartId, customerId, context)
-  }
-
-  @InjectTransactionManager()
-  async authorizeBuyerCheckout(cartId: string, customerId: string, sellerIds: string[], @MedusaContext() context: Context = {}) {
-    return this.buyerOperations_(context).authorizeBuyerCheckout(cartId, customerId, sellerIds, context)
-  }
-
-    private storeLifecycle_(context: Context) {
-    return new StoreLifecycleOperations(
+  private storeRename_(context: Context) {
+    return new StoreRenameOperations(
       securitySql(context.transactionManager),
       this.persistAuditEventsWithOutbox_.bind(this),
       context
     )
   }
 
-  @InjectTransactionManager()
-  async personalOwnerStorePauseState(
-    token: string,
-    organizationId: string,
-    sellerId: string,
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeLifecycle_(context).personalOwnerStorePauseState(token, organizationId, sellerId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalOwnerStorePauseChange(
-    token: string,
-    input: { action: "pause" | "resume"; organization_id: string; seller_id: string; expected_version: number; request_id: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeLifecycle_(context).personalOwnerStorePauseChange(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async storeOwnerPauseAcceptingOrders(sellerId: string, @MedusaContext() context: Context = {}) {
-    return this.storeLifecycle_(context).storeOwnerPauseAcceptingOrders(sellerId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalOwnerClosingState(
-    token: string,
-    organizationId: string,
-    sellerId: string,
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeLifecycle_(context).personalOwnerClosingState(token, organizationId, sellerId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalOwnerClosingChange(
-    token: string,
-    input: { action: "start" | "cancel"; organization_id: string; seller_id: string; expected_state: string; expected_version: number; request_id: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeLifecycle_(context).personalOwnerClosingChange(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalReviewablePlatformStoreClosings(token: string, @MedusaContext() context: Context = {}) {
-    return this.storeLifecycle_(context).personalReviewablePlatformStoreClosings(token, context)
-  }
-
-  @InjectTransactionManager()
-  async personalStartPlatformStoreClosing(
-    token: string,
-    input: { seller_id: string; reason_code: string; summary_text?: string; admin_task?: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeLifecycle_(context).personalStartPlatformStoreClosing(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async settlePlatformClosingAdminFallback(sellerId: string, adminPersonId: string, @MedusaContext() context: Context = {}) {
-    return this.storeLifecycle_(context).settlePlatformClosingAdminFallback(sellerId, adminPersonId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalPlatformStoreClosingEmailAudience(token: string, sellerId: string, @MedusaContext() context: Context = {}) {
-    return this.storeLifecycle_(context).personalPlatformStoreClosingEmailAudience(token, sellerId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalPlatformStoreClosingEmailProgress(token: string, sellerId: string, @MedusaContext() context: Context = {}) {
-    return this.storeLifecycle_(context).personalPlatformStoreClosingEmailProgress(token, sellerId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalPlatformStoreClosingEmailLinkVisit(token: string, nonce: string, @MedusaContext() context: Context = {}) {
-    return this.storeLifecycle_(context).personalPlatformStoreClosingEmailLinkVisit(token, nonce, context)
-  }
-
-  @InjectTransactionManager()
-  async personalPlatformStoreClosingState(
-    token: string,
-    organizationId: string,
-    sellerId: string,
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeLifecycle_(context).personalPlatformStoreClosingState(token, organizationId, sellerId, context)
-  }
-
-  @InjectTransactionManager()
-  async personalAppealPlatformStoreClosing(
-    token: string,
-    input: { organization_id: string; seller_id: string; justification: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeLifecycle_(context).personalAppealPlatformStoreClosing(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalRequestPlatformStoreClosingFinalReview(
-    token: string,
-    input: { organization_id: string; seller_id: string; reason_code: string; comment?: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeLifecycle_(context).personalRequestPlatformStoreClosingFinalReview(token, input, context)
-  }
-
-  @InjectTransactionManager()
-  async personalReviewablePlatformClosingAppeals(token: string, @MedusaContext() context: Context = {}) {
-    return this.storeLifecycle_(context).personalReviewablePlatformClosingAppeals(token, context)
-  }
-
-  @InjectTransactionManager()
-  async personalDecidePlatformClosingAppeal(
-    token: string,
-    input: { seller_id: string; decision: "upheld" | "revoked"; notes: string },
-    @MedusaContext() context: Context = {}
-  ) {
-    return this.storeLifecycle_(context).personalDecidePlatformClosingAppeal(token, input, context)
+  private storeLifecycle_(context: Context) {
+    return new StoreLifecycleOperations(
+      securitySql(context.transactionManager),
+      this.persistAuditEventsWithOutbox_.bind(this),
+      context
+    )
   }
 
   private productDrafts_(context: Context) {
@@ -2060,94 +1536,531 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   private launchers_(context: Context) {
     return new LauncherOperations(
       securitySql(context.transactionManager),
+      this.readablePersonalOrganizations_.bind(this),
       context
     )
   }
 
   @InjectTransactionManager()
+  async personalOwnerStorePauseState(token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalOwnerStorePauseState(token, organizationId, sellerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalOwnerStorePauseChange(token:string,input:{
+    organization_id:string;seller_id:string;action:"pause"|"resume";
+    request_id:string;expected_version:number
+  },@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalOwnerStorePauseChange(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async storeOwnerPauseAcceptingOrders(sellerIds:string[],
+    @MedusaContext() context:Context={}):Promise<boolean> {
+    return this.storeLifecycle_(context).storeOwnerPauseAcceptingOrders(sellerIds, context)
+  }
+
+  @InjectTransactionManager()
+  async personalOwnerClosingState(token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalOwnerClosingState(token, organizationId, sellerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalOwnerClosingChange(token:string,input:{
+    organization_id:string;seller_id:string;action:"start"|"withdraw";
+    request_id:string;expected_version:number;consequences_acknowledged?:boolean
+  },@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalOwnerClosingChange(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalReviewablePlatformStoreClosings(token:string,page=0,
+    @MedusaContext() context:Context={},
+    target?:{organization_id:string;seller_id:string}) {
+    return this.storeLifecycle_(context).personalReviewablePlatformStoreClosings(token, page, context, target)
+  }
+
+  @InjectTransactionManager()
+  async personalStartPlatformStoreClosing(token:string,input:{
+    organization_id:string;seller_id:string;request_id:string;reason:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalStartPlatformStoreClosing(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async settlePlatformClosingAdminFallback(@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).settlePlatformClosingAdminFallback(context)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformStoreClosingEmailAudience(token:string,organizationId:string,
+    sellerId:string,@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalPlatformStoreClosingEmailAudience(token, organizationId, sellerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformStoreClosingEmailProgress(token:string,organizationId:string,
+    sellerId:string,@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalPlatformStoreClosingEmailProgress(token, organizationId, sellerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformStoreClosingEmailLinkVisit(
+    token:string,linkToken:string,@MedusaContext() context:Context={}
+  ) {
+    return this.storeLifecycle_(context).personalPlatformStoreClosingEmailLinkVisit(token, linkToken, context)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformStoreClosingState(token:string,organizationId:string,
+    sellerId:string,@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalPlatformStoreClosingState(token, organizationId, sellerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalAppealPlatformStoreClosing(token:string,input:{
+    organization_id:string;seller_id:string;request_id:string;
+    expected_version:number;reason:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalAppealPlatformStoreClosing(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalRequestPlatformStoreClosingFinalReview(token:string,input:{
+    organization_id:string;seller_id:string;request_id:string;
+    expected_version:number;reason:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalRequestPlatformStoreClosingFinalReview(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalReviewablePlatformClosingAppeals(token:string,page=0,
+    @MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalReviewablePlatformClosingAppeals(token, page, context)
+  }
+
+  @InjectTransactionManager()
+  async personalDecidePlatformClosingAppeal(token:string,input:{
+    organization_id:string;seller_id:string;source_request_id:string;
+    request_id:string;decision:"accepted"|"rejected";reason:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalDecidePlatformClosingAppeal(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalAssignSuspendedStoreNameRight(token:string,input:{
+    transfer_id:string;source_application_id:string;source_seller_id:string;
+    target_application_id:string;target_seller_id:string;
+    expected_name:string;expected_handle:string;reason:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalAssignSuspendedStoreNameRight(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalCurrentSuspendedStoreName(token:string,target:{
+    application_id:string;seller_id:string;expected_status?:"open"
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalCurrentSuspendedStoreName(token, target, context)
+  }
+
+  @InjectTransactionManager()
+  async personalClaimStoreReactivation(token:string,input:{
+    application_id:string;seller_id:string;organization_id:string;
+    name:string;handle:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalClaimStoreReactivation(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalUnresolvedStoreReactivationClaim(token:string,target:{
+    application_id:string;seller_id:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalUnresolvedStoreReactivationClaim(token, target, context)
+  }
+
+  @InjectTransactionManager()
+  async personalReleaseSuspendedStoreReactivationClaim(token:string,target:{
+    application_id:string;seller_id:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalReleaseSuspendedStoreReactivationClaim(token, target, context)
+  }
+
+  @InjectTransactionManager()
+  async personalRecordStoreReactivation(token:string,target:{
+    application_id:string;seller_id:string;organization_id:string;
+    name:string;handle:string;claim_audit_id:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalRecordStoreReactivation(token, target, context)
+  }
+
+  @InjectTransactionManager()
+  async personalRecordStoreApplicationRejection(token:string,target:{
+    application_id:string;seller_id:string;reason:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalRecordStoreApplicationRejection(token, target, context)
+  }
+
+  @InjectTransactionManager()
+  async personalReviewableStoreApplications(token:string,
+    target?:{application_id:string;seller_id:string},
+    @MedusaContext() context:Context={},
+    page=0) {
+    return this.storeRename_(context).personalReviewableStoreApplications(token, target, context, page)
+  }
+
+  @InjectTransactionManager()
+  async personalReviewableStoreRenameRequests(token:string,page=0,
+    @MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalReviewableStoreRenameRequests(token, page, context)
+  }
+
+  @InjectTransactionManager()
+  async personalRejectStoreRenameRequest(token:string,input:{
+    request_id:string;seller_id:string;reason:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalRejectStoreRenameRequest(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalClaimStoreRenameApproval(token:string,input:{
+    request_id:string;seller_id:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalClaimStoreRenameApproval(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalWithStoreRenameApprovalStaffLock<T>(token:string,input:{
+    request_id:string;seller_id:string
+  },execute:(data:{name:string;handle:string},context:Context)=>Promise<T>,
+    @MedusaContext() context:Context={}):Promise<T|null> {
+    return this.storeRename_(context).personalWithStoreRenameApprovalStaffLock(token, input, execute, context)
+  }
+
+  @InjectTransactionManager()
+  async personalRecordStoreRenameApproval(token:string,input:{
+    request_id:string;seller_id:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalRecordStoreRenameApproval(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalRequestStoreRename(token:string,input:{
+    request_id:string;organization_id:string;seller_id:string;
+    name:string;handle:string;risk_acknowledged:true;
+    risk_version:typeof STORE_RENAME_RISK_VERSION
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalRequestStoreRename(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalWithdrawStoreRenameRequest(token:string,input:{
+    request_id:string;organization_id:string;seller_id:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalWithdrawStoreRenameRequest(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalStoreRenameCandidateIds(token:string,organizationId:string,
+    @MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalStoreRenameCandidateIds(token, organizationId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalStoreRenameRequests(token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalStoreRenameRequests(token, organizationId, sellerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalStoreApplications(token:string,org:string,@MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).personalStoreApplications(token, org, context)
+  }
+
+  @InjectTransactionManager()
+  async personalSaveStoreApplicationDraft(token:string,input:StoreDraftInput,
+    @MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).personalSaveStoreApplicationDraft(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalListStoreDraftPermissions(token:string,org:string,after:string|null=null,
+    @MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).personalListStoreDraftPermissions(token, org, after, context)
+  }
+
+  @InjectTransactionManager()
+  async personalChangeStoreDraftPermission(
+    token:string,input:{action:"grant"|"revoke";organization_id:string;membership_id:string},
+    @MedusaContext() context:Context={}
+  ) {
+    return this.storeApplication_(context).personalChangeStoreDraftPermission(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformStoreApplicationRight(token:string,org:string,
+    @MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).personalPlatformStoreApplicationRight(token, org, context)
+  }
+
+  @InjectTransactionManager()
+  async personalSetStoreApplicationRight(token:string,input:{
+    organization_id:string;expected_enabled:boolean;expected_version:number;enabled:boolean;reason:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).personalSetStoreApplicationRight(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalPrepareStoreApplicationFromDraft(token:string,input:{
+    organization_id:string;draft_id:string;expected_version:number;application_id:string
+  },@MedusaContext() context:Context={}):Promise<StoreRequest|{conflict:true}|null> {
+    return this.storeApplication_(context).personalPrepareStoreApplicationFromDraft(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalWithStoreApplicationOwnerLock<T>(
+    token:string,input:StoreRequest,execute:(context:Context)=>Promise<T>,
+    @MedusaContext() context:Context={}
+  ):Promise<T|null> {
+    return this.storeApplication_(context).personalWithStoreApplicationOwnerLock(token, input, execute, context)
+  }
+
+  @InjectTransactionManager()
+  async reserveStoreApplication(token:string,input:StoreRequest,@MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).reserveStoreApplication(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async claimStoreApplication(token:string,input:StoreRequest,@MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).claimStoreApplication(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async finishStoreApplication(token:string,input:StoreRequest,sellerId:string,
+    @MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).finishStoreApplication(token, input, sellerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalWithStoreApprovalStaffLock<T>(
+    token:string,target:{application_id:string;seller_id:string;decision?:"reject"|"unsuspend"|"reconcile"|"release"},
+    execute:(context:Context)=>Promise<T>,@MedusaContext() context:Context={}
+  ):Promise<T|null> {
+    return this.storeApplication_(context).personalWithStoreApprovalStaffLock(token, target, execute, context)
+  }
+
+  @InjectTransactionManager()
+  async personalLegalSellerIds(token: string, organizationId: string,
+    @MedusaContext() context: Context = {}) {
+    return this.storeProductPermissions_(context).personalLegalSellerIds(token, organizationId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalChangeStoreProductPermission(
+    token:string,input:{action:"grant"|"revoke";organization_id:string;seller_id:string;membership_id:string},
+    @MedusaContext() context:Context={}
+  ) {
+    return this.storeProductPermissions_(context).personalChangeStoreProductPermission(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalWithStoreMemberConnectionLock(
+    token:string,
+    input:{organization_id:string;seller_id:string;membership_id:string},
+    execute:(memberId:string,context:Context)=>Promise<{created:boolean}>,
+    @MedusaContext() context:Context={}
+  ):Promise<{created:boolean}|null> {
+    return this.storeProductPermissions_(context).personalWithStoreMemberConnectionLock(token, input, execute, context)
+  }
+
+  @InjectTransactionManager()
+  async personalListStoreProductPermissions(token:string,organizationId:string,
+    @MedusaContext() context:Context={}) {
+    return this.storeProductPermissions_(context).personalListStoreProductPermissions(token, organizationId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalChangeBuyerPermission(
+    token:string,input:{action:"grant"|"revoke";organization_id:string;membership_id:string},
+    @MedusaContext() context:Context={}
+  ) {
+    return this.buyerOperations_(context).personalChangeBuyerPermission(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalListBuyerPermissions(
+    token:string,organizationId:string,@MedusaContext() context:Context={}
+  ) {
+    return this.buyerOperations_(context).personalListBuyerPermissions(token, organizationId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalChangeStoreBuyerBlock(
+    token:string,input:{action:"block"|"unblock";organization_id:string;
+      seller_id:string;buyer_organization_id:string},
+    @MedusaContext() context:Context={}
+  ) {
+    return this.buyerOperations_(context).personalChangeStoreBuyerBlock(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalStorePriceGroupAccess(
+    token:string,input:{action:"grant"|"revoke"|"read";organization_id:string;
+      seller_id:string;buyer_organization_id:string;customer_group_id:string;
+      member_binding_id:string;member_actor_id:string;member_person_id:string},
+    @MedusaContext() context:Context={}
+  ) {
+    return this.buyerOperations_(context).personalStorePriceGroupAccess(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalBuyerStorePriceGroupIds(
+    token:string,buyerOrganizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}
+  ) {
+    return this.buyerOperations_(context).personalBuyerStorePriceGroupIds(token, buyerOrganizationId, sellerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalStoreBuyerBlockDecision(
+    token:string,buyerOrganizationId:string,sellerIds:string[],
+    @MedusaContext() context:Context={}
+  ) {
+    return this.buyerOperations_(context).personalStoreBuyerBlockDecision(token, buyerOrganizationId, sellerIds, context)
+  }
+
+  @InjectTransactionManager()
+  async personalBuyerStoreFollowState(
+    token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}
+  ) {
+    return this.buyerOperations_(context).personalBuyerStoreFollowState(token, organizationId, sellerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalBuyerStoreFollows(
+    token:string,organizationId:string,after:string|undefined,
+    @MedusaContext() context:Context={}
+  ) {
+    return this.buyerOperations_(context).personalBuyerStoreFollows(token, organizationId, after, context)
+  }
+
+  @InjectTransactionManager()
+  async personalChangeBuyerStoreFollow(
+    token:string,input:{action:"follow"|"unfollow";organization_id:string;
+      seller_id:string;expected_version:number},
+    @MedusaContext() context:Context={}
+  ) {
+    return this.buyerOperations_(context).personalChangeBuyerStoreFollow(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalBuyerOrganization(
+    token:string,organizationId:string,@MedusaContext() context:Context={}
+  ) {
+    return this.buyerOperations_(context).personalBuyerOrganization(token, organizationId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalClaimBuyerCart(
+    token:string,organizationId:string,cartId:string,customerId:string,
+    @MedusaContext() context:Context={}
+  ) {
+    return this.buyerOperations_(context).personalClaimBuyerCart(token, organizationId, cartId, customerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalBuyerCartAttribution(
+    token:string,organizationId:string,cartId:string,customerId:string,
+    @MedusaContext() context:Context={}
+  ) {
+    return this.buyerOperations_(context).personalBuyerCartAttribution(token, organizationId, cartId, customerId, context)
+  }
+
+  @InjectTransactionManager()
+  async authorizeBuyerCheckout(
+    cartId:string,
+    customerId:string,
+    sellerIds:string[],
+    @MedusaContext() context:Context={}
+  ):Promise<boolean> {
+    return this.buyerOperations_(context).authorizeBuyerCheckout(cartId, customerId, sellerIds, context)
+  }
+
+  @InjectTransactionManager()
   async personalProductDraftScope(
-    token: string,
-    organizationId: string,
-    sellerId: string,
-    @MedusaContext() context: Context = {}
+    token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}
   ) {
     return this.productDrafts_(context).personalProductDraftScope(token, organizationId, sellerId, context)
   }
 
   @InjectTransactionManager()
   async personalProductDraftCandidates(
-    token: string,
-    organizationId: string,
-    @MedusaContext() context: Context = {}
+    token:string,organizationId:string,@MedusaContext() context:Context={}
   ) {
     return this.productDrafts_(context).personalProductDraftCandidates(token, organizationId, context)
   }
 
   @InjectTransactionManager()
   async personalProductDraftReceipt(
-    token: string,
-    organizationId: string,
-    sellerId: string,
-    requestId: string,
-    @MedusaContext() context: Context = {}
+    token:string,organizationId:string,sellerId:string,requestId:string,
+    @MedusaContext() context:Context={}
   ) {
     return this.productDrafts_(context).personalProductDraftReceipt(token, organizationId, sellerId, requestId, context)
   }
 
   @InjectTransactionManager()
   async personalWithProductDraftPermissionLock<T>(
-    token: string,
-    input: { organization_id: string; seller_id: string },
-    execute: () => Promise<T>,
-    @MedusaContext() context: Context = {}
-  ): Promise<T> {
+    token:string,input:{organization_id:string;seller_id:string},
+    execute:(context:Context)=>Promise<T>,@MedusaContext() context:Context={}
+  ):Promise<T|null> {
     return this.productDrafts_(context).personalWithProductDraftPermissionLock(token, input, execute, context)
   }
 
   @InjectTransactionManager()
   async personalReserveProductDraft(
-    token: string,
-    input: { organization_id: string; seller_id: string; request_id: string },
-    @MedusaContext() context: Context = {}
+    token:string,input:{request_id:string;organization_id:string;seller_id:string;title:string},
+    @MedusaContext() context:Context={}
   ) {
     return this.productDrafts_(context).personalReserveProductDraft(token, input, context)
   }
 
   @InjectTransactionManager()
   async personalCompleteProductDraft(
-    token: string,
-    input: { organization_id: string; seller_id: string; request_id: string; product_id: string },
-    task: "product.create" | "product.update",
-    @MedusaContext() context: Context = {}
+    token:string,input:{request_id:string;organization_id:string;seller_id:string;title:string},
+    productId:string,@MedusaContext() context:Context={}
   ) {
-    return this.productDrafts_(context).personalCompleteProductDraft(token, input, task, context)
+    return this.productDrafts_(context).personalCompleteProductDraft(token, input, productId, context)
   }
 
-  static KNOWN_APP_IDS = new Set<string>(['storefront', 'vendor'])
-
   @InjectTransactionManager()
-  async personalCompanyLauncher(token: string, org: string, @MedusaContext() context: Context = {}) {
+  async personalCompanyLauncher(
+    token:string,org:string,@MedusaContext() context:Context={}
+  ) {
     return this.launchers_(context).personalCompanyLauncher(token, org, context)
   }
 
   @InjectTransactionManager()
   async personalSaveCompanyLauncher(
-    token: string,
-    input: { organization_id: string; app_ids: string[]; collapsed_ids: string[]; expected_version: number },
-    @MedusaContext() context: Context = {}
+    token:string,input:{organization:string;app_ids:string[];
+      collapsed_ids:string[];expected_version:number},
+    @MedusaContext() context:Context={}
   ) {
     return this.launchers_(context).personalSaveCompanyLauncher(token, input, context)
   }
 
   @InjectTransactionManager()
-  async personalPlatformLauncher(token: string, @MedusaContext() context: Context = {}) {
+  async personalPlatformLauncher(
+    token: string, @MedusaContext() context: Context = {}
+  ) {
     return this.launchers_(context).personalPlatformLauncher(token, context)
   }
 
   @InjectTransactionManager()
   async personalSavePlatformLauncher(
-    token: string,
-    input: { app_ids: string[]; collapsed_ids: string[]; expected_version: number },
+    token: string, input: { app_ids: string[]; collapsed_ids: string[]; expected_version: number },
     @MedusaContext() context: Context = {}
   ) {
     return this.launchers_(context).personalSavePlatformLauncher(token, input, context)
@@ -2169,4 +2082,86 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return this.launchers_(context).saveLauncherPreference(token, rawAppIds, rawCollapsedIds, expectedVersion, context)
   }
 
+  @InjectTransactionManager()
+  async personalBeginMfaEnrollment(token:string,authIdentityId:string,factorId:string,@MedusaContext() context:Context={}) {
+    return this.nativeMfa_(context).personalBeginMfaEnrollment(token, authIdentityId, factorId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalRevokePendingMfaEnrollment(token:string,factorId:string,@MedusaContext() context:Context={}) {
+    return this.nativeMfa_(context).personalRevokePendingMfaEnrollment(token, factorId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalClaimMfaVerification(token:string,ticket:string,@MedusaContext() context:Context={}) {
+    return this.nativeMfa_(context).personalClaimMfaVerification(token, ticket, context)
+  }
+
+  @InjectTransactionManager()
+  async personalCompleteMfaEnrollment(token:string,ticket:string,factorId:string,@MedusaContext() context:Context={}) {
+    return this.nativeMfa_(context).personalCompleteMfaEnrollment(token, ticket, factorId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalMfaSettings(token: string, @MedusaContext() context: Context = {}) {
+    return this.nativeMfa_(context).personalMfaSettings(token, context)
+  }
+
+  @InjectTransactionManager()
+  async personalSetMfaPreference(token: string, enabled: boolean, expectedVersion: number, @MedusaContext() context: Context = {}) {
+    return this.nativeMfa_(context).personalSetMfaPreference(token, enabled, expectedVersion, context)
+  }
+
+  @InjectTransactionManager()
+  async personalManageNativeMfa(token:string,action:"recovery_codes"|"disable",operation:(identityId:string)=>Promise<unknown>,@MedusaContext() context:Context={}) {
+    return this.nativeMfa_(context).personalManageNativeMfa(token, action, operation, context)
+  }
+
+  @InjectTransactionManager()
+  async personalPrepareNativeMfaDisable(token:string,@MedusaContext() context:Context={}) {
+    return this.nativeMfa_(context).personalPrepareNativeMfaDisable(token, context)
+  }
+
+  @InjectTransactionManager()
+  async personalCompletePreparedNativeMfaDisable(
+    prepared:Readonly<{session_id:string;person_id:string;auth_identity_id:string;actor_type:MfaAuditActor["actor_type"];actor_id:string}>,
+    operation:(identityId:string)=>Promise<unknown>,
+    @MedusaContext() context:Context={}
+  ) {
+    return this.nativeMfa_(context).personalCompletePreparedNativeMfaDisable(prepared, operation, context)
+  }
+
+  @InjectTransactionManager()
+  async personalSetPlatformMfaMode(token: string, mode: MfaPlatformMode, expectedVersion: number, @MedusaContext() context: Context = {}) {
+    return this.nativeMfa_(context).personalSetPlatformMfaMode(token, mode, expectedVersion, context)
+  }
+
+  @InjectTransactionManager()
+  async getActiveSmtpConfig(@MedusaContext() context: Context = {}) {
+    return this.smtpOperations_(context).getActiveSmtpConfig(context)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformSmtpSettings(token: string, @MedusaContext() context: Context = {}) {
+    return this.smtpOperations_(context).personalPlatformSmtpSettings(token, context)
+  }
+
+  @InjectTransactionManager()
+  async personalUpdatePlatformSmtpSettings(
+    token: string,
+    input: UpdateSmtpSettingsInput,
+    @MedusaContext() context: Context = {}
+  ) {
+    return this.smtpOperations_(context).personalUpdatePlatformSmtpSettings(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalTestPlatformSmtpSettings(
+    token: string,
+    targetRecipient: string,
+    candidateSettings?: Partial<UpdateSmtpSettingsInput>,
+    @MedusaContext() context: Context = {}
+  ) {
+    return this.smtpOperations_(context).personalTestPlatformSmtpSettings(token, targetRecipient, candidateSettings, context)
+  }
 }
