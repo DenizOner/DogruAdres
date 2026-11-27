@@ -57,7 +57,7 @@ const Form = ({
   const resetPath = usePathname()
   // Unlocalized /reset-password is an actual public route, not a locale.
   const routeLocale = resetPath?.match(/^\/([a-z]{2})\/reset-password(?:\/|$)/i)?.[1]
-  const loginLocale = routeLocale || process.env.NEXT_PUBLIC_DEFAULT_REGION || 'us'
+  const loginLocale = routeLocale || process.env.NEXT_PUBLIC_DEFAULT_REGION || 'tr'
   const [confirmPasswordError, setConfirmPasswordError] = useState<
     FieldError | undefined
   >(undefined)
