@@ -181,7 +181,7 @@ export async function verifyNativeBrowser({
         const location = denied.headers.get("location")
         assert.ok(location, "Protected route must give a login destination")
         const destination = new URL(location, `http://127.0.0.1:${storefrontPort}`)
-        assert.ok(destination.pathname === "/personal" || destination.pathname === "/tr/login", "Protected route must not reach the order page")
+        assert.equal(destination.pathname, "/personal", "Protected route must not reach the order page")
         assert.equal(destination.searchParams.get("sessionRequired"), "true")
       }
       process.stdout.write("PASS browser protected-route bypass: dotted and verify-email-like order IDs require login\\n")

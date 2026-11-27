@@ -186,8 +186,7 @@ try {
   const protectedUser = await fetchLocal(origin, "/tr/user/orders");
   assert.equal(protectedUser.status, 307);
   const protectedLocation = new URL(protectedUser.headers.get("location"), origin);
-  assert.ok(protectedLocation.pathname === "/personal" || protectedLocation.pathname === "/tr/login",
-    "Protected route must redirect to login/personal");
+  assert.equal(protectedLocation.pathname, "/tr/login");
   assert.equal(protectedLocation.searchParams.get("sessionRequired"), "true");
   console.log("B4B243 PASS: existing protected /user session-required redirect preserved");
 

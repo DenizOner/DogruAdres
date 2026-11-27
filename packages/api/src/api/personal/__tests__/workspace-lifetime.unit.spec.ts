@@ -2,10 +2,11 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createContext, runInContext } from 'node:vm'
 import { trustedInlineScripts } from './trusted-inline-scripts'
+import { renderPersonalConsole } from '../console-view'
 
 // Execute the shipped browser script; scheduling is controlled, not authorization.
 function harness(interactiveFollowDom=false) {
-  const source=readFileSync(join(__dirname,'../console-view.ts'),'utf8')
+  const source = renderPersonalConsole('${nonce}')
   const nodes=new Map<string,any>(),listeners=new Map<string,Function>(),pending:any[]=[]
   const el=(id:string)=>{
     if(!nodes.has(id))nodes.set(id,{textContent:'',value:'',hidden:id==='workspace',children:[],elements:{method:{},mobile_phone:{value:''}},setAttribute(){},focus(){},replaceChildren(){this.textContent='';this.children=[]},append(x:any){this.children.push(x)},querySelectorAll(){return []},reset(){},querySelector(){return {disabled:false}}})
