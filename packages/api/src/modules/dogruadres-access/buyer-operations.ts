@@ -18,9 +18,9 @@ import { DOGRUADRES_AUDIT_MODULE } from "./service"
 
 export class BuyerOperations {
   constructor(
-    private db: SecuritySql,
+    _db: SecuritySql,
     private persistAuditEventsWithOutbox: (input: FoundationAuditInput[], sharedContext: Context) => Promise<any[]>,
-    private sharedContext: Context
+    _sharedContext: Context
   ) {}
 
   private persistAuditEventsWithOutbox_(input: FoundationAuditInput[], sharedContext: Context) {

@@ -1,22 +1,19 @@
 /// <reference lib="es2022.intl" />
 import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, deferAuditDelivery, quarantineAuditDelivery, type DeliveryManager } from "./audit-delivery"
 import type { OutboxClaim, DeliveryErrorCode } from "./audit-delivery-policy"
-import { hasRecentMfaProof } from "./mfa-management"
 import {
   InjectTransactionManager,
   MedusaContext,
   MedusaService,
   MedusaError,
-  toHandle,
 } from "@medusajs/framework/utils"
 import type { Context } from "@medusajs/framework/types"
 import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
 import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
-import { createHash, randomBytes, randomUUID } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
 import { IdentitySessions, securitySql, isCurrentProtectedOwner, type BrowserMfaPurpose, IdentityAccessDenied, mfaRuntimeEnforced, type SecuritySql } from "./identity-session"
 import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
-import { MfaEnrollmentTickets } from "./mfa-enrollment-ticket"
 import { resolveMfaPolicy, type MfaPlatformMode } from "./mfa-policy"
 import { generateJwtToken } from "@medusajs/framework/utils"
 import { ActorDelegation } from './actor-delegation'
@@ -31,22 +28,14 @@ import { NativeMfaOperations } from './native-mfa-operations'
 import { SmtpOperations } from './smtp-operations'
 import {AccountLinking,type VerifiedSecondary} from './account-linking'
 import {
-  PlatformSmtpPersistence,
-  assertSmtpCredentialReuse,
   type UpdateSmtpSettingsInput,
-  type SmtpAuditActor,
 } from "./smtp-settings"
-import { sendSmtpEmail } from "./smtp-client"
 import { PersonalNotifications } from "./personal-notifications"
-import { PersonalNotificationPreferences, queueDigestIfEligible } from "./notification-preferences"
-import { CompanyLauncherConflict, companyLauncherAvailable, companyLauncherProject, companyLauncherValidate } from "./company-launcher"
-import { PlatformLauncherConflict, platformLauncherAvailable, platformLauncherProject, platformLauncherValidate } from "./platform-launcher"
-import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedSellerIds, verifiedStoreProductEditGrant } from "./legal-store-ownership"
-import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
-import { organizationActionAllowed, ownerRoleAllows } from "./role-action-policy"
-import { validStoreName, validStoreHandle, STORE_RENAME_RISK_VERSION } from "./store-name-policy"
-import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
-import {readStoreDrafts,authorizedStoreDraftActor,verifiedStoreDraftGrant,storeDraftPayload,type StoreDraftInput} from "./store-application-draft"
+import { PersonalNotificationPreferences } from "./notification-preferences"
+import { organizationActionAllowed } from "./role-action-policy"
+import { STORE_RENAME_RISK_VERSION } from "./store-name-policy"
+import type { StoreRequest } from "./store-application"
+import { verifiedStoreDraftGrant, type StoreDraftInput } from "./store-application-draft"
 import {
   listOrganizationDrafts,
   saveOrganizationDraft,
@@ -111,42 +100,12 @@ type AdvisoryLockManager = Readonly<{
 // grant/revoke collision comparisons; never run a second JS validator over
 // the result. New invitations retain their native Medusa/Zod ingress check.
 // The C collation gives POSIX ASCII ranges stable meaning across locales.
-const acceptedInviteEmailPattern="^[A-Za-z0-9_+%-]+([.][A-Za-z0-9_+%-]+)*@[A-Za-z0-9]+([-][A-Za-z0-9]+)*([.][A-Za-z0-9]+([-][A-Za-z0-9]+)*)*[.][A-Za-z]{2,}$"
-// Only literal, source-controlled SQL table aliases are accepted.
-function acceptedInviteSqlLabel(alias:"inv"|"oinv"):string {
-  return `case when length(btrim(${alias}.recipient_email))<=254
-    and btrim(${alias}.recipient_email) collate "C" ~ '${acceptedInviteEmailPattern}'
-    then lower(btrim(${alias}.recipient_email) collate "C") else '' end`
-}
 
 // An exceptional name RIGHT can override only its source Store's approved
 // OLD-name hold. It never waives an in-flight approval, unrelated Store hold,
 // native collision, application claim or the recipient's current authorization.
 // The source must have physically vacated BOTH native name and URL and the
 // assigned-right decision must have its intact canonical audit/outbox.
-const authorizedTransferredOldNameHoldExclusion = `
-        and not exists(select 1 from da_store_name_transfer t
-          join seller source_s on source_s.id=t.source_seller_id
-            and source_s.deleted_at is null and source_s.approved_at is not null
-            and source_s.status in ('open','suspended')
-            and encode(sha256(convert_to(lower(regexp_replace(
-              btrim(normalize(source_s.name,NFKC)),'[[:space:]]+',' ','g')),
-              'UTF8')),'hex')<>t.name_hash
-            and lower(source_s.handle)<>lower(t.old_handle)
-          join da_audit_event e on e.id=t.source_audit_event_id
-            and e.deleted_at is null and e.module='dogruadres-access'
-            and e.action='organization.store_name_right_assigned'
-            and e.organization_id=t.source_organization_id
-            and e.target_id=t.source_seller_id
-            and e.new_values->>'transfer_id'=t.id
-            and e.new_values->>'target_seller_id'=t.target_seller_id
-          join da_audit_outbox x on x.source_audit_event_id=e.id
-            and x.source_module='dogruadres-access' and x.deleted_at is null
-          where h.status='approved' and h.seller_id=t.source_seller_id
-            and h.old_name=t.old_name and h.old_handle=t.old_handle
-            and t.status='assigned' and t.target_seller_id=?
-            and t.target_organization_id=? and t.name_hash=? and t.old_handle=?)
-`
 
 const activeStatus = "active"
 const supportedActorTypes = new Set(["user", "member", "customer"])
@@ -1516,11 +1475,21 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     )
   }
 
+  private async ownerPauseSessionPrelock_(db: SecuritySql, token: string) {
+    return StoreLifecycleOperations.defaultOwnerPauseSessionPrelock_(db, token)
+  }
+
+  private async ownerPauseScope_(db: SecuritySql, token: string, organizationId: string, sellerId: string, personFirst = false) {
+    return StoreLifecycleOperations.defaultOwnerPauseScope_(db, token, organizationId, sellerId, personFirst)
+  }
+
   private storeLifecycle_(context: Context) {
     return new StoreLifecycleOperations(
       securitySql(context.transactionManager),
       this.persistAuditEventsWithOutbox_.bind(this),
-      context
+      context,
+      this.ownerPauseSessionPrelock_.bind(this),
+      this.ownerPauseScope_.bind(this)
     )
   }
 

@@ -1,5 +1,5 @@
 /// <reference lib="es2022.intl" />
-import { createHash, randomBytes, randomUUID } from "node:crypto"
+import { createHash } from "node:crypto"
 import type { Context } from "@medusajs/framework/types"
 import {
   IdentitySessions,
@@ -10,15 +10,16 @@ import {
 } from "./identity-session"
 import { platformApprovedSellerIds } from "./legal-store-ownership"
 import { ActorDelegation } from "./actor-delegation"
-import { sendSmtpEmail } from "./smtp-client"
 import type { FoundationAuditInput } from "./service"
 import { DOGRUADRES_AUDIT_MODULE } from "./service"
 
 export class StoreLifecycleOperations {
   constructor(
-    private db: SecuritySql,
+    _db: SecuritySql,
     private persistAuditEventsWithOutbox: (input: FoundationAuditInput[], sharedContext: Context) => Promise<any[]>,
-    private sharedContext: Context
+    _sharedContext: Context,
+    private ownerPauseSessionPrelockHook?: (db: SecuritySql, token: string) => Promise<any>,
+    private ownerPauseScopeHook?: (db: SecuritySql, token: string, organizationId: string, sellerId: string, personFirst?: boolean) => Promise<any>
   ) {}
 
   private persistAuditEventsWithOutbox_(input: FoundationAuditInput[], sharedContext: Context) {
@@ -63,11 +64,21 @@ export class StoreLifecycleOperations {
    * Separated only so pure clock-fixture tests can mock this narrow gateway,
    * without bypassing native session validation on any real HTTP request.
    */
-  private async ownerPauseSessionPrelock_(db:SecuritySql,token:string){
+  private async ownerPauseSessionPrelock_(db: SecuritySql, token: string) {
+    if (this.ownerPauseSessionPrelockHook) return this.ownerPauseSessionPrelockHook(db, token)
+    return StoreLifecycleOperations.defaultOwnerPauseSessionPrelock_(db, token)
+  }
+
+  static async defaultOwnerPauseSessionPrelock_(db:SecuritySql,token:string){
     return new IdentitySessions(db).currentWithPersonLock(token,true,false,true)
   }
 
-  private async ownerPauseScope_(db:SecuritySql,token:string,organizationId:string,sellerId:string,
+  private async ownerPauseScope_(db: SecuritySql, token: string, organizationId: string, sellerId: string, personFirst = false) {
+    if (this.ownerPauseScopeHook) return this.ownerPauseScopeHook(db, token, organizationId, sellerId, personFirst)
+    return StoreLifecycleOperations.defaultOwnerPauseScope_(db, token, organizationId, sellerId, personFirst)
+  }
+
+  static async defaultOwnerPauseScope_(db:SecuritySql,token:string,organizationId:string,sellerId:string,
     personFirst=false){
     const sessions=new IdentitySessions(db)
     // Closing-state GET later takes Person FOR SHARE. Acquire the compatible

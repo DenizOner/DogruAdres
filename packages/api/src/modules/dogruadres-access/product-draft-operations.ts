@@ -1,5 +1,5 @@
 /// <reference lib="es2022.intl" />
-import { randomUUID , createHash } from "node:crypto"
+import { createHash } from "node:crypto"
 import type { Context } from "@medusajs/framework/types"
 import {
   IdentitySessions,
@@ -15,18 +15,14 @@ import { DOGRUADRES_AUDIT_MODULE } from "./service"
 
 export class ProductDraftOperations {
   constructor(
-    private db: SecuritySql,
+    _db: SecuritySql,
     private persistAuditEventsWithOutbox: (input: FoundationAuditInput[], sharedContext: Context) => Promise<any[]>,
-    private readablePersonalOrganizations: (token: string, organizationId: string, managerOnly: boolean, context: Context) => Promise<any>,
-    private sharedContext: Context
+    _readablePersonalOrganizations: (token: string, organizationId: string, managerOnly: boolean, context: Context) => Promise<any>,
+    _sharedContext: Context
   ) {}
 
   private persistAuditEventsWithOutbox_(input: FoundationAuditInput[], sharedContext: Context) {
     return this.persistAuditEventsWithOutbox(input, sharedContext)
-  }
-
-  private readablePersonalOrganizations_(token: string, organizationId: string, managerOnly: boolean, context: Context) {
-    return this.readablePersonalOrganizations(token, organizationId, managerOnly, context)
   }
 
     async personalProductDraftScope(

@@ -1,6 +1,5 @@
 /// <reference lib="es2022.intl" />
 import type { Context } from "@medusajs/framework/types"
-import { MedusaError } from "@medusajs/framework/utils"
 import { hasRecentMfaProof } from "./mfa-management"
 import {
   IdentitySessions,
@@ -10,12 +9,12 @@ import {
 } from "./identity-session"
 import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
 import { MfaEnrollmentTickets } from "./mfa-enrollment-ticket"
-import { resolveMfaPolicy, type MfaPlatformMode } from "./mfa-policy"
+import { type MfaPlatformMode } from "./mfa-policy"
 
 export class NativeMfaOperations {
   constructor(
-    private db: SecuritySql,
-    private sharedContext: Context
+    _db: SecuritySql,
+    _sharedContext: Context
   ) {}
 
   async personalBeginMfaEnrollment(token:string,authIdentityId:string,factorId:string,context:Context={}) {

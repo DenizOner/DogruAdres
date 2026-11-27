@@ -15,8 +15,8 @@ import { sendSmtpEmail } from "./smtp-client"
 
 export class SmtpOperations {
   constructor(
-    private db: SecuritySql,
-    private sharedContext: Context
+    _db: SecuritySql,
+    _sharedContext: Context
   ) {}
 
   async getActiveSmtpConfig(context: Context = {}) {

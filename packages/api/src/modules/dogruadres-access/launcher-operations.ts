@@ -14,9 +14,9 @@ import { PlatformLauncherConflict, platformLauncherAvailable, platformLauncherPr
 
 export class LauncherOperations {
   constructor(
-    private db: SecuritySql,
+    _db: SecuritySql,
     private readablePersonalOrganizations: (token: string, organizationId: string | undefined, touch: boolean, context: Context) => Promise<any>,
-    private sharedContext: Context
+    _sharedContext: Context
   ) {}
 
   private readablePersonalOrganizations_(token: string, organizationId: string | undefined, touch: boolean, context: Context) {
