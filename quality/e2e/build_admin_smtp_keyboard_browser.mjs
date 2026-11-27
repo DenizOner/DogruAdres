@@ -16,6 +16,16 @@ const output = join(process.env.RUNNER_TEMP, "da-admin-smtp-keyboard-browser.js"
 const entry = [
   'import React from "react";',
   'import { createRoot } from "react-dom/client";',
+  'import i18next from "i18next";',
+  'import { initReactI18next } from "react-i18next";',
+  'import tr from "./src/i18n/tr.json";',
+  'i18next.use(initReactI18next).init({',
+  '  lng: "tr",',
+  '  fallbackLng: "tr",',
+  '  resources: { tr: { translation: tr } },',
+  '  interpolation: { escapeValue: false },',
+  '  initImmediate: false,',
+  '});',
   'import PlatformSmtpSettingsPage from "./src/routes/settings/smtp/page";',
   'const root = createRoot(document.getElementById("smtp-test-root"));',
   'root.render(React.createElement(PlatformSmtpSettingsPage));'
