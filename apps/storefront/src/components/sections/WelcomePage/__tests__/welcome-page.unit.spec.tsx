@@ -175,4 +175,16 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
       expect(html).not.toContain("Fleek")
     })
   })
+
+  describe("WCAG 2.2 AA & RTL (#242 / #131)", () => {
+    it("sets rtl direction for Arabic locale and ltr for Turkish/English", async () => {
+      const { getDocumentDirection } = await import(
+        "../../../atoms/HtmlLangSetter/HtmlLangSetter"
+      )
+      expect(getDocumentDirection("tr")).toBe("ltr")
+      expect(getDocumentDirection("en")).toBe("ltr")
+      expect(getDocumentDirection("ar")).toBe("rtl")
+      expect(getDocumentDirection("AR")).toBe("rtl")
+    })
+  })
 })
