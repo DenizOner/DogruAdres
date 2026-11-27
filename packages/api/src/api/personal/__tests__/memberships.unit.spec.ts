@@ -3,6 +3,7 @@ import { GET, POST } from "../../organization/memberships/route"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { createContext, runInContext } from "node:vm"
+import { renderPersonalConsole } from "../console-view"
 
 jest.mock("../security", () => ({
   access: jest.fn(),
@@ -230,7 +231,7 @@ describe("personal memberships route", () => {
 
   describe("UI role-control rendering (DOM harness)", () => {
     function createUiHarness() {
-      const source = readFileSync(join(__dirname, "../console-view.ts"), "utf8")
+      const source = renderPersonalConsole("${nonce}")
       const begin = source.indexOf("let currentOrg=''")
       const end = source.indexOf("  async function load()", begin)
       const nodes = new Map<string, any>()
@@ -431,7 +432,7 @@ describe("personal memberships route", () => {
     })
 
     it("preserves HTTP status from the shipped api helper for safe UI classification", async () => {
-      const source = readFileSync(join(__dirname, "../console-view.ts"), "utf8")
+      const source = renderPersonalConsole("${nonce}")
       const apiSource = source.slice(source.indexOf("  async function api("), source.indexOf("  let recoveryCodes=[]"))
       for (const httpStatus of [401, 403, 404, 503]) {
         const context = createContext({ viewEpoch: 0, csrf: "synthetic", fetch: async () => ({ ok: false, status: httpStatus, json: async () => ({ message: "private diagnostic" }) }) })
