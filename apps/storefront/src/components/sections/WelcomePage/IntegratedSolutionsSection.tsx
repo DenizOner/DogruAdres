@@ -68,7 +68,7 @@ export function IntegratedSolutionsSection() {
       features: [
         "Rol bazlı davet ve yetki dağıtımı",
         "Şube ve çalışma alanı yapılandırması",
-        "Sunucu düzeyinde fail-closed denetim günlüğü",
+        "İşletme verilerine yalnızca yetkili kişilerin erişebildiği rol kontrolü",
       ],
       icon: "🏢",
     },

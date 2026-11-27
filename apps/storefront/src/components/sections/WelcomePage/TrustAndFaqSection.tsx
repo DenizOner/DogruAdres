@@ -18,7 +18,7 @@ export function TrustAndFaqSection() {
     },
     {
       q: "Kişisel ve kurumsal veriler nasıl korunur?",
-      a: "Şirketlerin stokları, mali kayıtları, çalışan bilgileri ve özel teklifleri diğer firmalardan ve yetkisiz kullanıcılardan sunucu düzeyinde izole edilir. Erişimler fail-closed yetkilendirme kuralları ve denetim izleriyle korunur.",
+      a: "Şirketlerin stokları, mali kayıtları, çalışan bilgileri ve özel teklifleri diğer firmalardan ve yetkisiz kullanıcılardan ayrılır. İşletme verilerine yalnızca ilgili şirketin yetkili kullanıcıları erişebilir; yetkisiz girişimler sunucu tarafından reddedilir.",
     },
     {
       q: "Hangi otomotiv işletmeleri platforma katılabilir?",

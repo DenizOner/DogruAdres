@@ -160,7 +160,8 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
       expect(html).toContain("Hangi otomotiv işletmeleri platforma katılabilir?")
 
       expect(html).toContain("geçerli en uygun fiyatı görür")
-      expect(html).toContain("fail-closed yetkilendirme")
+      expect(html).toContain("yalnızca ilgili şirketin yetkili kullanıcıları erişebilir")
+      expect(html).not.toContain("fail-closed")
       expect(html).not.toContain("KVKK mevzuatına ve yetkilendirme ilkelerine tam uyumludur")
       expect(html).not.toContain("%100 güvenli")
       expect(html).not.toContain("garantili en ucuz")
