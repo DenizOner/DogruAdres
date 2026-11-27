@@ -8,7 +8,7 @@ import medusaError from '@/lib/helpers/medusa-error';
 import { parseVariantIdsFromError } from '@/lib/helpers/parse-variant-error';
 
 import { sdk } from '../client';
-import { parseCartAddresses } from './cart-address-utils';
+import { parseCartAddresses, type SetAddressesResult } from './cart-address-utils';
 import {
   getAuthHeaders,
   getCacheOptions,
@@ -381,14 +381,17 @@ export async function deletePromotionCode(promoId: string) {
     .catch(medusaError);
 }
 
-export async function setAddresses(currentState: unknown, formData: FormData) {
+export async function setAddresses(
+  currentState: unknown,
+  formData: FormData
+): Promise<SetAddressesResult> {
   try {
     if (!formData) {
-      throw new Error('No form data found when setting addresses');
+      return { success: false, error: 'No form data found when setting addresses' };
     }
-    const cartId = getCartId();
+    const cartId = await getCartId();
     if (!cartId) {
-      throw new Error('No existing cart found when setting addresses');
+      return { success: false, error: 'No existing cart found when setting addresses' };
     }
 
     const { shipping_address, billing_address, email } = parseCartAddresses(formData);
@@ -401,8 +404,12 @@ export async function setAddresses(currentState: unknown, formData: FormData) {
 
     await updateCart(data);
     await revalidatePath('/cart');
+    return { success: true };
   } catch (e: unknown) {
-    return getCartErrorMessage(e) ?? 'Unable to save address';
+    return {
+      success: false,
+      error: getCartErrorMessage(e) ?? 'Unable to save address'
+    };
   }
 }
 

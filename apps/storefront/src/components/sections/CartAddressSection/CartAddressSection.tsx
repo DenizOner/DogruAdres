@@ -2,6 +2,7 @@
 
 import { Heading, Text, useToggleState } from "@medusajs/ui"
 import { setAddresses } from "@/lib/data/cart"
+import { shouldNavigateToDelivery, type SetAddressesResult } from "@/lib/data/cart-address-utils"
 import compareAddresses from "@/lib/helpers/compare-addresses"
 import { HttpTypes } from "@medusajs/types"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
@@ -42,7 +43,17 @@ export const CartAddressSection = ({
       : true
   )
 
-  const [message, formAction] = useActionState<string | undefined, FormData>(setAddresses, undefined)
+  const [state, formAction, isPending] = useActionState<SetAddressesResult | null, FormData>(
+    setAddresses,
+    null
+  )
+
+  useEffect(() => {
+    if (shouldNavigateToDelivery(state)) {
+      router.replace(`${pathname}?step=delivery`)
+      router.refresh()
+    }
+  }, [state, pathname, router])
 
   useEffect(() => {
     if (!isAddress) {
@@ -71,13 +82,7 @@ export const CartAddressSection = ({
           </Text>
         )}
       </div>
-      <form
-        action={async (data) => {
-          await formAction(data)
-          router.replace(`${pathname}?step=delivery`)
-          router.refresh()
-        }}
-      >
+      <form action={formAction}>
         <input
           type="hidden"
           name="same_as_billing"
@@ -103,11 +108,13 @@ export const CartAddressSection = ({
               className="mt-6"
               data-testid="submit-address-button"
               variant="tonal"
+              loading={isPending}
+              disabled={isPending}
             >
               Save
             </Button>
             <ErrorMessage
-              error={message && message !== "success" ? message : null}
+              error={state && !state.success ? state.error : null}
               data-testid="address-error-message"
             />
           </div>
