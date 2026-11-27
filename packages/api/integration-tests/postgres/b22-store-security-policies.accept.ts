@@ -307,9 +307,17 @@ export async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, conta
     values($1,$2,'platform.smtp.manage','platform',$2,'B22 disposable expiry fixture')`,[grant+"_b",otherPerson])
   assert.equal((await read(denied)).status,200)
   const bHash=createHash('sha256').update(await denied.token()).digest('hex')
+  const reloadSessionDenied=async(b:B06Chrome)=>{
+    assertPrivateResponses()
+    const start=b.http.length
+    await b.send("Page.reload",{ignoreCache:true})
+    await until(async()=>b.http.slice(start).some(r=>r.path==='/personal/session'&&r.method==='GET'&&(r.status===401||r.status===403)),
+      20000,'New document /personal/session denied')
+    await hidden(b)
+  }
   await q("update da_browser_session set created_at=clock_timestamp()-interval '30 days' where id=$1",[bHash])
   assert.equal((await read(denied)).status,403)
-  await reload(denied,403);await hidden(denied)
+  await reloadSessionDenied(denied)
   mark("Expired real session GET403 and form hidden")
   // A receives a new explicit fixture grant; a terminal DB fixture then revokes
   // its genuine session. No session is fabricated or restored by the test.
@@ -319,7 +327,7 @@ export async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, conta
   const aHash=createHash('sha256').update(await browser.token()).digest('hex')
   await q("update da_browser_session set status='revoked' where id=$1",[aHash])
   assert.equal((await read(browser)).status,403)
-  await reload(browser,403);await hidden(browser)
+  await reloadSessionDenied(browser)
   mark("Revoked real session GET403 and form hidden")
   assert.deepEqual(await digest(),saved)
   await guard.assertComplete()
