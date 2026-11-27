@@ -76,14 +76,6 @@ export function Footer() {
                   Parola Sıfırlama
                 </LocalizedClientLink>
               </li>
-              <li>
-                <LocalizedClientLink
-                  href="/auth/verify-email"
-                  className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs"
-                >
-                  E-posta Doğrulama
-                </LocalizedClientLink>
-              </li>
             </ul>
           </div>
 

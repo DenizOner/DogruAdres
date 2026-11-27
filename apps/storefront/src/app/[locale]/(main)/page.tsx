@@ -107,9 +107,7 @@ export default async function Home({
 
   return (
     <main
-      id="main-content"
-      tabIndex={-1}
-      className="flex flex-col w-full text-primary focus:outline-none"
+      className="flex flex-col w-full text-primary"
       data-testid="welcome-page-main"
     >
       <Script

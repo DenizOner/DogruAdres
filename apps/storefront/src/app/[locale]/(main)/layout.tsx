@@ -22,11 +22,23 @@ export default async function RootLayout({
     return redirect('/');
   }
 
+  const skipLink = (
+    <a
+      href="#main-content"
+      className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:start-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-blue-600 focus:text-white focus:rounded-sm focus:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2"
+    >
+      İçeriğe atla
+    </a>
+  );
+
   if (!APP_ID || !user || !user.id || !user.email)
     return (
       <>
+        {skipLink}
         <Header locale={locale} />
-        {children}
+        <div id="main-content" tabIndex={-1} className="focus:outline-none">
+          {children}
+        </div>
         <Footer />
       </>
     );
@@ -40,8 +52,11 @@ export default async function RootLayout({
       userName={userName}
       userEmail={user.email}
     >
+      {skipLink}
       <Header locale={locale} />
-      {children}
+      <div id="main-content" tabIndex={-1} className="focus:outline-none">
+        {children}
+      </div>
       <Footer />
     </TalkJsProvider>
   );
