@@ -40,22 +40,37 @@ class WelcomeWcagChromiumTest(unittest.TestCase):
 
     def setUp(self):
         self.pw = sync_playwright().start()
-        self.browser = self.pw.chromium.launch(headless=True)
-        self.page = self.browser.new_page(
-            locale="tr-TR", viewport={"width": 1280, "height": 800}
-        )
+        self.browser = None
+        self.page = None
         self.errors = []
-        self.page.on("pageerror", lambda err: self.errors.append(str(err)))
-        self.page.route("**/*", lambda route: route.abort())
-        self.page.set_content(
-            '<!doctype html><html lang="tr" dir="ltr">'
-            '<head><meta name="viewport" content="width=device-width, initial-scale=1">'
-            '<style>*{box-sizing:border-box}body{margin:0}</style>'
-            '</head>'
-            '<body><div id="welcome-test-root"></div></body></html>'
-        )
-        self.page.add_script_tag(path=str(self.bundle))
-        self.page.locator('[data-testid="welcome-hero"]').wait_for()
+        try:
+            self.browser = self.pw.chromium.launch(headless=True)
+            self.page = self.browser.new_page(
+                locale="tr-TR", viewport={"width": 1280, "height": 800}
+            )
+            self.page.on("pageerror", lambda err: self.errors.append(str(err)))
+            self.page.route("**/*", lambda route: route.abort())
+            self.page.set_content(
+                '<!doctype html><html lang="tr" dir="ltr">'
+                '<head><meta name="viewport" content="width=device-width, initial-scale=1">'
+                '<style>*{box-sizing:border-box}body{margin:0}</style>'
+                '</head>'
+                '<body><div id="welcome-test-root"></div></body></html>'
+            )
+            self.page.add_script_tag(path=str(self.bundle))
+            self.page.locator('[data-testid="welcome-hero"]').wait_for(timeout=5000)
+        except Exception as error:
+            if self.page is not None:
+                self.page.close()
+            if self.browser is not None:
+                self.browser.close()
+            self.pw.stop()
+            raise AssertionError(
+                "WelcomePage WCAG bundle failed to render: "
+                + str(error)
+                + "; page errors: "
+                + repr(self.errors)
+            ) from error
 
     def tearDown(self):
         try:

@@ -113,6 +113,9 @@ await build({
   format: "iife",
   target: "chrome120",
   jsx: "automatic",
+  define: {
+    "process.env": JSON.stringify({ NODE_ENV: "test" }),
+  },
   plugins: [isolatedNext],
   logLevel: "warning",
 });
