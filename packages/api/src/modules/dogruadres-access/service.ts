@@ -1,43 +1,41 @@
 /// <reference lib="es2022.intl" />
 import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, deferAuditDelivery, quarantineAuditDelivery, type DeliveryManager } from "./audit-delivery"
 import type { OutboxClaim, DeliveryErrorCode } from "./audit-delivery-policy"
-import { hasRecentMfaProof } from "./mfa-management"
 import {
   InjectTransactionManager,
   MedusaContext,
   MedusaService,
   MedusaError,
-  toHandle,
 } from "@medusajs/framework/utils"
 import type { Context } from "@medusajs/framework/types"
 import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
 import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
-import { createHash, randomBytes, randomUUID } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
 import { IdentitySessions, securitySql, isCurrentProtectedOwner, type BrowserMfaPurpose, IdentityAccessDenied, mfaRuntimeEnforced, type SecuritySql } from "./identity-session"
 import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
-import { MfaEnrollmentTickets } from "./mfa-enrollment-ticket"
 import { resolveMfaPolicy, type MfaPlatformMode } from "./mfa-policy"
 import { generateJwtToken } from "@medusajs/framework/utils"
 import { ActorDelegation } from './actor-delegation'
+import { StoreLifecycleOperations } from './store-lifecycle'
+import { StoreRenameOperations } from './store-rename'
+import { StoreApplicationOperations } from './store-application-operations'
+import { StoreProductPermissionOperations } from './store-product-permissions'
+import { BuyerOperations } from './buyer-operations'
+import { ProductDraftOperations } from './product-draft-operations'
+import { LauncherOperations } from './launcher-operations'
+import { NativeMfaOperations } from './native-mfa-operations'
+import { SmtpOperations } from './smtp-operations'
 import {AccountLinking,type VerifiedSecondary} from './account-linking'
 import {
-  PlatformSmtpPersistence,
-  assertSmtpCredentialReuse,
   type UpdateSmtpSettingsInput,
-  type SmtpAuditActor,
 } from "./smtp-settings"
-import { sendSmtpEmail } from "./smtp-client"
 import { PersonalNotifications } from "./personal-notifications"
-import { PersonalNotificationPreferences, queueDigestIfEligible } from "./notification-preferences"
-import { CompanyLauncherConflict, companyLauncherAvailable, companyLauncherProject, companyLauncherValidate } from "./company-launcher"
-import { PlatformLauncherConflict, platformLauncherAvailable, platformLauncherProject, platformLauncherValidate } from "./platform-launcher"
-import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedSellerIds, verifiedStoreProductEditGrant } from "./legal-store-ownership"
-import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
-import { organizationActionAllowed, ownerRoleAllows } from "./role-action-policy"
-import { validStoreName, validStoreHandle, STORE_RENAME_RISK_VERSION } from "./store-name-policy"
-import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
-import {readStoreDrafts,authorizedStoreDraftActor,verifiedStoreDraftGrant,storeDraftPayload,type StoreDraftInput} from "./store-application-draft"
+import { PersonalNotificationPreferences } from "./notification-preferences"
+import { organizationActionAllowed } from "./role-action-policy"
+import { STORE_RENAME_RISK_VERSION } from "./store-name-policy"
+import type { StoreRequest } from "./store-application"
+import { verifiedStoreDraftGrant, type StoreDraftInput } from "./store-application-draft"
 import {
   listOrganizationDrafts,
   saveOrganizationDraft,
@@ -77,7 +75,7 @@ type ChangeMembershipInput = Readonly<{
   actor_id: string
 }>
 
-type FoundationAuditInput = {
+export type FoundationAuditInput = {
   actor_person_id: string
   actor_type: string
   actor_id: string
@@ -102,42 +100,12 @@ type AdvisoryLockManager = Readonly<{
 // grant/revoke collision comparisons; never run a second JS validator over
 // the result. New invitations retain their native Medusa/Zod ingress check.
 // The C collation gives POSIX ASCII ranges stable meaning across locales.
-const acceptedInviteEmailPattern="^[A-Za-z0-9_+%-]+([.][A-Za-z0-9_+%-]+)*@[A-Za-z0-9]+([-][A-Za-z0-9]+)*([.][A-Za-z0-9]+([-][A-Za-z0-9]+)*)*[.][A-Za-z]{2,}$"
-// Only literal, source-controlled SQL table aliases are accepted.
-function acceptedInviteSqlLabel(alias:"inv"|"oinv"):string {
-  return `case when length(btrim(${alias}.recipient_email))<=254
-    and btrim(${alias}.recipient_email) collate "C" ~ '${acceptedInviteEmailPattern}'
-    then lower(btrim(${alias}.recipient_email) collate "C") else '' end`
-}
 
 // An exceptional name RIGHT can override only its source Store's approved
 // OLD-name hold. It never waives an in-flight approval, unrelated Store hold,
 // native collision, application claim or the recipient's current authorization.
 // The source must have physically vacated BOTH native name and URL and the
 // assigned-right decision must have its intact canonical audit/outbox.
-const authorizedTransferredOldNameHoldExclusion = `
-        and not exists(select 1 from da_store_name_transfer t
-          join seller source_s on source_s.id=t.source_seller_id
-            and source_s.deleted_at is null and source_s.approved_at is not null
-            and source_s.status in ('open','suspended')
-            and encode(sha256(convert_to(lower(regexp_replace(
-              btrim(normalize(source_s.name,NFKC)),'[[:space:]]+',' ','g')),
-              'UTF8')),'hex')<>t.name_hash
-            and lower(source_s.handle)<>lower(t.old_handle)
-          join da_audit_event e on e.id=t.source_audit_event_id
-            and e.deleted_at is null and e.module='dogruadres-access'
-            and e.action='organization.store_name_right_assigned'
-            and e.organization_id=t.source_organization_id
-            and e.target_id=t.source_seller_id
-            and e.new_values->>'transfer_id'=t.id
-            and e.new_values->>'target_seller_id'=t.target_seller_id
-          join da_audit_outbox x on x.source_audit_event_id=e.id
-            and x.source_module='dogruadres-access' and x.deleted_at is null
-          where h.status='approved' and h.seller_id=t.source_seller_id
-            and h.old_name=t.old_name and h.old_handle=t.old_handle
-            and t.status='assigned' and t.target_seller_id=?
-            and t.target_organization_id=? and t.name_hash=? and t.old_handle=?)
-`
 
 const activeStatus = "active"
 const supportedActorTypes = new Set(["user", "member", "customer"])
@@ -835,187 +803,6 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   }
 
   /**
-   * Settings are always scoped to the current canonical Person. No Person or
-   * native actor selector is accepted from the client.
-   * This source path remains unreachable until MFA settings ingress is enabled.
-   */
-  /** These internal helpers never accept client Person or actor selectors. */
-  @InjectTransactionManager()
-  async personalBeginMfaEnrollment(token:string,authIdentityId:string,factorId:string,@MedusaContext() context:Context={}) {
-    const sql=securitySql(context.transactionManager)
-    // Session/Person lock comes FIRST, matching staff policy-change lock order.
-    // Taking the platform advisory lock first could deadlock against a staff
-    // update that already holds this same browser session lock.
-    if(!await new IdentitySessions(sql).enrollment(token))return null
-    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
-    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
-    return new MfaEnrollmentTickets(sql).beginAfterPasswordProof(token,authIdentityId,factorId)
-  }
-
-  @InjectTransactionManager()
-  async personalRevokePendingMfaEnrollment(token:string,factorId:string,@MedusaContext() context:Context={}) {
-    const sql=securitySql(context.transactionManager)
-    if(!await new IdentitySessions(sql).enrollment(token))return null
-    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
-    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
-    return new MfaEnrollmentTickets(sql).revokePendingFactor(token,factorId)
-  }
-
-  @InjectTransactionManager()
-  async personalClaimMfaVerification(token:string,ticket:string,@MedusaContext() context:Context={}) {
-    const sql=securitySql(context.transactionManager)
-    // Session/Person lock comes FIRST, matching staff policy-change lock order.
-    // Taking the platform advisory lock first could deadlock against a staff
-    // update that already holds this same browser session lock.
-    if(!await new IdentitySessions(sql).enrollment(token))return null
-    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
-    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
-    return new MfaEnrollmentTickets(sql).claimVerificationAttempt(token,ticket)
-  }
-
-  @InjectTransactionManager()
-  async personalCompleteMfaEnrollment(token:string,ticket:string,factorId:string,@MedusaContext() context:Context={}) {
-    const sql=securitySql(context.transactionManager)
-    // Session/Person lock comes FIRST, matching staff policy-change lock order.
-    // Taking the platform advisory lock first could deadlock against a staff
-    // update that already holds this same browser session lock.
-    if(!await new IdentitySessions(sql).enrollment(token))return null
-    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
-    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
-    return new MfaEnrollmentTickets(sql).completeAfterNativeVerification(token,ticket,factorId,new Date())
-  }
-
-  @InjectTransactionManager()
-  async personalMfaSettings(token: string, @MedusaContext() context: Context = {}) {
-    const sql = securitySql(context.transactionManager)
-    const sessions = new IdentitySessions(sql)
-    const session = await sessions.current(token)
-    if (!session) return null
-    const store = new MfaPersistence(sql)
-    const platform = await store.readPlatformPolicy()
-    const personal = await store.readPersonPreference(session.person_id)
-    const platformGrant = await sessions.staff(token, "security.mfa.manage", "platform")
-    return {
-      platform, personal,
-      can_manage_platform: !!platformGrant,
-      // Exact AuthIdentity native factor status is NOT inferred from preference.
-      native_factor_state: "unverified" as const,
-    }
-  }
-
-  @InjectTransactionManager()
-  async personalSetMfaPreference(token: string, enabled: boolean, expectedVersion: number, @MedusaContext() context: Context = {}) {
-    const sql = securitySql(context.transactionManager)
-    const sessions = new IdentitySessions(sql)
-    const session = await sessions.current(token, true)
-    if (!session) return null
-    const store = new MfaPersistence(sql)
-    const policy = await store.readPlatformPolicy()
-    if (policy.platform_mode !== "optional") return null
-    const actor: MfaAuditActor = {
-      person_id: session.person_id,
-      actor_type: session.actor_type as MfaAuditActor["actor_type"],
-      actor_id: session.actor_id,
-    }
-    return store.setPersonPreference(session.person_id, enabled, expectedVersion, actor)
-  }
-
-  /** Recovery codes are audited in their Foundation transaction. Native
-   * factor disable is only reachable after separate committed revocation. */
-  @InjectTransactionManager()
-  async personalManageNativeMfa(token:string,action:"recovery_codes"|"disable",operation:(identityId:string)=>Promise<unknown>,@MedusaContext() context:Context={}) {
-    if(action!=="recovery_codes")return null // Closed obsolete pre-commit disable path.
-    const sql=securitySql(context.transactionManager),sessions=new IdentitySessions(sql)
-    const session=await sessions.current(token,true)
-    if(!session)return null
-    const [limits]=await sql.execute("select recent_auth_seconds from da_session_policy where id='current'")
-    if(!hasRecentMfaProof(session,limits?.recent_auth_seconds))return null
-    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
-    const store=new MfaPersistence(sql)
-    await store.readPlatformPolicy()
-    const actor={person_id:session.person_id,actor_type:session.actor_type as MfaAuditActor["actor_type"],actor_id:session.actor_id}
-    const result=await operation(session.auth_identity_id)
-    await store.recordNativeMfaAction(actor,"mfa.recovery_codes_generated")
-    return {result,sessions_revoked:false}
-  }
-
-  /** Foundation revocation and mandatory audit/outbox COMMIT before native
-   * factor disable. Failure leaves the native factor unchanged and the
-   * strongly-authenticated browser session in its original state. */
-  @InjectTransactionManager()
-  async personalPrepareNativeMfaDisable(token:string,@MedusaContext() context:Context={}) {
-    const sql=securitySql(context.transactionManager),sessions=new IdentitySessions(sql)
-    const session=await sessions.current(token,true)
-    if(!session)return null
-    const [limits]=await sql.execute("select recent_auth_seconds from da_session_policy where id='current'")
-    if(!hasRecentMfaProof(session,limits?.recent_auth_seconds))return null
-    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
-    const store=new MfaPersistence(sql),policy=await store.readPlatformPolicy()
-    if(policy.platform_mode==="required")return null
-    const personal=await store.readPersonPreference(session.person_id)
-    await sessions.logout(token,true)
-    // Optional preference is a separate audited Foundation row in this same
-    // precommit. In disabled mode the saved preference must be preserved.
-    if(policy.platform_mode==="optional"&&personal.user_enabled)
-      await store.setPersonPreference(session.person_id,false,personal.version,{
-        person_id:session.person_id,actor_type:session.actor_type as MfaAuditActor["actor_type"],actor_id:session.actor_id
-      })
-    return {session_id:session.id,person_id:session.person_id,auth_identity_id:session.auth_identity_id,
-      actor_type:session.actor_type as MfaAuditActor["actor_type"],actor_id:session.actor_id}
-  }
-
-  /** A second Foundation transaction holds the SAME policy advisory lock
-   * as setPlatformPolicy across the native Medusa operation. The first
-   * committed Person session/epoch revocation can never be rolled back
-   * by a native write or completion-audit failure. */
-  @InjectTransactionManager()
-  async personalCompletePreparedNativeMfaDisable(
-    prepared:Readonly<{session_id:string;person_id:string;auth_identity_id:string;actor_type:MfaAuditActor["actor_type"];actor_id:string}>,
-    operation:(identityId:string)=>Promise<unknown>,
-    @MedusaContext() context:Context={}
-  ) {
-    const sql=securitySql(context.transactionManager)
-    // Lock the Person epoch BEFORE the shared policy lock, matching session
-    // creation and staff policy updates. A concurrent full login may commit
-    // after preparation but not during native completion.
-    const security=await sql.execute(
-      "select epoch from da_person_security where person_id=? for update",
-      [prepared.person_id])
-    if(security.length!==1)throw new IdentityAccessDenied()
-    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
-    const store=new MfaPersistence(sql),policy=await store.readPlatformPolicy()
-    if(policy.platform_mode==="required")return null
-    const rows=await sql.execute("select s.id from da_browser_session s join da_person_security e on e.person_id=s.person_id where s.id=? and s.person_id=? and s.auth_identity_id=? and s.actor_type=? and s.actor_id=? and s.status='revoked' and e.epoch>s.epoch",
-      [prepared.session_id,prepared.person_id,prepared.auth_identity_id,prepared.actor_type,prepared.actor_id])
-    if(rows.length!==1)throw new IdentityAccessDenied()
-    // If another session was minted after precommit, do NOT disable the native
-    // factor and leave that freshly authenticated browser alive. The Person
-    // row lock above prevents a further session from racing past this check.
-    const newer=await sql.execute(
-      "select id from da_browser_session where person_id=? and status='active' and epoch=? limit 1",
-      [prepared.person_id,security[0].epoch])
-    if(newer.length)return null
-    const result=await operation(prepared.auth_identity_id)
-    await store.recordNativeMfaAction({
-      person_id:prepared.person_id,actor_type:prepared.actor_type,actor_id:prepared.actor_id
-    },"mfa.native_factor_disabled")
-    return result
-  }
-
-  @InjectTransactionManager()
-  async personalSetPlatformMfaMode(token: string, mode: MfaPlatformMode, expectedVersion: number, @MedusaContext() context: Context = {}) {
-    const sql = securitySql(context.transactionManager)
-    const staff = await new IdentitySessions(sql).staff(token, "security.mfa.manage", "platform")
-    if (!staff) return null
-    const actor: MfaAuditActor = {
-      person_id: staff.person_id,
-      actor_type: staff.actor_type as MfaAuditActor["actor_type"],
-      actor_id: staff.actor_id,
-    }
-    return new MfaPersistence(sql).setPlatformPolicy(mode, expectedVersion, actor)
-  }
-
-  /**
    * Existing native Owner evidence checks, shared by ordinary provisioning
    * and approved B22 applications. Never infer ownership from an email,
    * an applicant-submitted Person ID, or unverified actor mapping.
@@ -1096,7 +883,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return ownerPersonIds
   }
 
-  @InjectTransactionManager()
+    @InjectTransactionManager()
   async provisionPersonalOrganization(token: string, input: Omit<ProvisionOrganizationInput,"provisioned_by">, @MedusaContext() context:Context={}) {
     const sql=securitySql(context.transactionManager)
     const staff=await new IdentitySessions(sql).staff(token,"organization.provision","platform")
@@ -1641,1526 +1428,247 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return { membership, invitation: accepted }
   }
 
-  @InjectTransactionManager()
-  async getActiveSmtpConfig(@MedusaContext() context: Context = {}) {
-    const sql = securitySql(context.transactionManager)
-    return new PlatformSmtpPersistence(sql).readSettings(true)
-  }
-
-  @InjectTransactionManager()
-  async personalPlatformSmtpSettings(token: string, @MedusaContext() context: Context = {}) {
-    const sql = securitySql(context.transactionManager)
-    const sessions = new IdentitySessions(sql)
-    const staff = await sessions.staff(token, "platform.smtp.manage", "platform")
-    if (!staff) return null
-    const persistence = new PlatformSmtpPersistence(sql)
-    const settings = await persistence.readSettings(false)
-    return {
-      settings,
-      can_manage: true,
-    }
-  }
-
-  @InjectTransactionManager()
-  async personalUpdatePlatformSmtpSettings(
-    token: string,
-    input: UpdateSmtpSettingsInput,
-    @MedusaContext() context: Context = {}
-  ) {
-    const sql = securitySql(context.transactionManager)
-    const sessions = new IdentitySessions(sql)
-    const staff = await sessions.staff(token, "platform.smtp.manage", "platform")
-    if (!staff) return null
-    const actor: SmtpAuditActor = {
-      person_id: staff.person_id,
-      actor_type: staff.actor_type as SmtpAuditActor["actor_type"],
-      actor_id: staff.actor_id,
-    }
-    const persistence = new PlatformSmtpPersistence(sql)
-    return persistence.updateSettings(input, actor)
-  }
-
-  @InjectTransactionManager()
-  async personalTestPlatformSmtpSettings(
-    token: string,
-    targetRecipient: string,
-    candidateSettings?: Partial<UpdateSmtpSettingsInput>,
-    @MedusaContext() context: Context = {}
-  ) {
-    const sql = securitySql(context.transactionManager)
-    const sessions = new IdentitySessions(sql)
-    const staff = await sessions.staff(token, "platform.smtp.manage", "platform")
-    if (!staff) return null
-
-    const persistence = new PlatformSmtpPersistence(sql)
-    const current = await persistence.readSettings(true)
-
-    const testHost = candidateSettings?.host || current.host
-    const testPort = candidateSettings?.port || current.port
-    const testSecurity = candidateSettings?.security || current.security
-    const testUsername = candidateSettings?.username !== undefined ? candidateSettings.username : current.username
-    const testPassword = candidateSettings?.password !== undefined ? candidateSettings.password : current.password
-    const testFromEmail = candidateSettings?.from_email || current.from_email
-    const testFromName = candidateSettings?.from_name !== undefined ? candidateSettings.from_name : current.from_name
-
-    // Never offer a stored, write-only password to a new SMTP server or AUTH
-    // identity merely because an authorized operator left Password blank.
-    assertSmtpCredentialReuse(
-      current,
-      { host: testHost, port: testPort, security: testSecurity, username: testUsername ?? null },
-      Boolean(current.password),
-      candidateSettings?.password
-    )
-
-    return sendSmtpEmail(
-      {
-        to: targetRecipient,
-        subject: "DogruAdres Platform SMTP Test Mesaji",
-        text: `DogruAdres Platform SMTP Yapilandirma Testi basariyla tamamlandi.\n\nZaman: ${new Date().toISOString()}\nSunucu: ${testHost}:${testPort}`,
-        html: `<div style="font-family:sans-serif;padding:20px;border:1px solid #ddd;border-radius:6px;"><h3>DogruAdres Platform SMTP Test</h3><p>SMTP Yapilandirma Testi basariyla tamamlandi.</p><p><strong>Sunucu:</strong> ${testHost}:${testPort}</p><p><strong>Zaman:</strong> ${new Date().toISOString()}</p></div>`,
-      },
-      {
-        enabled: true,
-        host: testHost,
-        port: testPort,
-        security: testSecurity,
-        username: testUsername || undefined,
-        password: testPassword || undefined,
-        fromEmail: testFromEmail,
-        fromName: testFromName || undefined,
-      }
+  private nativeMfa_(context: Context) {
+    return new NativeMfaOperations(
+      securitySql(context.transactionManager),
+      context
     )
   }
 
-  // B22 initial Store application: Organization Owner creates an application
-  // and a direct Organization reference; only Mercur Admin approves Seller.
-  @InjectTransactionManager()
-  async personalStoreApplications(token:string,org:string,@MedusaContext() context:Context={}){
-    const db=securitySql(context.transactionManager)
-    const drafts=await readStoreDrafts(db,token,org)
-    if(!drafts)return null
-    // An explicitly authorized Member sees only unfinished Organization
-    // drafts. Official Seller applications are an Owner-only resource.
-    const applications=drafts.draft_role==="owner"?
-      await readStoreApplications(db,token,org):[]
-    if(!applications)return null
-    // Historical applications stay readable, but the native Seller's *live*
-    // status and private rejection reason require today's verified, unrevoked
-    // Organization↔Store association (including canonical audit/outbox).
-    // This is a server-internal hint, never part of the public response.
-    // Only currently displayed, structurally valid created-application
-    // Sellers can need live native state. Other verified Stores in this
-    // Organization must not exhaust a global 50-Store authorization cap.
-    const sellerCandidates=[...new Set(applications
-      .filter(app=>app.status==="created"&&typeof app.seller_id==="string"&&
-        /^sel_[A-Za-z0-9_-]+$/.test(app.seller_id))
-      .map(app=>app.seller_id as string))]
-    const currentSellerIds=new Set(sellerCandidates.length?
-      await platformApprovedSellerIds(db,org,sellerCandidates):[])
-    const scopedApplications=applications.map(app=>({
-      ...app,live_seller_authorized:app.status==="created" &&
-        typeof app.seller_id==="string" && currentSellerIds.has(app.seller_id)
-    }))
-    const policy=await db.execute(`select store_application_enabled from da_organization
-      where id=? and status='active' and deleted_at is null`,[org])
-    if(policy.length!==1||typeof policy[0].store_application_enabled!=="boolean")
-      return null
-    return {applications:scopedApplications,store_application_enabled:policy[0].store_application_enabled as boolean,
-      draft_role:drafts.draft_role,drafts:drafts.drafts,
-      has_more_drafts:drafts.has_more_drafts}
+  private smtpOperations_(context: Context) {
+    return new SmtpOperations(
+      securitySql(context.transactionManager),
+      context
+    )
   }
 
-  /** A save is only Organization-private input. No native Seller, irreversible
-   * reservation, Store entitlement, or application submission is performed. */
-  @InjectTransactionManager()
-  async personalSaveStoreApplicationDraft(token:string,input:StoreDraftInput,
-    @MedusaContext() context:Context={}){
-    const parsed=storeDraftPayload.safeParse(input)
-    if(!parsed.success)throw new IdentityAccessDenied()
-    const value=parsed.data,db=securitySql(context.transactionManager)
-    const actor=await authorizedStoreDraftActor(db,token,value.organization_id)
-    if(!actor)return null
-    await db.execute(`select pg_advisory_xact_lock(hashtext('b22-store-draft'),hashtext(?))`,
-      [value.draft_id])
-    const rows=await db.execute(`select organization_id,status,version
-      from da_store_application_draft where id=? for update`,[value.draft_id])
-    if(rows.length>1)throw new IdentityAccessDenied()
-    if(rows.length&&rows[0].organization_id!==value.organization_id)return null
-    if(rows.length&&rows[0].status!=="draft")return {conflict:true as const}
-    const beforeVersion=rows.length?Number(rows[0].version):0
-    if(!Number.isSafeInteger(beforeVersion)||beforeVersion!==value.expected_version)
-      return {conflict:true as const}
-    if(beforeVersion===0){
-      await db.execute(`insert into da_store_application_draft
-        (id,organization_id,created_by_person_id,updated_by_person_id,name,email,currency_code)
-        values(?,?,?,?,?,?,?)`,
-        [value.draft_id,value.organization_id,actor.person_id,actor.person_id,
-          value.name,value.email,value.currency_code])
-    }else{
-      const updated=await db.execute(`update da_store_application_draft
-        set name=?,email=?,currency_code=?,updated_by_person_id=?,
-          version=version+1,updated_at=clock_timestamp()
-        where id=? and organization_id=? and version=? and status='draft'
-        returning id`,[value.name,value.email,value.currency_code,actor.person_id,
-          value.draft_id,value.organization_id,beforeVersion])
-      if(updated.length!==1)throw new IdentityAccessDenied()
-    }
-    // Canonical audit and outbox commit atomically with the draft. Never copy
-    // name/email or free-text Store contact details to the Audit Index.
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
-      role_context:actor.role_context,organization_id:value.organization_id,
-      action:"organization.store_application_draft_saved",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"store-application-draft",
-      target_id:value.draft_id,
-      previous_values:{version:beforeVersion},
-      new_values:{version:beforeVersion+1},
-      occurred_at:new Date()
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    return {conflict:false as const,draft_id:value.draft_id,status:"draft" as const,
-      version:beforeVersion+1}
+  private storeApplication_(context: Context) {
+    return new StoreApplicationOperations(
+      securitySql(context.transactionManager),
+      this.persistAuditEventsWithOutbox_.bind(this),
+      this.personalReviewableStoreApplications.bind(this),
+      context
+    )
   }
 
-  /** Page through currently eligible Members without a company-size cap.
-   * Grants are returned only for this exact page, never another Organization
-   * or another Member. Native Seller/Member roles grant no draft authority.
-   */
-  @InjectTransactionManager()
-  async personalListStoreDraftPermissions(token:string,org:string,after:string|null=null,
-    @MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org)||
-       (after!==null&&!/^[A-Za-z0-9_-]{1,128}$/.test(after)))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const actor=await sessions.organizations(token,org,false)
-    if(!actor||actor.organizations.length!==1||actor.organizations[0].role!=="owner"||
-       !organizationActionAllowed("owner","membership.list",
-         await isCurrentProtectedOwner(db,actor.person_id,org),false))return null
-    const cursor=after??""
-    // Keyset pagination avoids an offset proportional to total company size.
-    // Read one extra row for has_more, never refuse a larger organization.
-    const rows=await db.execute(`select m.id as membership_id,m.person_id,
-        p.display_name as member_name,${acceptedInviteSqlLabel("inv")} as invitation_email,
-        case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then p.mobile_phone else null end as mobile_phone,
-        not exists (
-          select 1 from da_organization_membership other
-          join da_person op on op.id=other.person_id
-            and op.disabled_at is null and op.deleted_at is null
-          left join lateral (
-            select oi.recipient_email from da_organization_invitation oi
-            where oi.organization_id=other.organization_id
-              and oi.accepted_by_person_id=other.person_id
-              and oi.status='accepted' and oi.role='member'
-              and oi.deleted_at is null
-            order by oi.accepted_at desc nulls last,oi.id desc limit 1
-          ) oinv on true
-          where other.organization_id=m.organization_id and other.id<>m.id
-            and other.role='member' and other.protected_owner=false
-            and other.status='active' and other.revoked_at is null
-            and other.deleted_at is null
-            and lower(btrim(coalesce(op.display_name,'')))=
-                lower(btrim(coalesce(p.display_name,'')))
-            and ${acceptedInviteSqlLabel("oinv")}=
-                ${acceptedInviteSqlLabel("inv")}
-            and coalesce(case when op.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then op.mobile_phone end,'')=
-                coalesce(case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then p.mobile_phone end,'')
-        ) as label_unique_in_organization,
-        exists (
-          select 1 from da_organization_store_draft_permission other_grant
-          join da_organization_membership other
-            on other.id=other_grant.membership_id
-            and other.person_id=other_grant.person_id
-            and other.organization_id=other_grant.organization_id
-          join da_person op on op.id=other.person_id
-            and op.disabled_at is null and op.deleted_at is null
-          left join lateral (
-            select oi.recipient_email from da_organization_invitation oi
-            where oi.organization_id=other.organization_id
-              and oi.accepted_by_person_id=other.person_id
-              and oi.status='accepted' and oi.role='member'
-              and oi.deleted_at is null
-            order by oi.accepted_at desc nulls last,oi.id desc limit 1
-          ) oinv on true
-          where other.organization_id=m.organization_id and other.id<>m.id
-            and other.role='member' and other.protected_owner=false
-            and other.status='active' and other.revoked_at is null
-            and other.deleted_at is null
-            and other_grant.permission='store.application.draft.manage'
-            and other_grant.revoked_at is null
-            and lower(btrim(coalesce(op.display_name,'')))=
-                lower(btrim(coalesce(p.display_name,'')))
-            and ${acceptedInviteSqlLabel("oinv")}=
-                ${acceptedInviteSqlLabel("inv")}
-            and coalesce(case when op.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then op.mobile_phone end,'')=
-                coalesce(case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then p.mobile_phone end,'')
-        ) as other_active_grant_same_label
-      from da_organization_membership m
-      join da_person p on p.id=m.person_id and p.disabled_at is null and p.deleted_at is null
-      left join lateral (
-        select i.recipient_email from da_organization_invitation i
-        where i.organization_id=m.organization_id
-          and i.accepted_by_person_id=m.person_id
-          and i.status='accepted' and i.role='member'
-          and i.deleted_at is null
-        order by i.accepted_at desc nulls last,i.id desc limit 1
-      ) inv on true
-      where m.organization_id=? and m.role='member' and m.protected_owner=false
-        and m.status='active' and m.revoked_at is null and m.deleted_at is null
-        and (?='' or m.id>?)
-      order by m.id limit 31`,[org,cursor,cursor])
-    if(rows.length>31||rows.some(m=>typeof m.membership_id!=="string"||
-       !/^[A-Za-z0-9_-]{1,128}$/.test(m.membership_id)||
-       typeof m.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id)||
-       typeof m.label_unique_in_organization!=="boolean"||
-       typeof m.other_active_grant_same_label!=="boolean"))
-      throw new IdentityAccessDenied()
-    const has_more=rows.length>30
-    // Only current Organization Members are visible to their protected Owner.
-    // Use canonical phone and accepted company invitation email to distinguish
-    // employees. Neither contact alone authenticates a Person, and no foreign
-    // Organization or unlinked native actor contact may be disclosed.
-    const members=rows.slice(0,30).map(m=>({
-      membership_id:m.membership_id as string,person_id:m.person_id as string,
-      // Derived solely from current eligible Members in the requested
-      // Organization, including those on other pages. No Person ID is shown.
-      label_unique_in_organization:m.label_unique_in_organization as boolean,
-      // This flag is checked across every active member, not only this page.
-      // A second indistinguishable active grant must never permit a
-      // misleading person-specific revoke.
-      other_active_grant_same_label:m.other_active_grant_same_label as boolean,
-      member_name:typeof m.member_name==="string"&&m.member_name.trim().length>0&&
-        m.member_name.trim().length<=160?m.member_name.trim():null,
-      mobile_phone:typeof m.mobile_phone==="string"&&
-        /^\+?[0-9]{6,20}$/.test(m.mobile_phone)?m.mobile_phone:null,
-      invitation_email:typeof m.invitation_email==="string"&&
-        m.invitation_email.length>0?m.invitation_email:null
-    }))
-    if(new Set(members.map(m=>m.membership_id)).size!==members.length||
-       new Set(members.map(m=>m.person_id)).size!==members.length)
-      throw new IdentityAccessDenied()
-    const next_cursor=has_more?members[members.length-1].membership_id:null
-    if(!members.length)return {members,grants:[],has_more:false,next_cursor:null}
-    const ids=members.map(m=>m.membership_id)
-    const grants=await db.execute(`select g.id,g.person_id,g.membership_id
-      from da_organization_store_draft_permission g
-      join da_audit_event e on e.id=g.source_audit_event_id and e.deleted_at is null
-        and e.module='dogruadres-access' and e.actor_person_id=g.issued_by_person_id
-        and e.organization_id=g.organization_id and e.target_id=g.person_id
-        and e.action='organization.store_draft_permission_granted'
-        and e.resource='store-draft-permission'
-        and e.new_values->>'grant_id'=g.id
-        and e.new_values->>'person_id'=g.person_id
-        and e.new_values->>'membership_id'=g.membership_id
-        and e.new_values->>'permission'=g.permission
-      join da_audit_outbox x on x.source_audit_event_id=e.id
-        and x.source_module='dogruadres-access' and x.deleted_at is null
-      where g.organization_id=? and g.permission='store.application.draft.manage'
-        and g.revoked_at is null and g.membership_id in (${ids.map(()=>"?").join(",")})
-      order by g.id limit 31`,[org,...ids])
-    if(grants.length>30||grants.some(g=>typeof g.id!=="string"||
-       !/^dasdpg_[A-Za-z0-9_-]+$/.test(g.id)||
-       typeof g.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(g.person_id)||
-       typeof g.membership_id!=="string"||
-       !/^[A-Za-z0-9_-]{1,128}$/.test(g.membership_id)||
-       !members.some(m=>m.membership_id===g.membership_id&&m.person_id===g.person_id))||
-       new Set(grants.map(g=>g.person_id)).size!==grants.length)
-      throw new IdentityAccessDenied()
-    return {members,grants,has_more,next_cursor}
+  private storeProductPermissions_(context: Context) {
+    return new StoreProductPermissionOperations(
+      securitySql(context.transactionManager),
+      this.persistAuditEventsWithOutbox_.bind(this),
+      context
+    )
   }
 
-  /** Same Foundation transaction, provenance, and Owner guard as the existing
-   * buyer permission writer. The immutable Owner group itself is unchanged.
-   */
-  @InjectTransactionManager()
-  async personalChangeStoreDraftPermission(
-    token:string,input:{action:"grant"|"revoke";organization_id:string;membership_id:string},
-    @MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^[A-Za-z0-9_-]{1,128}$/.test(input.membership_id)||
-       !["grant","revoke"].includes(input.action))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const actor=await sessions.current(token,true,false)
-    if(!actor)return null
-    const organization=await sessions.organizations(token,input.organization_id,false)
-    if(!organization||organization.person_id!==actor.person_id||
-       organization.organizations.length!==1||organization.organizations[0].role!=="owner"||
-       !organizationActionAllowed("owner","membership.manage",
-         await isCurrentProtectedOwner(db,actor.person_id,input.organization_id),false))
-      return null
-    const target=await db.execute(`select m.person_id from da_organization_membership m
-      join da_person p on p.id=m.person_id
-      join da_organization o on o.id=m.organization_id and o.status='active' and o.deleted_at is null
-      where m.id=? and m.organization_id=? and m.role='member'
-        and m.protected_owner=false and m.revoked_at is null and m.deleted_at is null
-        ${input.action==="grant"?"and m.status='active' and p.disabled_at is null and p.deleted_at is null":""}
-      for share of m,p,o`,[input.membership_id,input.organization_id])
-    if(target.length!==1||typeof target[0].person_id!=="string"||
-       !/^daprs_[A-Za-z0-9_-]+$/.test(target[0].person_id))return null
-    // Membership identity and Owner authority are checked on the live records.
-    // Personal phone changes alone never change which Member is the target.
-    const personId=target[0].person_id as string
-    // A revoked grant cannot authorize an in-flight draft: both paths take
-    // the identical transaction-scoped lock before inspecting the grant.
-    await db.execute(`select pg_advisory_xact_lock(
-      hashtext('b22-store-draft-grant'),hashtext(?))`,
-      [input.organization_id+":"+personId])
-    const active=await db.execute(`select id,membership_id
-      from da_organization_store_draft_permission
-      where person_id=? and organization_id=?
-        and permission='store.application.draft.manage' and revoked_at is null
-      for update`,[personId,input.organization_id])
-    if(active.length>1||active.some(g=>typeof g.id!=="string"||
-        !/^dasdpg_[A-Za-z0-9_-]+$/.test(g.id)||
-        typeof g.membership_id!=="string"))throw new IdentityAccessDenied()
-    if(input.action==="grant"){
-      // A current protected Owner cannot grant to an unidentifiable legacy
-      // employee, even by a forged direct HTTP POST. Names alone are never
-      // enough: at least a valid recorded phone or accepted invitation email
-      // and a distinct visible label within this entire Organization are
-      // required. The target Person row is already locked by the transaction.
-      const readable=await db.execute(`select p.display_name,
-          p.mobile_phone,${acceptedInviteSqlLabel("inv")} as recipient_email,
-          exists(
-            select 1 from da_organization_membership other
-            join da_person op on op.id=other.person_id
-              and op.disabled_at is null and op.deleted_at is null
-            left join lateral (
-              select oi.recipient_email from da_organization_invitation oi
-              where oi.organization_id=other.organization_id
-                and oi.accepted_by_person_id=other.person_id
-                and oi.status='accepted' and oi.role='member'
-                and oi.deleted_at is null
-              order by oi.accepted_at desc nulls last,oi.id desc limit 1
-            ) oinv on true
-            where other.organization_id=m.organization_id and other.id<>m.id
-              and other.role='member' and other.protected_owner=false
-              and other.status='active' and other.revoked_at is null
-              and other.deleted_at is null
-              and lower(btrim(coalesce(op.display_name,'')))=
-                  lower(btrim(coalesce(p.display_name,'')))
-              and ${acceptedInviteSqlLabel("oinv")}=
-                  ${acceptedInviteSqlLabel("inv")}
-              and coalesce(case when op.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$'
-                then op.mobile_phone end,'')=
-                  coalesce(case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$'
-                    then p.mobile_phone end,'')
-          ) as ambiguous
-        from da_organization_membership m
-        join da_person p on p.id=m.person_id
-          and p.disabled_at is null and p.deleted_at is null
-        left join lateral (
-          select i.recipient_email from da_organization_invitation i
-          where i.organization_id=m.organization_id
-            and i.accepted_by_person_id=m.person_id
-            and i.status='accepted' and i.role='member'
-            and i.deleted_at is null
-          order by i.accepted_at desc nulls last,i.id desc limit 1
-        ) inv on true
-        where m.id=? and m.organization_id=? and m.person_id=?
-          and m.status='active' and m.revoked_at is null and m.deleted_at is null
-        limit 2`,[input.membership_id,input.organization_id,personId])
-      if(readable.length!==1||readable[0].ambiguous!==false||
-         !(typeof readable[0].mobile_phone==="string"&&
-           /^\+?[0-9]{6,20}$/.test(readable[0].mobile_phone))&&
-         !(typeof readable[0].recipient_email==="string"&&
-           readable[0].recipient_email.length>0))
-        throw new IdentityAccessDenied()
-      if(active.length){
-        if(active[0].membership_id!==input.membership_id||
-           !await verifiedStoreDraftGrant(db,personId,input.organization_id,input.membership_id))
-          throw new IdentityAccessDenied()
-        return {status:"active" as const,grant_id:active[0].id as string}
-      }
-      const grantId="dasdpg_"+randomUUID()
-      const [audit]=await this.persistAuditEventsWithOutbox_([{
-        actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
-        role_context:"owner",organization_id:input.organization_id,
-        action:"organization.store_draft_permission_granted",module:DOGRUADRES_AUDIT_MODULE,
-        resource:"store-draft-permission",target_id:personId,
-        new_values:{grant_id:grantId,person_id:personId,
-          membership_id:input.membership_id,permission:"store.application.draft.manage"},
-        occurred_at:new Date()
-      }],context)
-      if(!audit?.id)throw new IdentityAccessDenied()
-      await (context.transactionManager as {flush():Promise<void>}).flush()
-      await db.execute(`insert into da_organization_store_draft_permission
-        (id,person_id,organization_id,membership_id,permission,
-         issued_by_person_id,source_audit_event_id)
-        values (?,?,?,?,'store.application.draft.manage',?,?)`,
-        [grantId,personId,input.organization_id,input.membership_id,actor.person_id,audit.id])
-      await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
-        values (?,?,?)`,["danot_"+randomUUID(),personId,audit.id])
-      await queueDigestIfEligible(db, {
-        person_id: personId,
-        organization_id: input.organization_id,
-        category: "store_operations",
-        event_action: audit.action,
-        audit_event_id: audit.id,
-        summary_key: "store_draft_permission",
-      })
-      return {status:"active" as const,grant_id:grantId}
-    }
-    if(!active.length)return {status:"revoked" as const,grant_id:null}
-    // The Owner UI cannot distinguish two already-authorized people
-    // sharing name, accepted invitation email and usable mobile. Reject direct
-    // stale/forged individual revoke requests too; never pick a Person ID
-    // silently. Only same-Organization active memberships are compared.
-    const ambiguousRevocation=await db.execute(`select 1
-      from da_organization_membership m
-      join da_person p on p.id=m.person_id
-      left join lateral (
-        select i.recipient_email from da_organization_invitation i
-        where i.organization_id=m.organization_id
-          and i.accepted_by_person_id=m.person_id
-          and i.status='accepted' and i.role='member'
-          and i.deleted_at is null
-        order by i.accepted_at desc nulls last,i.id desc limit 1
-      ) inv on true
-      join da_organization_store_draft_permission other_grant
-        on other_grant.organization_id=m.organization_id
-          and other_grant.permission='store.application.draft.manage'
-          and other_grant.revoked_at is null
-      join da_organization_membership other
-        on other.id=other_grant.membership_id
-          and other.person_id=other_grant.person_id
-          and other.organization_id=other_grant.organization_id
-      join da_person op on op.id=other.person_id
-        and op.disabled_at is null and op.deleted_at is null
-      left join lateral (
-        select oi.recipient_email from da_organization_invitation oi
-        where oi.organization_id=other.organization_id
-          and oi.accepted_by_person_id=other.person_id
-          and oi.status='accepted' and oi.role='member'
-          and oi.deleted_at is null
-        order by oi.accepted_at desc nulls last,oi.id desc limit 1
-      ) oinv on true
-      where m.id=? and m.organization_id=? and m.person_id=?
-        and other.id<>m.id and other.role='member'
-        and other.protected_owner=false and other.status='active'
-        and other.revoked_at is null and other.deleted_at is null
-        and lower(btrim(coalesce(op.display_name,'')))=
-            lower(btrim(coalesce(p.display_name,'')))
-        and ${acceptedInviteSqlLabel("oinv")}=
-            ${acceptedInviteSqlLabel("inv")}
-        and coalesce(case when op.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then op.mobile_phone end,'')=
-            coalesce(case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then p.mobile_phone end,'')
-      limit 1`,[input.membership_id,input.organization_id,personId])
-    if(ambiguousRevocation.length)throw new IdentityAccessDenied()
-    const grantId=active[0].id as string
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
-      role_context:"owner",organization_id:input.organization_id,
-      action:"organization.store_draft_permission_revoked",module:DOGRUADRES_AUDIT_MODULE,
-      resource:"store-draft-permission",target_id:personId,
-      previous_values:{grant_id:grantId,person_id:personId,
-        membership_id:active[0].membership_id,permission:"store.application.draft.manage"},
-      new_values:{grant_id:grantId,status:"revoked"},occurred_at:new Date()
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const result=await db.execute(`update da_organization_store_draft_permission
-      set revoked_at=clock_timestamp() where id=? and revoked_at is null returning id`,[grantId])
-    if(result.length!==1)throw new IdentityAccessDenied()
-    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
-      values (?,?,?)`,["danot_"+randomUUID(),personId,audit.id])
-    await queueDigestIfEligible(db, {
-      person_id: personId,
-      organization_id: active[0].organization_id,
-      category: "store_operations",
-      event_action: audit.action,
-      audit_event_id: audit.id,
-      summary_key: "store_draft_permission",
-    })
-    return {status:"revoked" as const,grant_id:grantId}
+  private buyerOperations_(context: Context) {
+    return new BuyerOperations(
+      securitySql(context.transactionManager),
+      this.persistAuditEventsWithOutbox_.bind(this),
+      context
+    )
   }
 
-  // A dedicated platform task is required. Holding organization.provision or
-  // store.approve must NEVER silently grant this independent company policy
-  // authority. An explicit task grant with strong authentication is mandatory.
-  @InjectTransactionManager()
-  async personalPlatformStoreApplicationRight(token:string,org:string,
-    @MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"store.application.policy.manage","platform")
-    if(!staff)return null
-    const rows=await db.execute(`select id,name,store_application_enabled,store_application_version
-      from da_organization where id=? and status='active' and deleted_at is null`,[org])
-    if(rows.length!==1||typeof rows[0].store_application_enabled!=="boolean"||
-       !Number.isSafeInteger(rows[0].store_application_version)||
-       rows[0].store_application_version<0)return null
-    return {organization_id:rows[0].id as string,
-      name:rows[0].name as string,
-      store_application_enabled:rows[0].store_application_enabled as boolean,
-      store_application_version:rows[0].store_application_version as number}
+  private storeRename_(context: Context) {
+    return new StoreRenameOperations(
+      securitySql(context.transactionManager),
+      this.persistAuditEventsWithOutbox_.bind(this),
+      context
+    )
+  }
+
+  private async ownerPauseSessionPrelock_(db: SecuritySql, token: string) {
+    return StoreLifecycleOperations.defaultOwnerPauseSessionPrelock_(db, token)
+  }
+
+  private async ownerPauseScope_(db: SecuritySql, token: string, organizationId: string, sellerId: string, personFirst = false) {
+    return StoreLifecycleOperations.defaultOwnerPauseScope_(db, token, organizationId, sellerId, personFirst)
+  }
+
+  private storeLifecycle_(context: Context) {
+    return new StoreLifecycleOperations(
+      securitySql(context.transactionManager),
+      this.persistAuditEventsWithOutbox_.bind(this),
+      context,
+      this.ownerPauseSessionPrelock_.bind(this),
+      this.ownerPauseScope_.bind(this)
+    )
+  }
+
+  private productDrafts_(context: Context) {
+    return new ProductDraftOperations(
+      securitySql(context.transactionManager),
+      this.persistAuditEventsWithOutbox_.bind(this),
+      this.readablePersonalOrganizations_.bind(this),
+      context
+    )
+  }
+
+  private launchers_(context: Context) {
+    return new LauncherOperations(
+      securitySql(context.transactionManager),
+      this.readablePersonalOrganizations_.bind(this),
+      context
+    )
   }
 
   @InjectTransactionManager()
-  async personalSetStoreApplicationRight(token:string,input:{
-    organization_id:string;expected_enabled:boolean;expected_version:number;enabled:boolean;reason:string
-  },@MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       typeof input.expected_enabled!=="boolean"||typeof input.enabled!=="boolean"||
-       !Number.isSafeInteger(input.expected_version)||input.expected_version<0||
-       input.expected_version>=2147483647||
-       input.expected_enabled===input.enabled||
-       typeof input.reason!=="string"||input.reason.trim()!==input.reason||
-       input.reason.length<10||input.reason.length>500)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const staff=await sessions.staff(token,"store.application.policy.manage","platform")
-    if(!staff)return null
-    const grant=await db.execute(`select id from da_platform_staff_grant
-      where id=? and person_id=? and task='store.application.policy.manage' and resource='platform'
-      and revoked_at is null and (expires_at is null or expires_at>clock_timestamp())
-      for share`,[staff.grant_id,staff.person_id])
-    if(grant.length!==1)return null
-    // Serializes against active native Store creation/approval, both of which
-    // hold this same row FOR SHARE until their workflow has finished.
-    const rows=await db.execute(`select store_application_enabled,store_application_version
-      from da_organization where id=? and status='active' and deleted_at is null
-      for update`,[input.organization_id])
-    if(rows.length!==1||typeof rows[0].store_application_enabled!=="boolean"||
-       !Number.isSafeInteger(rows[0].store_application_version)||
-       rows[0].store_application_version<0)return null
-    const prior=rows[0].store_application_enabled as boolean
-    const version=rows[0].store_application_version as number
-    // TRUE -> FALSE -> TRUE is NOT the same version as the first TRUE.
-    // Reject stale tabs before writing any audit/outbox or notices.
-    if(prior!==input.expected_enabled||version!==input.expected_version)
-      return {status:"conflict" as const}
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:staff.person_id,actor_type:staff.actor_type,actor_id:staff.actor_id,
-      role_context:"platform_staff",organization_id:input.organization_id,
-      action:input.enabled?"organization.store_application_right_enabled":
-        "organization.store_application_right_disabled",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"organization",
-      target_id:input.organization_id,
-      previous_values:{store_application_enabled:prior,store_application_version:version},
-      new_values:{store_application_enabled:input.enabled,
-        store_application_version:version+1,
-        reason:input.reason,staff_grant_id:staff.grant_id},
-      occurred_at:new Date()
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    const manager=context.transactionManager
-    if(!manager||typeof manager!=="object"||!("flush" in manager)||
-       typeof manager.flush!=="function")throw new Error("Foundation transaction unavailable")
-    await manager.flush()
-    const updated=await db.execute(`update da_organization
-      set store_application_enabled=?,store_application_version=store_application_version+1,
-        updated_at=clock_timestamp()
-      where id=? and store_application_enabled=? and store_application_version=?
-      returning id,store_application_version`,
-      [input.enabled,input.organization_id,prior,version])
-    if(updated.length!==1)throw new IdentityAccessDenied()
-    // Existing Foundation in-app notification receipts: one private receipt for
-    // each currently protected active Owner, all attached to this exact audit.
-    // A failed insert rolls back both the company policy and its audit/outbox.
-    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
-      select 'danot_'||gen_random_uuid()::text,m.person_id,?
-      from da_organization_membership m join da_person p on p.id=m.person_id
-      where m.organization_id=? and m.role='owner' and m.protected_owner=true
-        and m.status='active' and m.deleted_at is null
-        and p.disabled_at is null and p.deleted_at is null
-      on conflict(audit_event_id,person_id) do nothing`,[audit.id,input.organization_id])
-    return {status:"updated" as const,
-      organization_id:input.organization_id,
-      store_application_enabled:input.enabled,
-      store_application_version:updated[0].store_application_version as number}
-  }
-
-  /** Resolve ONLY the persisted draft for Owner's fresh-MFA approval. The
-   * browser supplies its ID/version, never trusted Seller name/email values.
-   * Reservation rechecks this same snapshot under the draft row lock.
-   */
-  @InjectTransactionManager()
-  async personalPrepareStoreApplicationFromDraft(token:string,input:{
-    organization_id:string;draft_id:string;expected_version:number;application_id:string
-  },@MedusaContext() context:Context={}):Promise<StoreRequest|{conflict:true}|null>{
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^dasdraft_[0-9a-f]{32}$/.test(input.draft_id)||
-       !/^daapp_[0-9a-f]{32}$/.test(input.application_id)||
-       !Number.isSafeInteger(input.expected_version)||input.expected_version<1)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    if(!await eligibleOwner(db,token,input.organization_id))return null
-    const rows=await db.execute(`select name,email,currency_code,status,version,submitted_application_id
-      from da_store_application_draft where id=? and organization_id=? limit 2`,
-      [input.draft_id,input.organization_id])
-    if(rows.length!==1)return null
-    const draft=rows[0]
-    if(!Number.isSafeInteger(draft.version)||
-       typeof draft.name!=="string"||typeof draft.email!=="string"||
-       typeof draft.currency_code!=="string")throw new IdentityAccessDenied()
-    if(draft.version!==input.expected_version||
-       !(draft.status==="draft"&&draft.submitted_application_id===null||
-         ["submitting","submitted"].includes(draft.status)&&
-           draft.submitted_application_id===input.application_id))
-      return {conflict:true}
-    return {organization_id:input.organization_id,application_id:input.application_id,
-      name:draft.name,email:draft.email,currency_code:draft.currency_code,
-      draft_id:input.draft_id,draft_version:input.expected_version}
-  }
-
-  /** B22 Owner membership revoke vs native Mercur Seller creation.
-   * The canonical protected Owner membership is held FOR SHARE for the entire
-   * native workflow and Foundation audit completion. The existing separately
-   * committed claim='creating' remains the durable idempotency barrier; do
-   * NOT move it into this outer transaction (crash could allow duplicate Seller).
-   */
-  @InjectTransactionManager()
-  async personalWithStoreApplicationOwnerLock<T>(
-    token:string,input:StoreRequest,execute:(context:Context)=>Promise<T>,
-    @MedusaContext() context:Context={}
-  ):Promise<T|null>{
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^daapp_[0-9a-f]{32}$/.test(input.application_id)||
-       typeof execute!=="function")throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const actor=await eligibleOwner(db,token,input.organization_id)
-    if(!actor)return null
-    // Verify the immutable committed claim, native Member and payload before
-    // touching Mercur. Keep this row stable until the same Foundation manager
-    // completes the Origin/Audit write after native creation.
-    const rows=await db.execute(`select id from da_store_application
-      where id=? and organization_id=? and person_id=?
-        and member_actor_id=? and member_auth_identity_id=?
-        and request_fingerprint=? and status='creating' and seller_id is null
-        and store_name_hash is not null
-      for share`,[input.application_id,input.organization_id,actor.person_id,
-        actor.member_id,actor.member_auth_identity_id,storeRequestFingerprint(input)])
-    if(rows.length!==1)return null
-    return execute(context)
+  async personalOwnerStorePauseState(token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalOwnerStorePauseState(token, organizationId, sellerId, context)
   }
 
   @InjectTransactionManager()
-  async reserveStoreApplication(token:string,input:StoreRequest,@MedusaContext() context:Context={}){
-    const db=securitySql(context.transactionManager),actor=await eligibleOwner(db,token,input.organization_id)
-    if(!actor)return null
-    if(input.draft_id!==undefined&&
-       (!/^dasdraft_[0-9a-f]{32}$/.test(input.draft_id)||
-        typeof input.draft_version!=="number"||
-        !Number.isSafeInteger(input.draft_version)||input.draft_version<1))
-      throw new IdentityAccessDenied()
-    if(input.draft_id===undefined&&input.draft_version!==undefined)
-      throw new IdentityAccessDenied()
-    const fingerprint=storeRequestFingerprint(input)
-    await db.execute(`select pg_advisory_xact_lock(hashtext('b22-store-application'),hashtext(?))`,
-      [input.application_id])
-    // Lock the application row BEFORE its draft. The native Seller
-    // completion transaction holds this application FOR SHARE and later
-    // updates the draft. A second Owner must wait on the application, not
-    // hold the draft while waiting: that would deadlock the first Owner.
-    // The advisory lock still serializes identical application IDs; the
-    // draft row still serializes distinct IDs and concurrent Member saves.
-    const prior=await db.execute(`select * from da_store_application where id=? for update`,[input.application_id])
-    if(prior.length>1)throw new IdentityAccessDenied()
-    let draft:null|{status:string;submitted_application_id:string|null}=null
-    if(input.draft_id!==undefined){
-      const rows=await db.execute(`select name,email,currency_code,version,status,submitted_application_id
-        from da_store_application_draft
-        where id=? and organization_id=? for update`,
-        [input.draft_id,input.organization_id])
-      if(rows.length!==1)return {status:"conflict" as const}
-      const d=rows[0]
-      if(d.name!==input.name||d.email!==input.email||
-         d.currency_code!==input.currency_code||d.version!==input.draft_version||
-         !(d.status==="draft"&&d.submitted_application_id===null||
-           ["submitting","submitted"].includes(d.status)&&
-             d.submitted_application_id===input.application_id))
-        return {status:"conflict" as const}
-      draft={status:d.status,submitted_application_id:d.submitted_application_id}
-    }
-    if(prior.length){
-      const r=prior[0]
-      if(r.organization_id!==input.organization_id||r.person_id!==actor.person_id||
-         r.member_actor_id!==actor.member_id||r.request_fingerprint!==fingerprint||
-         (draft!==null&&(draft.status==="draft"||
-            draft.submitted_application_id!==input.application_id)))
-        throw new IdentityAccessDenied()
-      // Historical reserved/creating rows have no verified normalized name
-      // claim. Fail closed before their legacy native creation can bypass a
-      // newer Organization's global claim. Created rows remain readable.
-      if(r.status!=="created"&&r.store_name_hash===null)
-        return {status:"name_unverified" as const,seller_id:null}
-      return {status:r.status as string,seller_id:r.seller_id as string|null}
-    }
-    if(draft!==null&&draft.status!=="draft")return {status:"conflict" as const}
-    // PostgreSQL computes the *same* NFKC, whitespace and case-insensitive
-    // name key for existing native Sellers and all new Organization claims.
-    // Keep the irreversible claim before native Seller creation; never hold
-    // this lock across separate transactions or guess an uncertain outcome.
-    const names=await db.execute(`select encode(sha256(convert_to(
-      lower(regexp_replace(btrim(normalize(?,NFKC)),'[[:space:]]+',' ','g')),
-      'UTF8')),'hex') as store_name_hash`,[input.name])
-    const nameHash=names[0]?.store_name_hash
-    if(names.length!==1||typeof nameHash!=="string"||
-       !/^[a-f0-9]{64}$/.test(nameHash))throw new IdentityAccessDenied()
-    await db.execute(`select pg_advisory_xact_lock(
-      hashtext('b22-global-store-name'),hashtext(?))`,[nameHash])
-    const reserved=await db.execute(`select id from da_store_application
-      where store_name_hash=? and
-        (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
-      limit 1`,[nameHash])
-    if(reserved.length)return {status:"name_taken" as const}
-    const assigned=await db.execute(`select 1 from da_store_name_transfer
-      where status='assigned' and
-        (name_hash=? or old_handle=?) limit 1`,[nameHash,toHandle(input.name)])
-    if(assigned.length)return {status:"name_taken" as const}
-    // Mercur derives the handle from the new Seller name. Reserve BOTH the
-    // original URL and any other Store's in-flight proposed URL for 30 days.
-    const generatedHandle=toHandle(input.name)
-    const hold=await db.execute(`select 1 from da_store_rename_request r
-      where (r.status='approving' or
-        (r.status='approved' and r.approved_at>
-          clock_timestamp()-interval '30 days'))
-      and (
-        (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.old_name,NFKC)),
-          '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.old_handle=?)
-        or (r.status='approving' and
-          (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.proposed_name,NFKC)),
-            '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.proposed_handle=?))
-      ) limit 1`,[nameHash,generatedHandle,nameHash,generatedHandle])
-    if(hold.length)return {status:"name_taken" as const}
-    // A legacy native Seller may predate DoğruAdres name claims. Read only
-    // its name, with no cross-Organization details in the HTTP response.
-    // A deleted Seller also keeps the name during the approved 30-day hold.
-    const nativeExisting=await db.execute(`select id from seller
-      where (deleted_at is null or
-        deleted_at>clock_timestamp()-interval '30 days')
-        and encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(name,NFKC)),
-          '[[:space:]]+',' ','g')),
-          'UTF8')),'hex')=? limit 1`,[nameHash])
-    if(nativeExisting.length)return {status:"name_taken" as const}
-    await db.execute(`insert into da_store_application
-      (id,organization_id,person_id,member_actor_id,member_auth_identity_id,
-       request_fingerprint,store_name_hash,status)
-      values(?,?,?,?,?,?,?,'reserved')`,[input.application_id,input.organization_id,actor.person_id,
-      actor.member_id,actor.member_auth_identity_id,fingerprint,nameHash])
-    if(input.draft_id!==undefined){
-      const bound=await db.execute(`update da_store_application_draft
-        set status='submitting',submitted_application_id=?,updated_at=clock_timestamp()
-        where id=? and organization_id=? and status='draft' and version=?
-          and submitted_application_id is null returning id`,
-        [input.application_id,input.draft_id,input.organization_id,input.draft_version])
-      if(bound.length!==1)throw new IdentityAccessDenied()
-    }
-    return {status:"reserved" as const,seller_id:null}
+  async personalOwnerStorePauseChange(token:string,input:{
+    organization_id:string;seller_id:string;action:"pause"|"resume";
+    request_id:string;expected_version:number
+  },@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalOwnerStorePauseChange(token, input, context)
   }
 
   @InjectTransactionManager()
-  async claimStoreApplication(token:string,input:StoreRequest,@MedusaContext() context:Context={}){
-    const db=securitySql(context.transactionManager),actor=await eligibleOwner(db,token,input.organization_id)
-    if(!actor)return null
-    const rows=await db.execute(`update da_store_application
-      set status='creating',updated_at=clock_timestamp()
-      where id=? and organization_id=? and person_id=? and member_actor_id=?
-        and member_auth_identity_id=? and request_fingerprint=? and status='reserved'
-      returning member_actor_id,member_auth_identity_id`,[
-      input.application_id,input.organization_id,actor.person_id,actor.member_id,
-      actor.member_auth_identity_id,storeRequestFingerprint(input)])
-    if(rows.length!==1)return null
-    return {member_id:rows[0].member_actor_id as string,
-      member_auth_identity_id:rows[0].member_auth_identity_id as string}
+  async storeOwnerPauseAcceptingOrders(sellerIds:string[],
+    @MedusaContext() context:Context={}):Promise<boolean> {
+    return this.storeLifecycle_(context).storeOwnerPauseAcceptingOrders(sellerIds, context)
   }
 
   @InjectTransactionManager()
-  async finishStoreApplication(token:string,input:StoreRequest,sellerId:string,
-    @MedusaContext() context:Context={}){
-    const db=securitySql(context.transactionManager),actor=await eligibleOwner(db,token,input.organization_id)
-    if(!actor||!/^sel_[A-Za-z0-9_-]+$/.test(sellerId))return null
-    const pending=await db.execute(`select id from da_store_application
-      where id=? and organization_id=? and person_id=? and member_actor_id=?
-        and request_fingerprint=? and status='creating' for update`,[
-      input.application_id,input.organization_id,actor.person_id,actor.member_id,
-      storeRequestFingerprint(input)])
-    if(pending.length!==1)return null
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
-      role_context:"owner",organization_id:input.organization_id,
-      action:"organization.store_application_created",module:DOGRUADRES_AUDIT_MODULE,
-      resource:"store-application",target_id:sellerId,
-      new_values:{application_id:input.application_id,status:"pending_approval",
-        ...(input.draft_id?{draft_id:input.draft_id,draft_version:input.draft_version}:{})},
-      occurred_at:new Date()
-    }],context)
-    // The Medusa createAuditEvents/createAuditOutboxes calls stage ORM writes.
-    // Flush on this SAME transaction manager before the raw SQL FK insert;
-    // do not commit or open an independent transaction.
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    await db.execute(`insert into da_organization_seller_ownership
-      (id,organization_id,seller_id,verification_audit_event_id,verified_at)
-      values(?,?,?,?,clock_timestamp())`,[
-      "daown_"+randomUUID(),input.organization_id,sellerId,audit.id])
-    const finish=await db.execute(`update da_store_application set seller_id=?,
-      status='created',updated_at=clock_timestamp()
-      where id=? and status='creating' returning id`,[sellerId,input.application_id])
-    if(finish.length!==1)throw new IdentityAccessDenied()
-    if(input.draft_id!==undefined){
-      const submitted=await db.execute(`update da_store_application_draft
-        set status='submitted',updated_at=clock_timestamp()
-        where id=? and organization_id=? and submitted_application_id=?
-          and version=? and status='submitting'
-        returning id`,[input.draft_id,input.organization_id,input.application_id,input.draft_version])
-      if(submitted.length!==1)throw new IdentityAccessDenied()
-    }
-    return {seller_id:sellerId}
+  async personalOwnerClosingState(token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalOwnerClosingState(token, organizationId, sellerId, context)
   }
 
-  // B22: a separate and explicitly granted platform task reviews only
-  // persisted Owner-submitted applications. This is not native User access,
-  // not an Organization Owner entitlement and not a separate link approval.
-  /** B22: Hold the actual Staff grant row across native Mercur approval.
-   * The same PostgreSQL row is updated by grant revocation, so a committed
-   * revoke cannot race ahead of the native Store opening.
-   * No platform authority is derived from a business Owner role.
-   * This is not a cross-module transaction or general crash-recovery claim.
-   */
   @InjectTransactionManager()
-  async personalWithStoreApprovalStaffLock<T>(
-    token:string,target:{application_id:string;seller_id:string;decision?:"reject"|"unsuspend"|"reconcile"|"release"},
-    execute:(context:Context)=>Promise<T>,@MedusaContext() context:Context={}
-  ):Promise<T|null>{
-    if(!/^daapp_[0-9a-f]{32}$/.test(target.application_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id)||
-       (target.decision!==undefined&&!["reject","unsuspend","reconcile","release"].includes(target.decision))||
-       typeof execute!=="function")throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const staff=await sessions.staff(token,"store.approve","platform")
-    if(!staff)return null
-    // Unlike an advisory-only lock, a row SHARE lock also serializes an
-    // ordinary UPDATE ... revoked_at on the canonical staff-grant record.
-    const locked=await db.execute(`select g.id from da_platform_staff_grant g
-      where g.id=? and g.person_id=? and g.task='store.approve'
-        and g.resource='platform' and g.revoked_at is null
-        and (g.expires_at is null or g.expires_at>clock_timestamp())
-      for share of g`,[staff.grant_id,staff.person_id])
-    if(locked.length!==1||locked[0].id!==staff.grant_id)return null
-    const fresh=await sessions.staff(token,"store.approve","platform")
-    if(!fresh||fresh.grant_id!==staff.grant_id)return null
-    // Both platform decisions share ONE per-Seller lock across their entire
-    // native workflow and readback. Independent staff grants must not let an
-    // approve and reject race to two conflicting terminal states.
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-platform-store-decision'),hashtext(?))",
-      [target.seller_id])
-    const candidate=await this.personalReviewableStoreApplications(token,target,context)
-    if(!candidate||candidate.length!==1)return null
-    // An already submitted application may be REJECTED even while the
-    // company's new-application policy is paused. Only new native APPROVAL
-    // remains blocked. Neither choice changes existing open Stores.
-    if(target.decision===undefined){
-      const policy=await db.execute(`select store_application_enabled
-        from da_organization where id=? and status='active' and deleted_at is null
-        for share`,[candidate[0].organization_id])
-      if(policy.length!==1||policy[0].store_application_enabled!==true)return null
-    }
-    const latest=await this.personalReviewableStoreApplications(token,target,context)
-    if(!latest||latest.length!==1||
-       (target.decision===undefined&&latest[0].on_hold))return null
-    return execute(context)
+  async personalOwnerClosingChange(token:string,input:{
+    organization_id:string;seller_id:string;action:"start"|"withdraw";
+    request_id:string;expected_version:number;consequences_acknowledged?:boolean
+  },@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalOwnerClosingChange(token, input, context)
   }
 
+  @InjectTransactionManager()
+  async personalReviewablePlatformStoreClosings(token:string,page=0,
+    @MedusaContext() context:Context={},
+    target?:{organization_id:string;seller_id:string}) {
+    return this.storeLifecycle_(context).personalReviewablePlatformStoreClosings(token, page, context, target)
+  }
 
-  /** B22: Existing Mercur unsuspend may run only for the same historical
-   * approved Seller whose active normalized name/URL still belongs to it.
-   * The caller holds the actual Staff grant and the shared Seller decision
-   * lock; the global name lock serializes concurrent first-party claims.
-   * No name reassignment, unilateral Owner approval or native core patch.
-   */
-  /**
-   * Staff-only, reasoned transfer of one suspended Store's original name
-   * RIGHT. Neither the source nor the recipient Seller is mutated or opened.
-   * The source must later rename under its real Owner/Staff approval; the
-   * recipient can only use the URL after that native rename has completed.
-   */
+  @InjectTransactionManager()
+  async personalStartPlatformStoreClosing(token:string,input:{
+    organization_id:string;seller_id:string;request_id:string;reason:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalStartPlatformStoreClosing(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async settlePlatformClosingAdminFallback(@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).settlePlatformClosingAdminFallback(context)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformStoreClosingEmailAudience(token:string,organizationId:string,
+    sellerId:string,@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalPlatformStoreClosingEmailAudience(token, organizationId, sellerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformStoreClosingEmailProgress(token:string,organizationId:string,
+    sellerId:string,@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalPlatformStoreClosingEmailProgress(token, organizationId, sellerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformStoreClosingEmailLinkVisit(
+    token:string,linkToken:string,@MedusaContext() context:Context={}
+  ) {
+    return this.storeLifecycle_(context).personalPlatformStoreClosingEmailLinkVisit(token, linkToken, context)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformStoreClosingState(token:string,organizationId:string,
+    sellerId:string,@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalPlatformStoreClosingState(token, organizationId, sellerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalAppealPlatformStoreClosing(token:string,input:{
+    organization_id:string;seller_id:string;request_id:string;
+    expected_version:number;reason:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalAppealPlatformStoreClosing(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalRequestPlatformStoreClosingFinalReview(token:string,input:{
+    organization_id:string;seller_id:string;request_id:string;
+    expected_version:number;reason:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalRequestPlatformStoreClosingFinalReview(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalReviewablePlatformClosingAppeals(token:string,page=0,
+    @MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalReviewablePlatformClosingAppeals(token, page, context)
+  }
+
+  @InjectTransactionManager()
+  async personalDecidePlatformClosingAppeal(token:string,input:{
+    organization_id:string;seller_id:string;source_request_id:string;
+    request_id:string;decision:"accepted"|"rejected";reason:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeLifecycle_(context).personalDecidePlatformClosingAppeal(token, input, context)
+  }
+
   @InjectTransactionManager()
   async personalAssignSuspendedStoreNameRight(token:string,input:{
     transfer_id:string;source_application_id:string;source_seller_id:string;
     target_application_id:string;target_seller_id:string;
     expected_name:string;expected_handle:string;reason:string
-  },@MedusaContext() context:Context={}){
-    if(!/^dastr_[a-f0-9]{32}$/.test(input.transfer_id)||
-       !/^daapp_[a-f0-9]{32}$/.test(input.source_application_id)||
-       !/^daapp_[a-f0-9]{32}$/.test(input.target_application_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.source_seller_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.target_seller_id)||
-       input.source_seller_id===input.target_seller_id||
-       typeof input.expected_name!=="string"||!validStoreName(input.expected_name)||
-       typeof input.expected_handle!=="string"||!validStoreHandle(input.expected_handle)||
-       typeof input.reason!=="string"||input.reason.trim()!==input.reason||
-       input.reason.length<10||input.reason.length>500||
-       [...input.reason.matchAll(/[\p{L}\p{N}]/gu)].length<10)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const staff=await sessions.staff(token,"store.approve","platform")
-    if(!staff)return null
-    const grant=await db.execute(`select id from da_platform_staff_grant
-      where id=? and person_id=? and task='store.approve' and resource='platform'
-        and revoked_at is null
-        and (expires_at is null or expires_at>clock_timestamp())
-      for share`,[staff.grant_id,staff.person_id])
-    if(grant.length!==1||grant[0].id!==staff.grant_id)return null
-    // Always acquire BOTH Store locks in deterministic order.
-    for(const sellerId of [input.source_seller_id,input.target_seller_id].sort())
-      await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
-        [sellerId])
-    const past=await db.execute(`select source_application_id,source_seller_id,
-      target_application_id,target_seller_id,old_name,old_handle,reason
-      from da_store_name_transfer where id=? for update`,[input.transfer_id])
-    if(past.length>1)throw new IdentityAccessDenied()
-    if(past.length){
-      const x=past[0]
-      if(x.source_application_id!==input.source_application_id||
-         x.source_seller_id!==input.source_seller_id||
-         x.target_application_id!==input.target_application_id||
-         x.target_seller_id!==input.target_seller_id||
-         x.old_name!==input.expected_name||x.old_handle!==input.expected_handle||
-         x.reason!==input.reason)throw new IdentityAccessDenied()
-      return {status:"assigned" as const,replayed:true}
-    }
-    const source=await db.execute(`select a.organization_id,s.name,s.handle,a.store_name_hash,
-        a.name_claim_released_at
-      from da_store_application a
-      join da_organization d on d.id=a.organization_id
-        and d.status='active' and d.deleted_at is null
-      join da_organization_seller_ownership o on o.organization_id=a.organization_id
-        and o.seller_id=a.seller_id and o.revoked_at is null
-      join seller s on s.id=a.seller_id and s.deleted_at is null
-        and s.status='suspended' and s.approved_at is not null
-      join da_audit_event e on e.id=o.verification_audit_event_id
-        and e.action='organization.store_application_created'
-        and e.resource='store-application' and e.module='dogruadres-access'
-        and e.deleted_at is null and e.organization_id=a.organization_id
-        and e.target_id=a.seller_id and e.new_values->>'application_id'=a.id
-      where a.id=? and a.seller_id=? and a.status='created'
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
-            and x.deleted_at is null)
-      for share of a,d,o,s`,[input.source_application_id,input.source_seller_id])
-    if(source.length!==1||source[0].name!==input.expected_name||
-       source[0].handle!==input.expected_handle)return {status:"conflict" as const}
-    const target=await db.execute(`select a.organization_id
-      from da_store_application a
-      join da_organization d on d.id=a.organization_id
-        and d.status='active' and d.deleted_at is null
-      join da_organization_seller_ownership o on o.organization_id=a.organization_id
-        and o.seller_id=a.seller_id and o.revoked_at is null
-      join seller s on s.id=a.seller_id and s.deleted_at is null
-        and s.status in ('open','suspended') and s.approved_at is not null
-      join da_audit_event e on e.id=o.verification_audit_event_id
-        and e.action='organization.store_application_created'
-        and e.resource='store-application' and e.module='dogruadres-access'
-        and e.deleted_at is null and e.organization_id=a.organization_id
-        and e.target_id=a.seller_id and e.new_values->>'application_id'=a.id
-      where a.id=? and a.seller_id=? and a.status='created'
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
-            and x.deleted_at is null)
-      for share of a,d,o,s`,[input.target_application_id,input.target_seller_id])
-    if(target.length!==1)return {status:"conflict" as const}
-    if(!(await platformApprovedSellerIds(db,source[0].organization_id)).includes(input.source_seller_id)||
-       !(await platformApprovedSellerIds(db,target[0].organization_id)).includes(input.target_seller_id))
-      return null
-    const hashes=await db.execute(`select encode(sha256(convert_to(lower(
-      regexp_replace(btrim(normalize(?,NFKC)),'[[:space:]]+',' ','g')),
-      'UTF8')),'hex') as hash`,[input.expected_name])
-    const hash=hashes[0]?.hash
-    if(hashes.length!==1||typeof hash!=="string"||!/^[a-f0-9]{64}$/.test(hash))
-      return {status:"conflict" as const}
-    // The application fingerprint is immutable. A subsequent native name is
-    // legitimate only with its matching Staff approval AND durable audit/outbox.
-    const originalName=hash===source[0].store_name_hash &&
-      source[0].name_claim_released_at===null &&
-      toHandle(input.expected_name)===input.expected_handle
-    const renamed=originalName?[]:await db.execute(`select r.id
-      from da_store_rename_request r
-      where r.seller_id=? and r.organization_id=? and r.status='approved'
-        and r.proposed_name=? and r.proposed_handle=?
-        and exists(select 1 from da_audit_event e
-          join da_audit_outbox x on x.source_audit_event_id=e.id
-          where e.organization_id=? and e.target_id=?
-            and e.action='organization.store_rename_approved'
-            and e.module='dogruadres-access'
-            and e.resource='store-rename-request'
-            and e.new_values->>'request_id'=r.id
-            and e.deleted_at is null and x.deleted_at is null
-            and x.source_module='dogruadres-access')
-      limit 2`,[input.source_seller_id,source[0].organization_id,
-        input.expected_name,input.expected_handle,
-        source[0].organization_id,input.source_seller_id])
-    if(!originalName&&renamed.length!==1)return {status:"conflict" as const}
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-global-store-name'),hashtext(?))",
-      [hash])
-    const reserved=await db.execute(`select 1 from da_store_name_transfer
-      where status='assigned' and (name_hash=? or old_handle=?) limit 1`,
-      [hash,input.expected_handle])
-    const otherClaim=await db.execute(`select 1 from da_store_application
-      where id<>? and store_name_hash=? and
-        (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
-      limit 1`,[input.source_application_id,hash])
-    const pending=await db.execute(`select 1 from da_store_rename_request
-      where seller_id=? and status in ('pending_review','approving') limit 1`,
-      [input.source_seller_id])
-    if(reserved.length||otherClaim.length||pending.length)return {status:"conflict" as const}
-    const fresh=await sessions.staff(token,"store.approve","platform")
-    if(!fresh||fresh.grant_id!==staff.grant_id)return null
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:staff.person_id,actor_type:staff.actor_type,
-      actor_id:staff.actor_id,role_context:"platform_staff",
-      organization_id:source[0].organization_id,
-      action:"organization.store_name_right_assigned",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"store-name-transfer",
-      target_id:input.source_seller_id,
-      new_values:{transfer_id:input.transfer_id,
-        source_application_id:input.source_application_id,
-        target_application_id:input.target_application_id,
-        target_seller_id:input.target_seller_id,status:"assigned"},
-      occurred_at:new Date()
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const saved=await db.execute(`insert into da_store_name_transfer
-      (id,source_application_id,source_seller_id,source_organization_id,
-       target_application_id,target_seller_id,target_organization_id,
-       old_name,old_handle,name_hash,reason,decided_by_person_id,
-       source_audit_event_id,status)
-      values(?,?,?,?,?,?,?,?,?,?,?,?,?,'assigned') returning id`,[
-      input.transfer_id,input.source_application_id,input.source_seller_id,
-      source[0].organization_id,input.target_application_id,input.target_seller_id,
-      target[0].organization_id,input.expected_name,input.expected_handle,
-      hash,input.reason,staff.person_id,audit.id])
-    if(saved.length!==1)throw new IdentityAccessDenied()
-    // Only an original still-active application claim is released here.
-    // A Staff-approved preceding rename already set its original 30-day
-    // expiry: preserve that history and never shorten the old-name hold.
-    if(originalName){
-      const released=await db.execute(`update da_store_application
-        set name_claim_released_at=clock_timestamp(),updated_at=clock_timestamp()
-        where id=? and seller_id=? and name_claim_released_at is null
-        returning id`,[input.source_application_id,input.source_seller_id])
-      if(released.length!==1)throw new IdentityAccessDenied()
-    }
-    return {status:"assigned" as const,replayed:false}
-  }
-
-  /** A native unsuspend may have committed while the separate canonical
-   * completion failed. Under the existing per-Seller advisory lock, any
-   * unclosed reactivation claim blocks a new rename request or Staff claim.
-   * A malformed/incomplete claim also fails closed; a terminal decision must
-   * have its own durable outbox proof. This query grants NO authority.
-   */
-  private async hasUnresolvedStoreReactivationClaim_(
-    db:SecuritySql,sellerId:string
-  ):Promise<boolean>{
-    const rows=await db.execute(`select 1 from da_audit_event c
-      where c.target_id=? and c.module='dogruadres-access'
-        and c.resource='store-application'
-        and c.action='organization.store_reactivation_claimed'
-        and c.deleted_at is null
-        and not exists(select 1 from da_audit_event done
-          join da_audit_outbox x on x.source_audit_event_id=done.id
-            and x.source_module='dogruadres-access' and x.deleted_at is null
-          where done.module='dogruadres-access'
-            and done.resource='store-application'
-            and done.action in ('organization.store_reactivated',
-              'organization.store_reactivation_released')
-            and done.organization_id=c.organization_id
-            and done.target_id=c.target_id and done.deleted_at is null
-            and done.new_values->>'claim_audit_id'=c.id)
-      limit 1`,[sellerId])
-    return rows.length>0
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalAssignSuspendedStoreNameRight(token, input, context)
   }
 
   @InjectTransactionManager()
   async personalCurrentSuspendedStoreName(token:string,target:{
     application_id:string;seller_id:string;expected_status?:"open"
-  },@MedusaContext() context:Context={}){
-    if(target.expected_status!==undefined&&target.expected_status!=="open")
-      throw new IdentityAccessDenied()
-    if(!/^daapp_[a-f0-9]{32}$/.test(target.application_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
-    if(!staff)return null
-    // Serializes with an already pending native name/URL decision as well as
-    // the platform's ordinary Store approval/rejection lock.
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
-      [target.seller_id])
-    const rows=await db.execute(`select a.organization_id,s.name,s.handle
-      from da_store_application a
-      join da_organization d on d.id=a.organization_id
-        and d.status='active' and d.deleted_at is null
-      join da_organization_seller_ownership o on o.organization_id=a.organization_id
-        and o.seller_id=a.seller_id and o.revoked_at is null
-      join da_audit_event origin on origin.id=o.verification_audit_event_id
-        and origin.module='dogruadres-access' and origin.deleted_at is null
-        and origin.organization_id=a.organization_id and origin.target_id=a.seller_id
-        and origin.actor_person_id=a.person_id
-        and origin.action='organization.store_application_created'
-        and origin.new_values->>'application_id'=a.id
-      join seller s on s.id=a.seller_id and s.deleted_at is null
-        and s.status=? and s.approved_at is not null
-      where a.id=? and a.seller_id=? and a.status='created'
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=origin.id
-            and x.source_module='dogruadres-access' and x.deleted_at is null)
-      for share of a,d,o`,[target.expected_status==="open"?"open":"suspended",
-        target.application_id,target.seller_id])
-    if(rows.length!==1)return {status:"conflict" as const}
-    const r=rows[0]
-    if(typeof r.name!=="string"||!validStoreName(r.name)||
-       typeof r.handle!=="string"||!validStoreHandle(r.handle))
-      return {status:"conflict" as const}
-    const hashes=await db.execute(`select encode(sha256(convert_to(
-      lower(regexp_replace(btrim(normalize(?,NFKC)),'[[:space:]]+',' ','g')),
-      'UTF8')),'hex') as hash`,[r.name])
-    const hash=hashes[0]?.hash
-    if(hashes.length!==1||typeof hash!=="string"||!/^[a-f0-9]{64}$/.test(hash))
-      throw new IdentityAccessDenied()
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-global-store-name'),hashtext(?))",[hash])
-    const original=await db.execute(`select id from da_store_application
-      where id=? and seller_id=? and store_name_hash=?
-        and name_claim_released_at is null limit 2`,
-      [target.application_id,target.seller_id,hash])
-    // A -> B -> C -> B is lawful history, not two competing rights.
-    // The LAST completed approval must itself prove the native name + URL.
-    // Never borrow an older matching audit if the newest approval differs.
-    const renamed=await db.execute(`select r.proposed_name,r.proposed_handle,
-        exists(select 1 from da_audit_event e
-          join da_audit_outbox x on x.source_audit_event_id=e.id
-            and x.source_module='dogruadres-access' and x.deleted_at is null
-          where e.organization_id=r.organization_id and e.target_id=r.seller_id
-            and e.action='organization.store_rename_approved'
-            and e.module='dogruadres-access'
-            and e.resource='store-rename-request'
-            and e.new_values->>'request_id'=r.id and e.deleted_at is null)
-          as source_proven
-      from da_store_rename_request r
-      where r.seller_id=? and r.organization_id=?
-        and r.status='approved' and r.approved_at is not null
-      order by r.approved_at desc,r.id desc limit 1`,
-      [target.seller_id,r.organization_id])
-    // An original application proves only its name-derived native URL.
-    const originalHandleMatches=original.length===1&&toHandle(r.name)===r.handle
-    const latestRenameMatches=renamed.length===1&&
-      renamed[0].source_proven===true&&
-      renamed[0].proposed_name===r.name&&renamed[0].proposed_handle===r.handle
-    if((!originalHandleMatches&&!latestRenameMatches)||original.length>1)
-      return {status:"conflict" as const}
-    const transferred=await db.execute(`select 1 from da_store_name_transfer
-      where source_seller_id=? and status='assigned' and
-        name_hash=? and old_handle=? limit 1`,[target.seller_id,hash,r.handle])
-    if(transferred.length)return {status:"conflict" as const}
-    const conflicts=await db.execute(`select 1 from da_store_application
-      where (seller_id is null or seller_id<>?) and store_name_hash=?
-        and (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
-      limit 1`,[target.seller_id,hash])
-    const native=await db.execute(`select 1 from seller where id<>? and deleted_at is null
-      and (encode(sha256(convert_to(lower(regexp_replace(
-        btrim(normalize(name,NFKC)),'[[:space:]]+',' ','g')),'UTF8')),'hex')=?
-        or lower(handle)=lower(?)) limit 1`,
-      [target.seller_id,hash,r.handle])
-    const held=await db.execute(`select 1 from da_store_rename_request h
-      where (h.seller_id<>? or h.status='approving') and
-        (h.status='approving' or
-          (h.status='approved' and h.approved_at>
-             clock_timestamp()-interval '30 days'))
-        and (encode(sha256(convert_to(lower(regexp_replace(
-              btrim(normalize(h.old_name,NFKC)),'[[:space:]]+',' ','g')),'UTF8')),'hex')=?
-          or lower(h.old_handle)=lower(?)
-          or (h.status='approving' and
-            (encode(sha256(convert_to(lower(regexp_replace(
-              btrim(normalize(h.proposed_name,NFKC)),'[[:space:]]+',' ','g')),'UTF8')),'hex')=?
-             or lower(h.proposed_handle)=lower(?))))
-        ${authorizedTransferredOldNameHoldExclusion}
-      limit 1`,[target.seller_id,hash,r.handle,hash,r.handle,
-        target.seller_id,r.organization_id,hash,r.handle])
-    if(conflicts.length||native.length||held.length)
-      return {status:"conflict" as const}
-    return {status:"eligible" as const,organization_id:r.organization_id as string,
-      name:r.name as string,handle:r.handle as string}
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalCurrentSuspendedStoreName(token, target, context)
   }
 
-
-  /** Commit this private canonical intent BEFORE a separate native Mercur
-   * workflow starts. A crash can leave a claim without completion, but never
-   * an untraceable Seller opening. Called under the existing Staff/Seller/
-   * current-name locks and a distinct first transaction.
-   */
   @InjectTransactionManager()
   async personalClaimStoreReactivation(token:string,input:{
     application_id:string;seller_id:string;organization_id:string;
     name:string;handle:string
-  },@MedusaContext() context:Context={}){
-    if(!/^daapp_[a-f0-9]{32}$/.test(input.application_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !validStoreName(input.name)||!validStoreHandle(input.handle))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
-    if(!staff)return null
-    const unresolved=await this.personalUnresolvedStoreReactivationClaim(token,{
-      application_id:input.application_id,seller_id:input.seller_id
-    },context)
-    if(!unresolved)return {status:"conflict" as const}
-    if(unresolved.status==="claimed"||unresolved.status==="ambiguous")
-      return {status:"conflict" as const}
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:staff.person_id,actor_type:staff.actor_type,
-      actor_id:staff.actor_id,role_context:"platform_staff",
-      organization_id:input.organization_id,
-      action:"organization.store_reactivation_claimed",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"store-application",
-      target_id:input.seller_id,
-      new_values:{application_id:input.application_id,status:"pending_native",
-        name:input.name,handle:input.handle,staff_grant_id:staff.grant_id},
-      occurred_at:new Date()
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    return {status:"claimed" as const,claim_audit_id:audit.id as string}
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalClaimStoreReactivation(token, input, context)
   }
 
-  /** Read only the pending, source-proven claim for an authorized Staff
-   * member. A separate Staff member can reconcile a crash without calling
-   * native unsuspend again; ambiguous claims fail closed.
-   */
   @InjectTransactionManager()
   async personalUnresolvedStoreReactivationClaim(token:string,target:{
     application_id:string;seller_id:string
-  },@MedusaContext() context:Context={}){
-    if(!/^daapp_[a-f0-9]{32}$/.test(target.application_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
-    if(!staff)return null
-    const rows=await db.execute(`select e.id claim_audit_id,e.organization_id,
-        e.new_values->>'name' name,e.new_values->>'handle' handle
-      from da_audit_event e
-      join da_store_application a on a.id=e.new_values->>'application_id'
-        and a.seller_id=e.target_id and a.status='created'
-      join da_organization d on d.id=a.organization_id
-        and d.status='active' and d.deleted_at is null
-      join da_organization_seller_ownership o on o.organization_id=a.organization_id
-        and o.seller_id=a.seller_id and o.revoked_at is null
-      where e.action='organization.store_reactivation_claimed'
-        and e.module='dogruadres-access' and e.resource='store-application'
-        and e.role_context='platform_staff' and e.deleted_at is null
-        and e.organization_id=a.organization_id
-        and e.target_id=? and a.id=?
-        and e.new_values->>'status'='pending_native'
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
-            and x.deleted_at is null)
-        and not exists(select 1 from da_audit_event complete
-          where complete.action in ('organization.store_reactivated',
-              'organization.store_reactivation_released')
-            and complete.module='dogruadres-access' and complete.deleted_at is null
-            and complete.organization_id=e.organization_id
-            and complete.target_id=e.target_id
-            and complete.new_values->>'claim_audit_id'=e.id)
-      order by e.occurred_at desc,e.id desc limit 2`,
-      [target.seller_id,target.application_id])
-    if(rows.length>1)return {status:"ambiguous" as const}
-    if(!rows.length)return {status:"none" as const}
-    const r=rows[0]
-    if(typeof r.claim_audit_id!=="string"||
-       !/^daaud_[A-Za-z0-9_-]+$/.test(r.claim_audit_id)||
-       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(r.organization_id)||
-       typeof r.name!=="string"||!validStoreName(r.name)||
-       typeof r.handle!=="string"||!validStoreHandle(r.handle))
-      return {status:"ambiguous" as const}
-    return {status:"claimed" as const,claim_audit_id:r.claim_audit_id as string,
-      organization_id:r.organization_id as string,
-      name:r.name as string,handle:r.handle as string}
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalUnresolvedStoreReactivationClaim(token, target, context)
   }
 
-
-  /** A committed intent may precede a process crash or a failed native
-   * workflow. Resolve the uncertain attempt only while the exact Seller is
-   * STILL suspended, under the same Staff/Seller transaction lock that the
-   * original request holds throughout its native workflow. This operation
-   * never invokes Mercur or changes a Store. If native opens, this read must
-   * fail closed; the Staff should use the OPEN-Store reconciliation instead.
-   * The first-party native opener rechecks this claim under the same lock
-   * immediately before calling unsuspend, so a released claim cannot run.
-   */
   @InjectTransactionManager()
   async personalReleaseSuspendedStoreReactivationClaim(token:string,target:{
     application_id:string;seller_id:string
-  },@MedusaContext() context:Context={}){
-    if(!/^daapp_[a-f0-9]{32}$/.test(target.application_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
-    if(!staff)return null
-    // Lock the real native Seller row against a concurrent status UPDATE,
-    // and verify that this is still a currently owned/approved Store.
-    const rows=await db.execute(`select a.organization_id,s.id
-      from da_store_application a
-      join da_organization d on d.id=a.organization_id
-        and d.status='active' and d.deleted_at is null
-      join da_organization_seller_ownership o on o.organization_id=a.organization_id
-        and o.seller_id=a.seller_id and o.revoked_at is null
-      join da_audit_event origin on origin.id=o.verification_audit_event_id
-        and origin.organization_id=a.organization_id
-        and origin.target_id=a.seller_id
-        and origin.actor_person_id=a.person_id
-        and origin.action='organization.store_application_created'
-        and origin.module='dogruadres-access'
-        and origin.deleted_at is null
-        and origin.new_values->>'application_id'=a.id
-      join seller s on s.id=a.seller_id and s.deleted_at is null
-        and s.status='suspended' and s.approved_at is not null
-      where a.id=? and a.seller_id=? and a.status='created'
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=origin.id
-            and x.source_module='dogruadres-access'
-            and x.deleted_at is null)
-      for update of s`,[target.application_id,target.seller_id])
-    if(rows.length!==1)return {status:"conflict" as const}
-    const claim=await this.personalUnresolvedStoreReactivationClaim(token,target,context)
-    if(!claim||claim.status!=="claimed"||
-       claim.organization_id!==rows[0].organization_id)
-      return {status:"conflict" as const}
-    // The native Seller is unchanged. Preserve original provenance and
-    // append a terminal audit/outbox so no one silently removes the claim.
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:staff.person_id,actor_type:staff.actor_type,
-      actor_id:staff.actor_id,role_context:"platform_staff",
-      organization_id:claim.organization_id,
-      action:"organization.store_reactivation_released",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"store-application",
-      target_id:target.seller_id,
-      new_values:{application_id:target.application_id,
-        claim_audit_id:claim.claim_audit_id,status:"suspended",
-        reason:"native_open_not_confirmed",staff_grant_id:staff.grant_id},
-      occurred_at:new Date()
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    return {status:"released" as const,claim_audit_id:claim.claim_audit_id}
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalReleaseSuspendedStoreReactivationClaim(token, target, context)
   }
 
-  /** Persist a private, single canonical completed decision after the native
-   * Seller has actually reopened. An uncertain native result is never retried.
-   */
   @InjectTransactionManager()
   async personalRecordStoreReactivation(token:string,target:{
     application_id:string;seller_id:string;organization_id:string;
     name:string;handle:string;claim_audit_id:string
-  },@MedusaContext() context:Context={}){
-    if(!/^daaud_[A-Za-z0-9_-]+$/.test(target.claim_audit_id)||
-       !/^daapp_[a-f0-9]{32}$/.test(target.application_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id)||
-       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(target.organization_id))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
-    if(!staff)return null
-    const valid=await db.execute(`select a.id from da_store_application a
-      join da_organization d on d.id=a.organization_id
-        and d.status='active' and d.deleted_at is null
-      join da_organization_seller_ownership o on o.organization_id=a.organization_id
-        and o.seller_id=a.seller_id and o.revoked_at is null
-      join seller s on s.id=a.seller_id and s.deleted_at is null
-        and s.status='open' and s.approved_at is not null
-      where a.id=? and a.seller_id=? and a.organization_id=?
-        and a.status='created' and s.name=? and s.handle=?`,
-      [target.application_id,target.seller_id,target.organization_id,target.name,target.handle])
-    if(valid.length!==1)return null
-    const claim=await this.personalUnresolvedStoreReactivationClaim(token,{
-      application_id:target.application_id,seller_id:target.seller_id
-    },context)
-    if(!claim||claim.status!=="claimed"||
-       claim.claim_audit_id!==target.claim_audit_id||
-       claim.organization_id!==target.organization_id||
-       claim.name!==target.name||claim.handle!==target.handle)
-      return {status:"conflict" as const}
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:staff.person_id,actor_type:staff.actor_type,
-      actor_id:staff.actor_id,role_context:"platform_staff",
-      organization_id:target.organization_id,
-      action:"organization.store_reactivated",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"store-application",
-      target_id:target.seller_id,
-      new_values:{application_id:target.application_id,status:"open",
-        claim_audit_id:target.claim_audit_id,resolution_confirmed:true,
-        staff_grant_id:staff.grant_id},
-      occurred_at:new Date()
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
-      select 'danot_'||gen_random_uuid()::text,m.person_id,?
-      from da_organization_membership m join da_person p on p.id=m.person_id
-      where m.organization_id=? and m.role='owner' and m.protected_owner=true
-        and m.status='active' and m.deleted_at is null
-        and p.disabled_at is null and p.deleted_at is null
-      on conflict(audit_event_id,person_id) do nothing`,
-      [audit.id,target.organization_id])
-    return {status:"recorded" as const}
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalRecordStoreReactivation(token, target, context)
   }
 
-  /** Auditable staff decision after Mercur has actually terminated a PENDING
-   * Seller; store the reason privately, never in the derived public index.
-   * Failure after the native step stays uncertain and is never auto-retried.
-   */
   @InjectTransactionManager()
   async personalRecordStoreApplicationRejection(token:string,target:{
     application_id:string;seller_id:string;reason:string
-  },@MedusaContext() context:Context={}){
-    if(!/^daapp_[0-9a-f]{32}$/.test(target.application_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id)||
-       typeof target.reason!=="string"||target.reason.trim()!==target.reason||
-       target.reason.length<10||target.reason.length>500)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
-    if(!staff)return null
-    const matching=await this.personalReviewableStoreApplications(token,target,context)
-    if(!matching||matching.length!==1)return null
-    const prior=await db.execute(`select id from da_audit_event
-      where organization_id=? and resource='store-application'
-        and action='organization.store_application_rejected'
-        and target_id=? and deleted_at is null limit 2`,
-      [matching[0].organization_id,target.seller_id])
-    if(prior.length)return {status:"conflict" as const}
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:staff.person_id,actor_type:staff.actor_type,
-      actor_id:staff.actor_id,role_context:"platform_staff",
-      organization_id:matching[0].organization_id,
-      action:"organization.store_application_rejected",
-      module:DOGRUADRES_AUDIT_MODULE,
-      resource:"store-application",target_id:target.seller_id,
-      new_values:{application_id:target.application_id,status:"terminated",
-        reason:target.reason,staff_grant_id:staff.grant_id},
-      occurred_at:new Date()
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    const manager=context.transactionManager
-    if(!manager||typeof manager!=="object"||!("flush" in manager)||
-       typeof manager.flush!=="function")
-      throw new Error("Foundation transaction unavailable")
-    await manager.flush()
-    // A private, redacted Owner notification: the precise free-text reason
-    // stays in native Seller and canonical audit, not the notification list.
-    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
-      select 'danot_'||gen_random_uuid()::text,m.person_id,?
-      from da_organization_membership m join da_person p on p.id=m.person_id
-      where m.organization_id=? and m.role='owner' and m.protected_owner=true
-        and m.status='active' and m.deleted_at is null
-        and p.disabled_at is null and p.deleted_at is null
-      on conflict(audit_event_id,person_id) do nothing`,
-      [audit.id,matching[0].organization_id])
-    return {status:"rejected" as const,organization_id:matching[0].organization_id}
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalRecordStoreApplicationRejection(token, target, context)
   }
 
   @InjectTransactionManager()
@@ -3168,1639 +1676,243 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     target?:{application_id:string;seller_id:string},
     @MedusaContext() context:Context={},
     page=0) {
-    if(!Number.isSafeInteger(page)||page<0||page>1000)throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
-    if(!staff)return null
-    const rows=await db.execute(`select a.id application_id,a.seller_id,
-        a.organization_id,d.name organization_name,
-        d.store_application_enabled
-      from da_store_application a
-      join da_organization d on d.id=a.organization_id
-        and d.status='active' and d.deleted_at is null
-      join da_organization_seller_ownership o on o.organization_id=a.organization_id
-        and o.seller_id=a.seller_id and o.revoked_at is null
-      join da_audit_event e on e.id=o.verification_audit_event_id
-        and e.module='dogruadres-access'
-        and e.action='organization.store_application_created'
-        and e.resource='store-application'
-        and e.actor_person_id=a.person_id
-        and e.organization_id=a.organization_id
-        and e.target_id=a.seller_id
-        and e.new_values->>'application_id'=a.id and e.deleted_at is null
-      where a.status='created' and a.seller_id is not null
-        and exists(select 1 from da_audit_outbox x where
-          x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
-          and x.deleted_at is null)
-        ${target?"and a.id=? and a.seller_id=?":""}
-      -- Stable id tie-break and bounded pages expose older pending records.
-      -- Exact-target POST stays independent of list page.
-      order by a.created_at desc,a.id desc limit ${target?1:31} offset ${target?0:page*30}`,
-      target?[target.application_id,target.seller_id]:[])
-    if(!Array.isArray(rows)||rows.length>(target?1:31) ||
-       rows.some(r=>typeof r.application_id!=="string" ||
-         !/^daapp_[0-9a-f]{32}$/.test(r.application_id) ||
-         typeof r.seller_id!=="string" ||
-         !/^sel_[A-Za-z0-9_-]+$/.test(r.seller_id) ||
-         typeof r.organization_id!=="string" ||
-         !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(r.organization_id) ||
-         typeof r.organization_name!=="string" ||
-         typeof r.store_application_enabled!=="boolean") ||
-       new Set(rows.map(r=>r.seller_id)).size!==rows.length)
-      throw new IdentityAccessDenied()
-    return (target?rows:rows.slice(0,30)).map(r=>({
-      application_id:r.application_id as string,
-      seller_id:r.seller_id as string,
-      organization_id:r.organization_id as string,
-      organization_name:r.organization_name as string,
-      on_hold:r.store_application_enabled===false
-    }))
+    return this.storeRename_(context).personalReviewableStoreApplications(token, target, context, page)
   }
 
-
-
-  /** A read-only private queue for currently authorized platform Store staff.
-   * Every candidate must be traceable to the original protected Owner request,
-   * audit/outbox, verified immutable Store origin, and live approved Seller.
-   * No pending approval or native Seller update is executed here.
-   */
   @InjectTransactionManager()
   async personalReviewableStoreRenameRequests(token:string,page=0,
-    @MedusaContext() context:Context={}){
-    if(!Number.isSafeInteger(page)||page<0||page>1000)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
-    if(!staff)return null
-    const rows=await db.execute(`select r.id request_id,r.organization_id,
-      d.name organization_name,r.seller_id,r.old_name,r.old_handle,
-      r.proposed_name,r.proposed_handle,r.created_at,s.status seller_status,
-      r.status request_status
-      from da_store_rename_request r
-      join da_organization d on d.id=r.organization_id
-        and d.status='active' and d.deleted_at is null
-      join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status in ('open','suspended') and s.approved_at is not null
-        and ((r.status='pending_review' and s.name=r.old_name and s.handle=r.old_handle)
-          or (r.status='approving' and
-             ((s.name=r.old_name and s.handle=r.old_handle) or
-              (s.name=r.proposed_name and s.handle=r.proposed_handle))))
-      join da_organization_seller_ownership o on o.seller_id=r.seller_id
-        and o.organization_id=r.organization_id and o.revoked_at is null
-      join da_audit_event origin on origin.id=o.verification_audit_event_id
-        and origin.deleted_at is null and origin.organization_id=r.organization_id
-        and origin.target_id=r.seller_id
-        and origin.module='dogruadres-access'
-      join da_audit_event e on e.id=r.source_audit_event_id
-        and e.deleted_at is null
-        and e.module='dogruadres-access'
-        and e.action='organization.store_rename_requested'
-        and e.resource='store-rename-request'
-        and e.organization_id=r.organization_id
-        and e.target_id=r.seller_id
-        and e.new_values->>'request_id'=r.id
-        and e.new_values->>'risk_version'=r.risk_version
-        and e.actor_person_id=r.requested_by_person_id
-      where r.status in ('pending_review','approving') and r.risk_version=?
-        and r.risk_acknowledged_at is not null
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=e.id
-          and x.source_module='dogruadres-access' and x.deleted_at is null)
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=origin.id
-          and x.source_module='dogruadres-access' and x.deleted_at is null)
-      order by r.created_at desc,r.id desc
-      limit 21 offset ${page*20}`,[STORE_RENAME_RISK_VERSION])
-    if(!Array.isArray(rows)||rows.length>21||
-       rows.some(row=>typeof row.request_id!=="string"||
-         !/^dasrn_[a-f0-9]{32}$/.test(row.request_id)||
-         typeof row.organization_id!=="string"||
-         !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(row.organization_id)||
-         typeof row.seller_id!=="string"||
-         !/^sel_[A-Za-z0-9_-]+$/.test(row.seller_id)||
-         typeof row.organization_name!=="string"||
-         !["open","suspended"].includes(row.seller_status)||
-         !["pending_review","approving"].includes(row.request_status)||
-         typeof row.old_name!=="string"||typeof row.old_handle!=="string"||
-         typeof row.proposed_name!=="string"||
-         !validStoreName(row.proposed_name)||
-         typeof row.proposed_handle!=="string"||
-         !validStoreHandle(row.proposed_handle))||
-       new Set(rows.map(row=>row.request_id)).size!==rows.length)
-      throw new IdentityAccessDenied()
-    // Origin alone is never authority: the same canonical ownership proof
-    // (including its original application/association event and outbox)
-    // must still validate for EACH Store before returning private names.
-    for(const row of rows){
-      if(!(await platformApprovedSellerIds(db,row.organization_id)).includes(row.seller_id))
-        throw new IdentityAccessDenied()
-    }
-    // A final grant recheck prevents a revoked/replaced staff principal from
-    // receiving even private names if the read overlapped revocation.
-    const fresh=await new IdentitySessions(db).staff(token,"store.approve","platform")
-    if(!fresh||fresh.grant_id!==staff.grant_id)return null
-    return {page,has_more:rows.length>20,pending:rows.slice(0,20).map(row=>({
-      request_id:row.request_id as string,organization_id:row.organization_id as string,
-      organization_name:row.organization_name as string,seller_id:row.seller_id as string,
-      old_name:row.old_name as string,old_handle:row.old_handle as string,
-      proposed_name:row.proposed_name as string,proposed_handle:row.proposed_handle as string,
-      created_at:row.created_at,seller_status:row.seller_status as "open"|"suspended",
-      status:row.request_status as "pending_review"|"approving"
-    }))}
+    @MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalReviewableStoreRenameRequests(token, page, context)
   }
 
-  /** A reasoned rejection is a complete review outcome: the current
-   * Seller remains unchanged, the Owner can read the final request status,
-   * and a canonical audit/outbox is written in the same transaction. This
-   * grants no ability to approve or actually rename a native Seller.
-   */
   @InjectTransactionManager()
   async personalRejectStoreRenameRequest(token:string,input:{
     request_id:string;seller_id:string;reason:string
-  },@MedusaContext() context:Context={}){
-    if(!/^dasrn_[a-f0-9]{32}$/.test(input.request_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       typeof input.reason!=="string"||input.reason.trim()!==input.reason||
-       input.reason.length<10||input.reason.length>500)
-      throw new IdentityAccessDenied()
-    // Validate displayable characters without silently rewriting the audit reason.
-    const readable=/[\p{L}\p{N}\p{Extended_Pictographic}]/u
-    const ignorable=/\p{Default_Ignorable_Code_Point}/gu
-    let readableCount=0
-    for(const {segment} of new Intl.Segmenter(undefined,{granularity:"grapheme"}).segment(input.reason)){
-      if(readable.test(segment.replace(ignorable,"")))readableCount++
-    }
-    if(readableCount<10)throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const sessions=new IdentitySessions(db)
-    const staff=await sessions.staff(token,"store.approve","platform")
-    if(!staff)return null
-    const grant=await db.execute(`select g.id from da_platform_staff_grant g
-      where g.id=? and g.person_id=? and g.task='store.approve'
-        and g.resource='platform' and g.revoked_at is null
-        and (g.expires_at is null or g.expires_at>clock_timestamp())
-      for share of g`,[staff.grant_id,staff.person_id])
-    if(grant.length!==1||grant[0].id!==staff.grant_id)return null
-    const fresh=await sessions.staff(token,"store.approve","platform")
-    if(!fresh||fresh.grant_id!==staff.grant_id)return null
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
-      [input.seller_id])
-    const rows=await db.execute(`select r.organization_id,r.seller_id,
-      r.status,r.old_name,r.old_handle,r.risk_version,r.source_audit_event_id
-      from da_store_rename_request r
-      join da_organization d on d.id=r.organization_id
-        and d.status='active' and d.deleted_at is null
-      join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status in ('open','suspended') and s.approved_at is not null
-        and s.name=r.old_name and s.handle=r.old_handle
-      join da_audit_event e on e.id=r.source_audit_event_id
-        and e.deleted_at is null and e.module='dogruadres-access'
-        and e.action='organization.store_rename_requested'
-        and e.resource='store-rename-request'
-        and e.organization_id=r.organization_id
-        and e.target_id=r.seller_id
-        and e.actor_person_id=r.requested_by_person_id
-        and e.new_values->>'request_id'=r.id
-      where r.id=? and r.seller_id=?
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=e.id
-            and x.source_module='dogruadres-access' and x.deleted_at is null)
-      for update of r`,[input.request_id,input.seller_id])
-    if(rows.length!==1||rows[0].status!=="pending_review"||
-       rows[0].risk_version!==STORE_RENAME_RISK_VERSION)
-      return {status:"conflict" as const}
-    const org=rows[0].organization_id as string
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org)||
-       !(await platformApprovedSellerIds(db,org)).includes(input.seller_id))
-      return null
-    const updated=await db.execute(`update da_store_rename_request
-      set status='rejected',updated_at=clock_timestamp()
-      where id=? and seller_id=? and status='pending_review'
-      returning id`,[input.request_id,input.seller_id])
-    if(updated.length!==1||updated[0].id!==input.request_id)
-      throw new IdentityAccessDenied()
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:staff.person_id,actor_type:staff.actor_type,
-      actor_id:staff.actor_id,role_context:"platform_staff",
-      organization_id:org,
-      action:"organization.store_rename_rejected",
-      module:DOGRUADRES_AUDIT_MODULE,
-      resource:"store-rename-request",target_id:input.seller_id,
-      new_values:{request_id:input.request_id,status:"rejected",
-        reason:input.reason,staff_grant_id:staff.grant_id},
-      occurred_at:new Date()
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    return {status:"rejected" as const,request_id:input.request_id,
-      seller_id:input.seller_id}
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalRejectStoreRenameRequest(token, input, context)
   }
 
-
-  /** Approval is a two-phase, fail-closed operation. Commit the intention
-   * BEFORE Mercur's separate workflow, so a process crash never releases the
-   * proposed name or the old URL for another Store. An uncertain operation
-   * remains 'approving' and cannot be retried automatically.
-   */
   @InjectTransactionManager()
   async personalClaimStoreRenameApproval(token:string,input:{
     request_id:string;seller_id:string
-  },@MedusaContext() context:Context={}){
-    if(!/^dasrn_[a-f0-9]{32}$/.test(input.request_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const sessions=new IdentitySessions(db)
-    const staff=await sessions.staff(token,"store.approve","platform")
-    if(!staff)return null
-    const grant=await db.execute(`select g.id from da_platform_staff_grant g
-      where g.id=? and g.person_id=? and g.task='store.approve'
-        and g.resource='platform' and g.revoked_at is null
-        and (g.expires_at is null or g.expires_at>clock_timestamp())
-      for share of g`,[staff.grant_id,staff.person_id])
-    if(grant.length!==1||grant[0].id!==staff.grant_id)return null
-    const fresh=await sessions.staff(token,"store.approve","platform")
-    if(!fresh||fresh.grant_id!==staff.grant_id)return null
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
-      [input.seller_id])
-    // An OPEN Seller whose unsuspend completion is still unresolved must
-    // retain the exact name+URL needed for canonical Staff reconciliation.
-    if(await this.hasUnresolvedStoreReactivationClaim_(db,input.seller_id))
-      return {status:"conflict" as const}
-    const rows=await db.execute(`select r.organization_id,r.old_name,r.old_handle,
-      r.proposed_name,r.proposed_handle,r.risk_version
-      from da_store_rename_request r
-      join da_organization d on d.id=r.organization_id
-        and d.status='active' and d.deleted_at is null
-      join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status in ('open','suspended') and s.approved_at is not null
-        and s.name=r.old_name and s.handle=r.old_handle
-      join da_organization_seller_ownership o on o.seller_id=r.seller_id
-        and o.organization_id=r.organization_id and o.revoked_at is null
-      join da_audit_event origin on origin.id=o.verification_audit_event_id
-        and origin.deleted_at is null and origin.organization_id=r.organization_id
-        and origin.target_id=r.seller_id and origin.module='dogruadres-access'
-      join da_audit_event e on e.id=r.source_audit_event_id
-        and e.deleted_at is null and e.module='dogruadres-access'
-        and e.action='organization.store_rename_requested'
-        and e.resource='store-rename-request'
-        and e.organization_id=r.organization_id and e.target_id=r.seller_id
-        and e.actor_person_id=r.requested_by_person_id
-        and e.new_values->>'request_id'=r.id
-        and e.new_values->>'risk_version'=r.risk_version
-      where r.id=? and r.seller_id=? and r.status='pending_review'
-        and r.risk_acknowledged_at is not null
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=e.id
-            and x.source_module='dogruadres-access' and x.deleted_at is null)
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=origin.id
-            and x.source_module='dogruadres-access' and x.deleted_at is null)
-      for update of r`,[input.request_id,input.seller_id])
-    if(rows.length!==1)return {status:"conflict" as const}
-    const r=rows[0]
-    if(r.risk_version!==STORE_RENAME_RISK_VERSION||
-       typeof r.proposed_name!=="string"||!validStoreName(r.proposed_name)||
-       typeof r.proposed_handle!=="string"||!validStoreHandle(r.proposed_handle)||
-       r.proposed_handle===r.old_handle||
-       !(await platformApprovedSellerIds(db,r.organization_id)).includes(input.seller_id))
-      return null
-    const hashes=await db.execute(`select
-      encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(?,NFKC)),
-        '[[:space:]]+',' ','g')),'UTF8')),'hex') new_hash,
-      encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(?,NFKC)),
-        '[[:space:]]+',' ','g')),'UTF8')),'hex') old_hash`,
-      [r.proposed_name,r.old_name])
-    if(hashes.length!==1||typeof hashes[0].new_hash!=="string"||
-       !/^[a-f0-9]{64}$/.test(hashes[0].new_hash)||
-       hashes[0].new_hash===hashes[0].old_hash)
-      return {status:"conflict" as const}
-    const hash=hashes[0].new_hash as string,oldHash=hashes[0].old_hash as string
-    if(typeof oldHash!=="string"||!/^[a-f0-9]{64}$/.test(oldHash))
-      throw new IdentityAccessDenied()
-    // Fail BEFORE any native Seller write if a historical/legacy Store lacks
-    // a verifiable original active claim or previous approved rename.
-    const originalClaim=await db.execute(`select id from da_store_application
-      where seller_id=? and store_name_hash=? and name_claim_released_at is null
-      limit 2`,[input.seller_id,oldHash])
-    // History may legitimately contain A -> B -> C -> B. Only the MOST
-    // RECENT completed rename proves the currently active native name+URL;
-    // older matching rows are retained as immutable history, not ambiguity.
-    const priorClaim=await db.execute(`select proposed_handle,
-      encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(proposed_name,NFKC)),
-        '[[:space:]]+',' ','g')),'UTF8')),'hex') as approved_name_hash
-      from da_store_rename_request
-      where seller_id=? and id<>? and status='approved'
-        and approved_at is not null
-      order by approved_at desc,id desc limit 1`,
-      [input.seller_id,input.request_id])
-    const currentPrior=priorClaim.length===1&&
-      priorClaim[0].approved_name_hash===oldHash&&
-      priorClaim[0].proposed_handle===r.old_handle
-    const transferredSource=await db.execute(`select 1 from da_store_name_transfer
-      where status='assigned' and source_seller_id=? and old_handle=?
-        and name_hash=? and source_organization_id=?
-        and exists(select 1 from da_audit_event e
-          join da_audit_outbox x on x.source_audit_event_id=e.id
-          where e.id=da_store_name_transfer.source_audit_event_id
-            and e.action='organization.store_name_right_assigned'
-            and e.module='dogruadres-access'
-            and e.deleted_at is null and x.deleted_at is null)
-      limit 2`,[input.seller_id,r.old_handle,oldHash,r.organization_id])
-    if(originalClaim.length>1||transferredSource.length>1||
-       !(originalClaim.length===1||currentPrior||transferredSource.length===1))
-      return {status:"conflict" as const}
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-global-store-name'),hashtext(?))",
-      [hash])
-    // Different proposed names may still target ONE native Seller URL.
-    // Always lock name first, then URL, BEFORE reading shared reservations.
-    // The URL advisory is transaction-scoped: the second Store can observe
-    // the first committed 'approving' hold and fail closed before Mercur.
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-global-store-handle'),hashtext(?))",
-      [r.proposed_handle])
-    const application=await db.execute(`select 1 from da_store_application
-      where store_name_hash=?
-        and (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
-      limit 1`,[hash])
-    const native=await db.execute(`select 1 from seller where id<>?
-      and (deleted_at is null or deleted_at>clock_timestamp()-interval '30 days')
-      and (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(name,NFKC)),
-        '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or lower(handle)=?)
-      limit 1`,[input.seller_id,hash,r.proposed_handle])
-    // Approved old names/URLs hold exactly 30 calendar days. 'approving'
-    // protects BOTH old and new values without expiration after a crash.
-    const holds=await db.execute(`select 1 from da_store_rename_request h
-      where h.id<>? and
-        (h.status='approving' or
-         (h.status='approved' and h.approved_at>
-            clock_timestamp()-interval '30 days'))
-        and (
-          ((h.status='approving' or h.status='approved') and
-           (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(h.old_name,NFKC)),
-             '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or h.old_handle=?))
-          or (h.status='approving' and
-            (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(h.proposed_name,NFKC)),
-              '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or h.proposed_handle=?))
-        ) ${authorizedTransferredOldNameHoldExclusion}
-        limit 1`,[input.request_id,hash,r.proposed_handle,hash,r.proposed_handle,
-          input.seller_id,r.organization_id,hash,r.proposed_handle])
-    const transferReservation=await db.execute(`select 1 from da_store_name_transfer
-      where status='assigned' and target_seller_id<>? and
-        (name_hash=? or old_handle=?) limit 1`,
-      [input.seller_id,hash,r.proposed_handle])
-    if(application.length||native.length||holds.length||transferReservation.length)
-      return {status:"unavailable" as const}
-    const already=await db.execute(`select 1 from da_store_rename_request
-      where seller_id=? and id<>? and status='approving' limit 1`,
-      [input.seller_id,input.request_id])
-    if(already.length)return {status:"conflict" as const}
-    const claimed=await db.execute(`update da_store_rename_request
-      set status='approving',updated_at=clock_timestamp()
-      where id=? and seller_id=? and status='pending_review'
-      returning id`,[input.request_id,input.seller_id])
-    if(claimed.length!==1)throw new IdentityAccessDenied()
-    return {status:"claimed" as const}
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalClaimStoreRenameApproval(token, input, context)
   }
 
-  /** Hold the current Staff grant through the native Mercur workflow and
-   * final readback. This separately committed phase deliberately cannot start
-   * unless the preceding durable claim exists.
-   */
   @InjectTransactionManager()
   async personalWithStoreRenameApprovalStaffLock<T>(token:string,input:{
     request_id:string;seller_id:string
   },execute:(data:{name:string;handle:string},context:Context)=>Promise<T>,
-    @MedusaContext() context:Context={}):Promise<T|null>{
-    if(!/^dasrn_[a-f0-9]{32}$/.test(input.request_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       typeof execute!=="function")throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const sessions=new IdentitySessions(db)
-    const staff=await sessions.staff(token,"store.approve","platform")
-    if(!staff)return null
-    const grant=await db.execute(`select id from da_platform_staff_grant
-      where id=? and person_id=? and task='store.approve' and resource='platform'
-        and revoked_at is null
-        and (expires_at is null or expires_at>clock_timestamp())
-      for share`,[staff.grant_id,staff.person_id])
-    if(grant.length!==1||grant[0].id!==staff.grant_id)return null
-    const fresh=await sessions.staff(token,"store.approve","platform")
-    if(!fresh||fresh.grant_id!==staff.grant_id)return null
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
-      [input.seller_id])
-    const rows=await db.execute(`select r.organization_id,r.proposed_name,r.proposed_handle
-      from da_store_rename_request r
-      join da_organization d on d.id=r.organization_id
-        and d.status='active' and d.deleted_at is null
-      join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status in ('open','suspended') and s.approved_at is not null
-        and s.name=r.old_name and s.handle=r.old_handle
-      where r.id=? and r.seller_id=? and r.status='approving'
-        and r.risk_version=? and r.risk_acknowledged_at is not null
-      for share of r`,[input.request_id,input.seller_id,STORE_RENAME_RISK_VERSION])
-    if(rows.length!==1||
-       !(await platformApprovedSellerIds(db,rows[0].organization_id)).includes(input.seller_id)||
-       !validStoreName(rows[0].proposed_name)||
-       !validStoreHandle(rows[0].proposed_handle))return null
-    return execute({name:rows[0].proposed_name as string,
-      handle:rows[0].proposed_handle as string},context)
+    @MedusaContext() context:Context={}):Promise<T|null> {
+    return this.storeRename_(context).personalWithStoreRenameApprovalStaffLock(token, input, execute, context)
   }
 
-  /** Finalize only after the native Seller already has BOTH approved values.
-   * If finalization fails, the durable 'approving' claim remains locked rather
-   * than silently releasing the vacated name, URL or proposed new name.
-   */
   @InjectTransactionManager()
   async personalRecordStoreRenameApproval(token:string,input:{
     request_id:string;seller_id:string
-  },@MedusaContext() context:Context={}){
-    if(!/^dasrn_[a-f0-9]{32}$/.test(input.request_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const sessions=new IdentitySessions(db)
-    const staff=await sessions.staff(token,"store.approve","platform")
-    if(!staff)return null
-    const grant=await db.execute(`select id from da_platform_staff_grant
-      where id=? and person_id=? and task='store.approve' and resource='platform'
-        and revoked_at is null and (expires_at is null or expires_at>clock_timestamp())
-      for share`,[staff.grant_id,staff.person_id])
-    if(grant.length!==1||grant[0].id!==staff.grant_id)return null
-    const rows=await db.execute(`select r.organization_id,r.old_name,r.old_handle,
-      r.proposed_name,r.proposed_handle
-      from da_store_rename_request r
-      join da_organization d on d.id=r.organization_id
-        and d.status='active' and d.deleted_at is null
-      join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status in ('open','suspended') and s.approved_at is not null
-        and s.name=r.proposed_name and s.handle=r.proposed_handle
-      join da_audit_event e on e.id=r.source_audit_event_id
-        and e.deleted_at is null and e.module='dogruadres-access'
-        and e.action='organization.store_rename_requested'
-        and e.organization_id=r.organization_id and e.target_id=r.seller_id
-        and e.actor_person_id=r.requested_by_person_id
-      where r.id=? and r.seller_id=? and r.status='approving'
-        and r.risk_version=? and r.risk_acknowledged_at is not null
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=e.id
-            and x.source_module='dogruadres-access' and x.deleted_at is null)
-      for update of r`,[input.request_id,input.seller_id,STORE_RENAME_RISK_VERSION])
-    if(rows.length!==1)return {status:"conflict" as const}
-    const r=rows[0],org=r.organization_id as string
-    if(!(await platformApprovedSellerIds(db,org)).includes(input.seller_id))
-      return null
-    const hashes=await db.execute(`select
-      encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(?,NFKC)),
-        '[[:space:]]+',' ','g')),'UTF8')),'hex') as old_hash`,[r.old_name])
-    const oldHash=hashes[0]?.old_hash
-    if(hashes.length!==1||typeof oldHash!=="string"||
-       !/^[a-f0-9]{64}$/.test(oldHash))throw new IdentityAccessDenied()
-    // Do not rewrite the original application name, ID or fingerprint:
-    // only its time-bounded *claim* can expire. Subsequent renames rely
-    // on the preceding approved request as their preserved name history.
-    const original=await db.execute(`select id from da_store_application
-      where seller_id=? and store_name_hash=? and name_claim_released_at is null
-      for update`,[input.seller_id,oldHash])
-    if(original.length>1)throw new IdentityAccessDenied()
-    if(!original.length){
-      // The same prior name can appear in several valid historical cycles.
-      // Check the last COMPLETED name+URL, not the number of matching rows.
-      const previous=await db.execute(`select proposed_handle,
-        encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(proposed_name,NFKC)),
-          '[[:space:]]+',' ','g')),'UTF8')),'hex') as approved_name_hash
-        from da_store_rename_request
-        where seller_id=? and id<>? and status='approved'
-          and approved_at is not null
-        order by approved_at desc,id desc limit 1`,
-        [input.seller_id,input.request_id])
-      if(previous.length!==1||previous[0].approved_name_hash!==oldHash||
-         previous[0].proposed_handle!==r.old_handle){
-        const assigned=await db.execute(`select 1 from da_store_name_transfer
-          where source_seller_id=? and source_organization_id=? and
-            old_handle=? and name_hash=? and status='assigned' limit 2`,
-          [input.seller_id,org,r.old_handle,oldHash])
-        if(assigned.length!==1)return null
-      }
-    }
-    const approved=await db.execute(`update da_store_rename_request
-      set status='approved',approved_at=clock_timestamp(),updated_at=clock_timestamp()
-      where id=? and seller_id=? and status='approving'
-      returning approved_at`,[input.request_id,input.seller_id])
-    if(approved.length!==1||!approved[0].approved_at)throw new IdentityAccessDenied()
-    if(original.length){
-      // PostgreSQL retains sub-millisecond timestamp precision that a JS
-      // Date round-trip can lose. Derive the exact 30-day boundary entirely
-      // from the persisted approval timestamp in this same SQL transaction.
-      const released=await db.execute(`update da_store_application
-        set name_claim_released_at=(
-          select approved_at + interval '30 days' from da_store_rename_request
-          where id=? and seller_id=? and status='approved'),
-          updated_at=clock_timestamp()
-        where id=? and seller_id=? and name_claim_released_at is null
-        returning id`,[input.request_id,input.seller_id,original[0].id,input.seller_id])
-      if(released.length!==1)throw new IdentityAccessDenied()
-    }
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:staff.person_id,actor_type:staff.actor_type,
-      actor_id:staff.actor_id,role_context:"platform_staff",
-      organization_id:org,
-      action:"organization.store_rename_approved",
-      module:DOGRUADRES_AUDIT_MODULE,
-      resource:"store-rename-request",target_id:input.seller_id,
-      new_values:{request_id:input.request_id,status:"approved",
-        staff_grant_id:staff.grant_id},
-      occurred_at:new Date()
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    return {status:"approved" as const,request_id:input.request_id,
-      seller_id:input.seller_id}
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalRecordStoreRenameApproval(token, input, context)
   }
 
-  /** A real Owner may submit a review request, NOT mutate Seller.name/handle.
-   * No name is claimed here. Staff approval must recheck every uniqueness and
-   * ownership invariant immediately before a separate native update workflow.
-   */
   @InjectTransactionManager()
   async personalRequestStoreRename(token:string,input:{
     request_id:string;organization_id:string;seller_id:string;
     name:string;handle:string;risk_acknowledged:true;
     risk_version:typeof STORE_RENAME_RISK_VERSION
-  },@MedusaContext() context:Context={}){
-    if(!/^dasrn_[a-f0-9]{32}$/.test(input.request_id)||
-       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       typeof input.name!=="string"||!validStoreName(input.name)||
-       typeof input.handle!=="string"||!validStoreHandle(input.handle)||
-       input.risk_acknowledged!==true||
-       input.risk_version!==STORE_RENAME_RISK_VERSION)throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const identity=await sessions.current(token,true,false)
-    if(!identity)return null
-    const company=await sessions.organizations(token,input.organization_id,false)
-    if(!company||company.person_id!==identity.person_id||
-       company.organizations.length!==1||
-       company.organizations[0].role!=="owner"||
-       !await isCurrentProtectedOwner(db,identity.person_id,input.organization_id))return null
-    const stores=await platformApprovedSellerIds(db,input.organization_id)
-    if(!stores.includes(input.seller_id))return null
-    const binding=await new ActorDelegation(db).binding(token,"member")
-    if(!binding||binding.binding.person_id!==identity.person_id||
-       !binding.binding.actor_id)return null
-    // Staff approval and suspended Store reactivation already take this
-    // per-Seller advisory lock before accessing native Seller rows. Match
-    // their lock order to avoid a mutual wait (Owner SHARE -> Staff lock,
-    // Staff lock -> Seller UPDATE) during a concurrent suspend/rename.
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
-      [input.seller_id])
-    // Lock the named Seller's row and current Member link only for our local
-    // request transaction. Native direct HTTP writes remain blocked at ingress.
-    const native=await db.execute(`select s.name,s.handle from seller s
-      join seller_member sm on sm.seller_id=s.id and sm.deleted_at is null
-      join member m on m.id=sm.member_id and m.deleted_at is null and m.is_active=true
-      where s.id=? and sm.member_id=? and s.deleted_at is null
-        and s.status in ('open','suspended') and s.approved_at is not null
-      for share of s,sm,m`,[input.seller_id,binding.binding.actor_id])
-    if(native.length!==1||typeof native[0].name!=="string"||
-       typeof native[0].handle!=="string")return null
-    const oldName=native[0].name as string,oldHandle=native[0].handle as string
-    // An idempotency key is scoped to the authorized Person, Organization and
-    // exact payload. Replays do not duplicate audit/outbox or new requests.
-    const prior=await db.execute(`select organization_id,seller_id,requested_by_person_id,
-      proposed_name,proposed_handle,risk_version,status
-      from da_store_rename_request where id=? for update`,[input.request_id])
-    if(prior.length>1)throw new IdentityAccessDenied()
-    if(prior.length){
-      const row=prior[0]
-      if(row.organization_id!==input.organization_id||row.seller_id!==input.seller_id||
-         row.requested_by_person_id!==identity.person_id||
-         row.proposed_name!==input.name||row.proposed_handle!==input.handle||
-         row.risk_version!==input.risk_version)throw new IdentityAccessDenied()
-      return {status:row.status as string,request_id:input.request_id,replayed:true}
-    }
-    // Staff may still be completing an earlier native Store unsuspend.
-    // No NEW Owner rename is allowed until its claim has a terminal receipt.
-    if(await this.hasUnresolvedStoreReactivationClaim_(db,input.seller_id))
-      return {status:"conflict" as const}
-    const pending=await db.execute(`select id from da_store_rename_request
-      where seller_id=? and status in ('pending_review','approving') limit 1`,[input.seller_id])
-    if(pending.length)return {status:"conflict" as const}
-    const canonical=await db.execute(`select
-      encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(?,NFKC)),
-        '[[:space:]]+',' ','g')),'UTF8')),'hex') as requested_hash,
-      encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(?,NFKC)),
-        '[[:space:]]+',' ','g')),'UTF8')),'hex') as existing_hash`,
-      [input.name,oldName])
-    const hash=canonical[0]?.requested_hash
-    if(canonical.length!==1||typeof hash!=="string"||
-       !/^[a-f0-9]{64}$/.test(hash))throw new IdentityAccessDenied()
-    // Name AND URL must change together; an unchanged pair is not a request.
-    if(hash===canonical[0].existing_hash||input.handle===oldHandle)
-      return {status:"invalid_change" as const}
-    // Optimistic preflight only. It never reserves a name and the future staff
-    // approval MUST repeat every check under its own mutually exclusive lock.
-    const conflict=await db.execute(`select 1 from da_store_application
-      where store_name_hash=? and
-        (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
-        and (seller_id is null or seller_id<>?) limit 1`,
-      [hash,input.seller_id])
-    const nativeConflict=await db.execute(`select 1 from seller where id<>?
-      and (deleted_at is null or deleted_at>clock_timestamp()-interval '30 days')
-      and (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(name,NFKC)),
-        '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or lower(handle)=?)
-      limit 1`,[input.seller_id,hash,input.handle])
-    const held=await db.execute(`select 1 from da_store_rename_request h
-      where (h.status='approving' or
-        (h.status='approved' and h.approved_at>
-          clock_timestamp()-interval '30 days'))
-      and (
-        (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(h.old_name,NFKC)),
-          '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or h.old_handle=?)
-        or (h.status='approving' and
-          (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(h.proposed_name,NFKC)),
-            '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or h.proposed_handle=?))
-      ) ${authorizedTransferredOldNameHoldExclusion}
-      limit 1`,[hash,input.handle,hash,input.handle,
-        input.seller_id,input.organization_id,hash,input.handle])
-    const otherTransfer=await db.execute(`select 1 from da_store_name_transfer
-      where status='assigned' and target_seller_id<>? and
-        (name_hash=? or old_handle=?) limit 1`,
-      [input.seller_id,hash,input.handle])
-    if(conflict.length||nativeConflict.length||held.length||otherTransfer.length)
-      return {status:"unavailable" as const}
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:identity.person_id,actor_type:identity.actor_type,actor_id:identity.actor_id,
-      role_context:"owner",organization_id:input.organization_id,
-      action:"organization.store_rename_requested",module:DOGRUADRES_AUDIT_MODULE,
-      resource:"store-rename-request",target_id:input.seller_id,
-      new_values:{request_id:input.request_id,risk_version:STORE_RENAME_RISK_VERSION,
-        status:"pending_review"},occurred_at:new Date()
-    }],context)
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const rows=await db.execute(`insert into da_store_rename_request
-      (id,organization_id,seller_id,requested_by_person_id,old_name,old_handle,
-       proposed_name,proposed_handle,risk_version,risk_acknowledged_at,
-       source_audit_event_id,status)
-      values(?,?,?,?,?,?,?,?,?,clock_timestamp(),?,'pending_review')
-      returning id`,[input.request_id,input.organization_id,input.seller_id,
-       identity.person_id,oldName,oldHandle,input.name,input.handle,
-       STORE_RENAME_RISK_VERSION,audit.id])
-    if(rows.length!==1)throw new IdentityAccessDenied()
-    return {status:"pending_review" as const,request_id:input.request_id,replayed:false}
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalRequestStoreRename(token, input, context)
   }
 
-  /** A current protected Owner may withdraw the organization's pending name/URL
-   * change, without modifying the approved native Seller. Reuse the same
-   * per-Seller transaction advisory lock as Staff approve/reject: once Staff
-   * claims an approval, cancellation cannot silently override that decision.
-   */
   @InjectTransactionManager()
   async personalWithdrawStoreRenameRequest(token:string,input:{
     request_id:string;organization_id:string;seller_id:string
-  },@MedusaContext() context:Context={}){
-    if(!/^dasrn_[a-f0-9]{32}$/.test(input.request_id)||
-       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const identity=await sessions.current(token,true,false)
-    if(!identity)return null
-    const company=await sessions.organizations(token,input.organization_id,false)
-    if(!company||company.person_id!==identity.person_id||
-       company.organizations.length!==1||
-       company.organizations[0].role!=="owner"||
-       !await isCurrentProtectedOwner(db,identity.person_id,input.organization_id))
-      return null
-    if(!(await platformApprovedSellerIds(db,input.organization_id)).includes(input.seller_id))
-      return null
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
-      [input.seller_id])
-    const rows=await db.execute(`select r.id,r.status,r.risk_version
-      from da_store_rename_request r
-      join da_organization d on d.id=r.organization_id
-        and d.status='active' and d.deleted_at is null
-      join seller s on s.id=r.seller_id and s.deleted_at is null
-      join da_organization_seller_ownership o
-        on o.seller_id=r.seller_id and o.organization_id=r.organization_id
-        and o.revoked_at is null
-      join da_audit_event origin on origin.id=o.verification_audit_event_id
-        and origin.deleted_at is null and origin.organization_id=r.organization_id
-        and origin.target_id=r.seller_id and origin.module='dogruadres-access'
-      join da_audit_event e on e.id=r.source_audit_event_id
-        and e.deleted_at is null and e.module='dogruadres-access'
-        and e.action='organization.store_rename_requested'
-        and e.resource='store-rename-request'
-        and e.organization_id=r.organization_id and e.target_id=r.seller_id
-        and e.actor_person_id=r.requested_by_person_id
-        and e.new_values->>'request_id'=r.id
-        and e.new_values->>'risk_version'=r.risk_version
-      where r.id=? and r.organization_id=? and r.seller_id=?
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=e.id and x.deleted_at is null
-            and x.source_module='dogruadres-access')
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=origin.id and x.deleted_at is null
-            and x.source_module='dogruadres-access')
-      for update of r`,[input.request_id,input.organization_id,
-      input.seller_id])
-    if(rows.length!==1||rows[0].risk_version!==STORE_RENAME_RISK_VERSION||
-       rows[0].status!=="pending_review")
-      return {status:"conflict" as const}
-    const updated=await db.execute(`update da_store_rename_request
-      set status='withdrawn',updated_at=clock_timestamp()
-      where id=? and organization_id=? and seller_id=?
-        and status='pending_review'
-      returning id`,[input.request_id,input.organization_id,
-      input.seller_id])
-    if(updated.length!==1||updated[0].id!==input.request_id)
-      throw new IdentityAccessDenied()
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:identity.person_id,actor_type:identity.actor_type,
-      actor_id:identity.actor_id,role_context:"owner",
-      organization_id:input.organization_id,
-      action:"organization.store_rename_withdrawn",
-      module:DOGRUADRES_AUDIT_MODULE,
-      resource:"store-rename-request",target_id:input.seller_id,
-      new_values:{request_id:input.request_id,status:"withdrawn"},
-      occurred_at:new Date()
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    return {status:"withdrawn" as const,request_id:input.request_id,
-      seller_id:input.seller_id}
+  },@MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalWithdrawStoreRenameRequest(token, input, context)
   }
 
-  /** Private list scope for Owner Store-name management ONLY. Unlike the
-   * ordinary commercial Store picker it may include approved suspended
-   * Sellers, but never grants selling, products.edit or platform authority.
-   * Native membership and status are independently verified by the GET
-   * adapter; no native Seller IDs are inferred from a browser-selected URL.
-   */
   @InjectTransactionManager()
   async personalStoreRenameCandidateIds(token:string,organizationId:string,
-    @MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const session=new IdentitySessions(db)
-    const current=await session.current(token,true,false)
-    if(!current)return null
-    const scope=await session.organizations(token,organizationId,false)
-    if(!scope||scope.person_id!==current.person_id||
-       scope.organizations.length!==1||scope.organizations[0].role!=="owner"||
-       !await isCurrentProtectedOwner(db,current.person_id,organizationId))return null
-    const sellerIds=await platformApprovedSellerIds(db,organizationId)
-    return {person_id:current.person_id,organization_id:organizationId,
-      seller_ids:sellerIds}
+    @MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalStoreRenameCandidateIds(token, organizationId, context)
   }
 
-  /** Private Owner readback for uncertain requests. No native rename or
-   * approval outcome is inferred from a pending request.
-   */
   @InjectTransactionManager()
   async personalStoreRenameRequests(token:string,organizationId:string,sellerId:string,
-    @MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const identity=await sessions.current(token,true,false)
-    if(!identity)return null
-    const scope=await sessions.organizations(token,organizationId,false)
-    if(!scope||scope.person_id!==identity.person_id||
-       scope.organizations.length!==1||scope.organizations[0].role!=="owner"||
-       !await isCurrentProtectedOwner(db,identity.person_id,organizationId))return null
-    if(!(await platformApprovedSellerIds(db,organizationId)).includes(sellerId))return null
-    const requests=await db.execute(`select id,status,proposed_name,proposed_handle,
-      created_at from da_store_rename_request
-      where organization_id=? and seller_id=?
-      order by created_at desc,id desc limit 10`,[organizationId,sellerId])
-    if(requests.length>10||requests.some(row=>typeof row.id!=="string"||
-       !/^dasrn_[a-f0-9]{32}$/.test(row.id)||
-       !["pending_review","approving","approved","rejected","withdrawn"].includes(row.status)))
-      throw new IdentityAccessDenied()
-    return {organization_id:organizationId,seller_id:sellerId,
-      requests:requests.map(row=>({id:row.id as string,status:row.status as string,
-        proposed_name:row.proposed_name as string,
-        proposed_handle:row.proposed_handle as string,
-        created_at:row.created_at}))}
+    @MedusaContext() context:Context={}) {
+    return this.storeRename_(context).personalStoreRenameRequests(token, organizationId, sellerId, context)
   }
 
-  // B22: legal ownership candidates are NOT a grant, and never leave this
-  // module without separately verified live native Seller/Member authority.
+  @InjectTransactionManager()
+  async personalStoreApplications(token:string,org:string,@MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).personalStoreApplications(token, org, context)
+  }
+
+  @InjectTransactionManager()
+  async personalSaveStoreApplicationDraft(token:string,input:StoreDraftInput,
+    @MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).personalSaveStoreApplicationDraft(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalListStoreDraftPermissions(token:string,org:string,after:string|null=null,
+    @MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).personalListStoreDraftPermissions(token, org, after, context)
+  }
+
+  @InjectTransactionManager()
+  async personalChangeStoreDraftPermission(
+    token:string,input:{action:"grant"|"revoke";organization_id:string;membership_id:string},
+    @MedusaContext() context:Context={}
+  ) {
+    return this.storeApplication_(context).personalChangeStoreDraftPermission(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformStoreApplicationRight(token:string,org:string,
+    @MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).personalPlatformStoreApplicationRight(token, org, context)
+  }
+
+  @InjectTransactionManager()
+  async personalSetStoreApplicationRight(token:string,input:{
+    organization_id:string;expected_enabled:boolean;expected_version:number;enabled:boolean;reason:string
+  },@MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).personalSetStoreApplicationRight(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalPrepareStoreApplicationFromDraft(token:string,input:{
+    organization_id:string;draft_id:string;expected_version:number;application_id:string
+  },@MedusaContext() context:Context={}):Promise<StoreRequest|{conflict:true}|null> {
+    return this.storeApplication_(context).personalPrepareStoreApplicationFromDraft(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalWithStoreApplicationOwnerLock<T>(
+    token:string,input:StoreRequest,execute:(context:Context)=>Promise<T>,
+    @MedusaContext() context:Context={}
+  ):Promise<T|null> {
+    return this.storeApplication_(context).personalWithStoreApplicationOwnerLock(token, input, execute, context)
+  }
+
+  @InjectTransactionManager()
+  async reserveStoreApplication(token:string,input:StoreRequest,@MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).reserveStoreApplication(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async claimStoreApplication(token:string,input:StoreRequest,@MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).claimStoreApplication(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async finishStoreApplication(token:string,input:StoreRequest,sellerId:string,
+    @MedusaContext() context:Context={}) {
+    return this.storeApplication_(context).finishStoreApplication(token, input, sellerId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalWithStoreApprovalStaffLock<T>(
+    token:string,target:{application_id:string;seller_id:string;decision?:"reject"|"unsuspend"|"reconcile"|"release"},
+    execute:(context:Context)=>Promise<T>,@MedusaContext() context:Context={}
+  ):Promise<T|null> {
+    return this.storeApplication_(context).personalWithStoreApprovalStaffLock(token, target, execute, context)
+  }
+
   @InjectTransactionManager()
   async personalLegalSellerIds(token: string, organizationId: string,
     @MedusaContext() context: Context = {}) {
-    return authorizedLegalSellerIds(securitySql(context.transactionManager), token, organizationId)
+    return this.storeProductPermissions_(context).personalLegalSellerIds(token, organizationId, context)
   }
 
-
-  // B22: Only a currently authenticated Organization Owner may change one
-  // independently assigned products.edit grant for a member of THAT same Org.
-  // Atomic Foundation audit/outbox is authoritative, not Mercur is_owner.
-  // Native Seller status is additionally checked by the public POST adapter.
   @InjectTransactionManager()
   async personalChangeStoreProductPermission(
     token:string,input:{action:"grant"|"revoke";organization_id:string;seller_id:string;membership_id:string},
     @MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       !/^[A-Za-z0-9_-]{1,128}$/.test(input.membership_id)||
-       !["grant","revoke"].includes(input.action))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const current=await sessions.current(token,true,false)
-    if(!current)return null
-    const owner=await sessions.organizations(token,input.organization_id,false)
-    if(!owner||owner.person_id!==current.person_id||owner.organizations.length!==1||
-       owner.organizations[0].role!=="owner")return null
-    // Serialize with Foundation membership mutations and other grant requests.
-    // The same central role policy that protects membership changes also
-    // governs Owner management of a member's Store action permissions.
-    // Keep the live protected-Owner row lock for these Foundation writes.
-    if(!organizationActionAllowed("owner","membership.manage",
-       await isCurrentProtectedOwner(db,current.person_id,input.organization_id),false))return null
-    const target=await db.execute(`select m.person_id from da_organization_membership m
-      join da_person p on p.id=m.person_id
-      where m.id=? and m.organization_id=? and m.deleted_at is null
-        and p.disabled_at is null and p.deleted_at is null
-        -- Protected Owner permissions are not editable individual grants.
-        -- Legacy admin may only have an older personal grant revoked.
-        and m.role in ('member','admin') and m.protected_owner=false
-        ${input.action==="grant"?"and m.role='member' and m.status='active'":""}
-      for share of m,p`,[input.membership_id,input.organization_id])
-    if(target.length!==1||typeof target[0].person_id!=="string"||
-       !/^daprs_[A-Za-z0-9_-]+$/.test(target[0].person_id))return null
-    const targetPerson=target[0].person_id as string
-    await db.execute(`select pg_advisory_xact_lock(
-      hashtext('b22-products-edit'),hashtext(?))`,
-      [input.organization_id+":"+input.seller_id+":"+targetPerson])
-    const active=await db.execute(`select id from da_store_product_permission
-      where person_id=? and organization_id=? and seller_id=?
-        and permission='products.edit' and revoked_at is null for update`,
-      [targetPerson,input.organization_id,input.seller_id])
-    if(active.length>1)throw new IdentityAccessDenied()
-    if(input.action==="grant"){
-      const authorized=await platformApprovedSellerIds(db,input.organization_id)
-      if(!authorized.includes(input.seller_id))return null
-      if(active.length){
-        if(!await verifiedStoreProductEditGrant(db,targetPerson,input.organization_id,input.seller_id))
-          throw new IdentityAccessDenied()
-        return {status:"active" as const,grant_id:active[0].id as string}
-      }
-      const id="daspg_"+randomUUID()
-      const [audit]=await this.persistAuditEventsWithOutbox_([{
-        actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
-        role_context:"owner",organization_id:input.organization_id,
-        action:"organization.store_product_permission_granted",module:DOGRUADRES_AUDIT_MODULE,
-        resource:"store-product-permission",target_id:input.seller_id,
-        new_values:{grant_id:id,person_id:targetPerson,permission:"products.edit"},
-        occurred_at:new Date()
-      }],context)
-      await (context.transactionManager as {flush():Promise<void>}).flush()
-      await db.execute(`insert into da_store_product_permission
-        (id,person_id,organization_id,seller_id,permission,issued_by_person_id,source_audit_event_id)
-        values (?,?,?,?,'products.edit',?,?)`,
-        [id,targetPerson,input.organization_id,input.seller_id,current.person_id,audit.id])
-      return {status:"active" as const,grant_id:id}
-    }
-    if(active.length===0)return {status:"revoked" as const,grant_id:null}
-    const grantId=active[0].id as string
-    const [event]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
-      role_context:"owner",organization_id:input.organization_id,
-      action:"organization.store_product_permission_revoked",module:DOGRUADRES_AUDIT_MODULE,
-      resource:"store-product-permission",target_id:input.seller_id,
-      previous_values:{grant_id:grantId,person_id:targetPerson,permission:"products.edit"},
-      new_values:{grant_id:grantId,status:"revoked"},occurred_at:new Date()
-    }],context)
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const result=await db.execute(`update da_store_product_permission
-      set revoked_at=clock_timestamp() where id=? and revoked_at is null
-      returning id`,[grantId])
-    if(result.length!==1||!event.id)throw new IdentityAccessDenied()
-    return {status:"revoked" as const,grant_id:grantId}
+  ) {
+    return this.storeProductPermissions_(context).personalChangeStoreProductPermission(token, input, context)
   }
 
-
-  /**
-   * B22: the Owner activates an ALREADY AUDITED products.edit grant for an
-   * ALREADY VERIFIED native Member. This is never identity registration,
-   * Organization membership creation or an independent product permission.
-   * The Store/Person grant lock is shared with Owner revoke and draft writes.
-   * Native link creation emits Mercur's seller_member.created event; if its
-   * outcome is uncertain the caller must read native membership, not replay
-   * an assumed failure.
-   */
   @InjectTransactionManager()
   async personalWithStoreMemberConnectionLock(
     token:string,
     input:{organization_id:string;seller_id:string;membership_id:string},
     execute:(memberId:string,context:Context)=>Promise<{created:boolean}>,
     @MedusaContext() context:Context={}
-  ):Promise<{created:boolean}|null>{
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       !/^[A-Za-z0-9_-]{1,128}$/.test(input.membership_id)||
-       typeof execute!=="function")throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const sessions=new IdentitySessions(db)
-    const current=await sessions.current(token,true,false)
-    if(!current)return null
-    const org=await sessions.organizations(token,input.organization_id,false)
-    if(!org||org.person_id!==current.person_id||org.organizations.length!==1||
-       org.organizations[0].role!=="owner"||
-       !organizationActionAllowed("owner","membership.manage",
-         await isCurrentProtectedOwner(db,current.person_id,input.organization_id),false))
-      return null
-
-    // Ordinary member ONLY: historical Organization admin and protected Owner
-    // roles cannot become technical Store members through this narrow action.
-    const targets=await db.execute(
-      "select m.person_id from da_organization_membership m "+
-      "join da_person p on p.id=m.person_id "+
-      "where m.id=? and m.organization_id=? and m.role='member' "+
-      "and m.protected_owner=false and m.status='active' "+
-      "and m.deleted_at is null and m.revoked_at is null "+
-      "and p.disabled_at is null and p.deleted_at is null for share of m,p",
-      [input.membership_id,input.organization_id])
-    if(targets.length!==1||typeof targets[0].person_id!=="string"||
-       !/^daprs_[A-Za-z0-9_-]+$/.test(targets[0].person_id)||
-       targets[0].person_id===current.person_id)return null
-    const targetPerson=targets[0].person_id as string
-
-    // Same lock as permission grant/revoke and native draft creation.
-    await db.execute(
-      "select pg_advisory_xact_lock(hashtext('b22-products-edit'),hashtext(?))",
-      [input.organization_id+":"+input.seller_id+":"+targetPerson])
-    if(!await verifiedStoreProductEditGrant(db,targetPerson,
-         input.organization_id,input.seller_id))return null
-    if(!(await platformApprovedSellerIds(db,input.organization_id))
-       .includes(input.seller_id))return null
-    const ownership=await db.execute(
-      "select seller_id from da_organization_seller_ownership "+
-      "where organization_id=? and seller_id=? and revoked_at is null for share",
-      [input.organization_id,input.seller_id])
-    if(ownership.length!==1)return null
-
-    // A secondary Member must have completed the existing native password/MFA
-    // proof. A primary Member is accepted only with its verified login binding.
-    // Neither email equality nor a SellerMember flag binds two Persons.
-    const secondary=await db.execute(
-      "select b.actor_id,b.auth_identity_id from da_verified_actor_binding b "+
-      "join da_actor_mapping a on a.person_id=b.person_id "+
-      "and a.actor_type='member' and a.actor_id=b.actor_id and a.deleted_at is null "+
-      "where b.person_id=? and b.actor_type='member' "+
-      "and b.verified_at is not null and b.revoked_at is null for share of b,a",
-      [targetPerson])
-    const primary=await db.execute(
-      "select l.actor_id,l.auth_identity_id from da_login_binding l "+
-      "join da_actor_mapping a on a.person_id=l.person_id "+
-      "and a.actor_type='member' and a.actor_id=l.actor_id and a.deleted_at is null "+
-      "where l.person_id=? and l.actor_type='member' "+
-      "and l.verified_at is not null and l.revoked_at is null for share of l,a",
-      [targetPerson])
-    const bindings=[...secondary,...primary]
-    if(bindings.length!==1||typeof bindings[0].actor_id!=="string"||
-       !/^mem_[A-Za-z0-9_-]+$/.test(bindings[0].actor_id)||
-       typeof bindings[0].auth_identity_id!=="string"||
-       !bindings[0].auth_identity_id)return null
-    const nativeMemberId=bindings[0].actor_id as string
-    const outcome=await execute(nativeMemberId,context)
-    if(!outcome||typeof outcome.created!=="boolean")throw new IdentityAccessDenied()
-    // Reconcile native success after an interrupted Foundation audit write:
-    // an existing correctly-scoped native link may be confirmed, but not
-    // duplicated, and it is never itself a products.edit permission.
-    const audits=await db.execute(
-      "select e.id,exists(select 1 from da_audit_outbox x "+
-      "where x.source_audit_event_id=e.id and x.source_module='dogruadres-access' "+
-      "and x.deleted_at is null) as proof from da_audit_event e "+
-      "where e.action='organization.store_native_member_connection_confirmed' "+
-      "and e.module='dogruadres-access' and e.resource='store-member-connection' "+
-      "and e.organization_id=? and e.target_id=? "+
-      "and e.new_values->>'person_id'=? and e.new_values->>'member_id'=? "+
-      "and e.deleted_at is null limit 2",
-      [input.organization_id,input.seller_id,targetPerson,nativeMemberId])
-    if(audits.length>1||audits.some(r=>r.proof!==true))
-      throw new IdentityAccessDenied()
-    if(!audits.length){
-      await this.persistAuditEventsWithOutbox_([{
-        actor_person_id:current.person_id,actor_type:current.actor_type,
-        actor_id:current.actor_id,role_context:"owner",
-        organization_id:input.organization_id,
-        action:"organization.store_native_member_connection_confirmed",
-        module:DOGRUADRES_AUDIT_MODULE,resource:"store-member-connection",
-        target_id:input.seller_id,
-        new_values:{person_id:targetPerson,member_id:nativeMemberId,
-          role_id:"role_seller_support",source_permission:"products.edit"},
-        occurred_at:new Date()
-      }],context)
-      await (context.transactionManager as {flush():Promise<void>}).flush()
-    }
-    return outcome
+  ):Promise<{created:boolean}|null> {
+    return this.storeProductPermissions_(context).personalWithStoreMemberConnectionLock(token, input, execute, context)
   }
 
   @InjectTransactionManager()
   async personalListStoreProductPermissions(token:string,organizationId:string,
-    @MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),s=new IdentitySessions(db)
-    const current=await s.organizations(token,organizationId,false)
-    if(!current||current.organizations.length!==1||
-       current.organizations[0].role!=="owner"||
-       !organizationActionAllowed("owner","membership.list",
-         await isCurrentProtectedOwner(db,current.person_id,organizationId),false))return null
-    const rows=await db.execute(`select g.id,g.person_id,g.seller_id
-      from da_store_product_permission g
-      join da_audit_event e on e.id=g.source_audit_event_id
-       and e.deleted_at is null and e.module='dogruadres-access'
-       and e.actor_person_id=g.issued_by_person_id
-       and e.organization_id=g.organization_id and e.target_id=g.seller_id
-       and e.action='organization.store_product_permission_granted'
-       and e.resource='store-product-permission'
-       and e.new_values->>'grant_id'=g.id
-       and e.new_values->>'person_id'=g.person_id
-       and e.new_values->>'permission'=g.permission
-      where g.organization_id=? and g.permission='products.edit'
-       and g.revoked_at is null and (g.expires_at is null or g.expires_at>statement_timestamp())
-       and exists(select 1 from da_audit_outbox x
-         where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
-         and x.deleted_at is null)
-      order by g.id limit 101`,[organizationId])
-    if(rows.length>100||rows.some(g=>typeof g.id!=="string"||
-       !/^daspg_[A-Za-z0-9_-]+$/.test(g.id)||typeof g.person_id!=="string"||
-       !/^daprs_[A-Za-z0-9_-]+$/.test(g.person_id)||
-       typeof g.seller_id!=="string"||!/^sel_[A-Za-z0-9_-]+$/.test(g.seller_id)))
-      throw new IdentityAccessDenied()
-    return rows as Array<{id:string;person_id:string;seller_id:string}>
+    @MedusaContext() context:Context={}) {
+    return this.storeProductPermissions_(context).personalListStoreProductPermissions(token, organizationId, context)
   }
 
-
-
-  // B22: only active Organization Owner issues/revokes explicit buyer.purchase.
-  // This does NOT authorize a Customer token or a cart/checkout operation.
   @InjectTransactionManager()
   async personalChangeBuyerPermission(
     token:string,input:{action:"grant"|"revoke";organization_id:string;membership_id:string},
     @MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^[A-Za-z0-9_-]{1,128}$/.test(input.membership_id)||
-       !["grant","revoke"].includes(input.action))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const current=await sessions.current(token,true,false)
-    if(!current)return null
-    const owner=await sessions.organizations(token,input.organization_id,false)
-    if(!owner||owner.person_id!==current.person_id||owner.organizations.length!==1||
-       owner.organizations[0].role!=="owner")return null
-    // Role-only ownership never grants authority to edit member permissions.
-    // A narrowed Owner role must also deny this buyer grant/revoke writer.
-    if(!organizationActionAllowed("owner","membership.manage",
-       await isCurrentProtectedOwner(db,current.person_id,input.organization_id),false))return null
-    const target=await db.execute(`select m.person_id from da_organization_membership m
-      join da_person p on p.id=m.person_id
-      where m.id=? and m.organization_id=? and m.deleted_at is null
-        and p.deleted_at is null and p.disabled_at is null
-        ${input.action==="grant"?"and m.status='active'":""}
-      for share of m,p`,[input.membership_id,input.organization_id])
-    if(target.length!==1||typeof target[0].person_id!=="string"||
-       !/^daprs_[A-Za-z0-9_-]+$/.test(target[0].person_id))return null
-    const personId=target[0].person_id as string
-    await db.execute(`select pg_advisory_xact_lock(
-      hashtext('b22-buyer-purchase'),hashtext(?))`,
-      [input.organization_id+":"+personId])
-    // Recheck issuer after locks; never rely on an earlier UI role label.
-    const currentOwner=await sessions.organizations(token,input.organization_id,false)
-    if(!currentOwner||currentOwner.person_id!==current.person_id||
-       currentOwner.organizations.length!==1||
-       currentOwner.organizations[0].role!=="owner")return null
-    const active=await db.execute(`select id from da_organization_buyer_permission
-      where person_id=? and organization_id=? and permission='buyer.purchase'
-        and revoked_at is null for update`,[personId,input.organization_id])
-    if(active.length>1)throw new IdentityAccessDenied()
-    if(input.action==="grant"){
-      if(active.length){
-        if(!await verifiedBuyerPurchaseGrant(db,personId,input.organization_id))
-          throw new IdentityAccessDenied()
-        return {status:"active" as const,grant_id:active[0].id as string}
-      }
-      const grantId="dabpg_"+randomUUID()
-      const [audit]=await this.persistAuditEventsWithOutbox_([{
-        actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
-        role_context:"owner",organization_id:input.organization_id,
-        action:"organization.buyer_permission_granted",module:DOGRUADRES_AUDIT_MODULE,
-        resource:"buyer-permission",target_id:personId,
-        new_values:{grant_id:grantId,person_id:personId,permission:"buyer.purchase"},
-        occurred_at:new Date()
-      }],context)
-      await (context.transactionManager as {flush():Promise<void>}).flush()
-      await db.execute(`insert into da_organization_buyer_permission
-        (id,person_id,organization_id,permission,issued_by_person_id,source_audit_event_id)
-        values (?,?,?,'buyer.purchase',?,?)`,
-        [grantId,personId,input.organization_id,current.person_id,audit.id])
-      return {status:"active" as const,grant_id:grantId}
-    }
-    if(active.length===0)return {status:"revoked" as const,grant_id:null}
-    const grantId=active[0].id as string
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
-      role_context:"owner",organization_id:input.organization_id,
-      action:"organization.buyer_permission_revoked",module:DOGRUADRES_AUDIT_MODULE,
-      resource:"buyer-permission",target_id:personId,
-      previous_values:{grant_id:grantId,person_id:personId,permission:"buyer.purchase"},
-      new_values:{grant_id:grantId,status:"revoked"},occurred_at:new Date()
-    }],context)
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const changed=await db.execute(`update da_organization_buyer_permission
-      set revoked_at=clock_timestamp()
-      where id=? and revoked_at is null returning id`,[grantId])
-    if(changed.length!==1||!audit.id)throw new IdentityAccessDenied()
-    return {status:"revoked" as const,grant_id:grantId}
+  ) {
+    return this.buyerOperations_(context).personalChangeBuyerPermission(token, input, context)
   }
 
   @InjectTransactionManager()
   async personalListBuyerPermissions(
     token:string,organizationId:string,@MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),session=new IdentitySessions(db)
-    const current=await session.organizations(token,organizationId,false)
-    if(!current||current.organizations.length!==1||
-       current.organizations[0].role!=="owner"||
-       !organizationActionAllowed("owner","membership.list",
-         await isCurrentProtectedOwner(db,current.person_id,organizationId),false))return null
-    const rows=await db.execute(`select g.id,g.person_id
-      from da_organization_buyer_permission g
-      join da_audit_event e on e.id=g.source_audit_event_id
-        and e.deleted_at is null and e.module='dogruadres-access'
-        and e.actor_person_id=g.issued_by_person_id
-        and e.organization_id=g.organization_id and e.target_id=g.person_id
-        and e.action='organization.buyer_permission_granted'
-        and e.resource='buyer-permission'
-        and e.new_values->>'grant_id'=g.id
-        and e.new_values->>'person_id'=g.person_id
-        and e.new_values->>'permission'=g.permission
-      where g.organization_id=? and g.permission='buyer.purchase'
-        and g.revoked_at is null
-        and (g.expires_at is null or g.expires_at>statement_timestamp())
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=e.id
-            and x.source_module='dogruadres-access' and x.deleted_at is null)
-      order by g.id limit 101`,[organizationId])
-    if(rows.length>100||rows.some(g=>typeof g.id!=="string"||
-       !/^dabpg_[A-Za-z0-9_-]+$/.test(g.id)||
-       typeof g.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(g.person_id)))
-      throw new IdentityAccessDenied()
-    return rows as Array<{id:string;person_id:string}>
+  ) {
+    return this.buyerOperations_(context).personalListBuyerPermissions(token, organizationId, context)
   }
 
-  /** B22: Store-scoped Buyer Organization block is a Seller policy, NOT a
-   * user permission. Only a strong, live Foundation Organization Owner may
-   * write it. Native Seller approval/member checks remain in the HTTP edge.
-   * A block never cancels historical orders or enables checkout.
-   */
   @InjectTransactionManager()
   async personalChangeStoreBuyerBlock(
     token:string,input:{action:"block"|"unblock";organization_id:string;
       seller_id:string;buyer_organization_id:string},
     @MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.buyer_organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       !["block","unblock"].includes(input.action))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const current=await sessions.current(token,true,false)
-    if(!current)return null
-    const owner=await sessions.organizations(token,input.organization_id,false)
-    if(!owner||owner.person_id!==current.person_id||
-       owner.organizations.length!==1||owner.organizations[0].role!=="owner")return null
-    // Authoritative protected Owner check holds the live membership row lock
-    // in the same Foundation transaction as the domain and audit writes.
-    if(!await isCurrentProtectedOwner(db,current.person_id,input.organization_id))return null
-    const target=await db.execute(`select id from da_organization
-      where id=? and deleted_at is null for share`,[input.buyer_organization_id])
-    if(target.length!==1)return null
-    await db.execute(`select pg_advisory_xact_lock(
-      hashtext('b22-store-buyer-block'),hashtext(?))`,
-      [input.seller_id+":"+input.buyer_organization_id])
-    const finalOwner=await sessions.organizations(token,input.organization_id,false)
-    if(!finalOwner||finalOwner.person_id!==current.person_id||
-       finalOwner.organizations.length!==1||
-       finalOwner.organizations[0].role!=="owner")return null
-    const sellers=await platformApprovedSellerIds(db,input.organization_id)
-    if(!sellers.includes(input.seller_id))return null
-    const rows=await db.execute(`select b.id,
-      exists(select 1 from da_audit_event e
-        where e.id=b.source_audit_event_id and e.deleted_at is null
-          and e.module='dogruadres-access'
-          and e.action='organization.store_buyer_blocked'
-          and e.resource='store-buyer-block'
-          and e.organization_id=b.owner_organization_id
-          and e.actor_person_id=b.issued_by_person_id
-          and e.target_id=b.seller_id
-          and e.new_values->>'block_id'=b.id
-          and e.new_values->>'buyer_organization_id'=b.buyer_organization_id
-          and exists(select 1 from da_audit_outbox x
-            where x.source_audit_event_id=e.id
-              and x.source_module='dogruadres-access'
-              and x.deleted_at is null)) as proof
-      from da_store_buyer_organization_block b
-      where b.owner_organization_id=? and b.seller_id=?
-        and b.buyer_organization_id=? and b.revoked_at is null
-      for update of b`,[input.organization_id,input.seller_id,input.buyer_organization_id])
-    if(rows.length>1||rows.some(r=>r.proof!==true||typeof r.id!=="string"||
-       !/^dasbb_[A-Za-z0-9_-]+$/.test(r.id)))throw new IdentityAccessDenied()
-    if(input.action==="block"){
-      if(rows.length===1)return {status:"blocked" as const}
-      const id="dasbb_"+randomUUID()
-      const [audit]=await this.persistAuditEventsWithOutbox_([{
-        actor_person_id:current.person_id,actor_type:current.actor_type,
-        actor_id:current.actor_id,role_context:"owner",
-        organization_id:input.organization_id,
-        action:"organization.store_buyer_blocked",module:DOGRUADRES_AUDIT_MODULE,
-        resource:"store-buyer-block",target_id:input.seller_id,
-        new_values:{block_id:id,buyer_organization_id:input.buyer_organization_id},
-        occurred_at:new Date()
-      }],context)
-      await (context.transactionManager as {flush():Promise<void>}).flush()
-      const inserted=await db.execute(`insert into da_store_buyer_organization_block
-        (id,owner_organization_id,seller_id,buyer_organization_id,
-         issued_by_person_id,source_audit_event_id)
-        values (?,?,?,?,?,?) returning id`,
-        [id,input.organization_id,input.seller_id,
-         input.buyer_organization_id,current.person_id,audit.id])
-      if(inserted.length!==1)throw new IdentityAccessDenied()
-      return {status:"blocked" as const}
-    }
-    if(rows.length===0)return {status:"unblocked" as const}
-    const id=rows[0].id as string
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:current.person_id,actor_type:current.actor_type,
-      actor_id:current.actor_id,role_context:"owner",
-      organization_id:input.organization_id,
-      action:"organization.store_buyer_unblocked",module:DOGRUADRES_AUDIT_MODULE,
-      resource:"store-buyer-block",target_id:input.seller_id,
-      previous_values:{block_id:id,buyer_organization_id:input.buyer_organization_id},
-      new_values:{block_id:id,status:"unblocked"},occurred_at:new Date()
-    }],context)
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const changed=await db.execute(`update da_store_buyer_organization_block
-      set revoked_at=clock_timestamp(),revoked_by_person_id=?,
-        revocation_audit_event_id=?
-      where id=? and revoked_at is null returning id`,
-      [current.person_id,audit.id,id])
-    if(changed.length!==1)throw new IdentityAccessDenied()
-    return {status:"unblocked" as const}
+  ) {
+    return this.buyerOperations_(context).personalChangeStoreBuyerBlock(token, input, context)
   }
 
-
-  /** Audited Buyer Organization admission into a native Seller-owned group.
-   * Native Seller/Member/CustomerGroup link verified at the first-party edge;
-   * no Person Customer membership, private price or checkout is enabled.
-   */
   @InjectTransactionManager()
   async personalStorePriceGroupAccess(
     token:string,input:{action:"grant"|"revoke"|"read";organization_id:string;
       seller_id:string;buyer_organization_id:string;customer_group_id:string;
       member_binding_id:string;member_actor_id:string;member_person_id:string},
     @MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.buyer_organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       !/^cusgroup_[A-Za-z0-9_-]+$/.test(input.customer_group_id)||
-       !/^dabind_[A-Za-z0-9_-]+$/.test(input.member_binding_id)||
-       !/^[A-Za-z0-9_-]{1,160}$/.test(input.member_actor_id)||
-       !/^daprs_[A-Za-z0-9_-]+$/.test(input.member_person_id)||
-       !["grant","revoke","read"].includes(input.action))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const current=await sessions.current(token,true,false)
-    if(!current||current.person_id!==input.member_person_id)return null
-
-    // Serialize with supported AccountLinking.unlink() on the exact actor.
-    // The primary session/Person epoch is already locked by current().
-    await db.execute(`select pg_advisory_xact_lock(
-      hashtext('da-actor-link'),hashtext(?))`,
-      ["member:"+input.member_actor_id])
-    const currentBindings=await db.execute(`select b.id from da_verified_actor_binding b
-      join da_actor_mapping a on a.person_id=b.person_id
-        and a.actor_type=b.actor_type and a.actor_id=b.actor_id
-        and a.deleted_at is null
-      where b.id=? and b.person_id=? and b.actor_type='member'
-        and b.actor_id=? and b.verified_at is not null
-        and b.revoked_at is null for share of b,a`,
-      [input.member_binding_id,current.person_id,input.member_actor_id])
-    if(currentBindings.length!==1||currentBindings[0].id!==input.member_binding_id)
-      return null
-    const allowed=async()=>{
-      const member=await sessions.organizations(token,input.organization_id,false)
-      if(!member||member.person_id!==current.person_id||
-         member.organizations.length!==1||member.organizations[0].role!=="owner")return false
-      if(!organizationActionAllowed("owner","price.group.manage",
-           await isCurrentProtectedOwner(db,current.person_id,input.organization_id),false))return false
-      return (await platformApprovedSellerIds(db,input.organization_id)).includes(input.seller_id)
-    }
-    if(!await allowed())return null
-    await db.execute(`select pg_advisory_xact_lock(
-      hashtext('b22-price-group'),hashtext(?))`,
-      [input.seller_id+":"+input.buyer_organization_id+":"+input.customer_group_id])
-    if(!await allowed())return null
-    // A suspended Buyer cannot read even the existence of a former grant;
-    // revocation remains available for safe administrative cleanup.
-    if(input.action!=="revoke"){
-      const target=await db.execute(`select id from da_organization
-        where id=? and status='active' and deleted_at is null for share`,
-        [input.buyer_organization_id])
-      if(target.length!==1)return null
-    }
-    const rows=await db.execute(`select g.id,
-      exists(select 1 from da_audit_event e
-        where e.id=g.source_audit_event_id and e.deleted_at is null
-          and e.module='dogruadres-access'
-          and e.action='organization.store_price_group_granted'
-          and e.resource='store-price-group'
-          and e.organization_id=g.owner_organization_id
-          and e.actor_person_id=g.issued_by_person_id
-          and e.target_id=g.seller_id
-          and e.new_values->>'grant_id'=g.id
-          and e.new_values->>'customer_group_id'=g.customer_group_id
-          and e.new_values->>'buyer_organization_id'=g.buyer_organization_id
-          and exists(select 1 from da_audit_outbox o
-            where o.source_audit_event_id=e.id
-              and o.source_module='dogruadres-access' and o.deleted_at is null)
-      ) as proof
-      from da_store_buyer_price_group g
-      where g.owner_organization_id=? and g.seller_id=?
-        and g.buyer_organization_id=? and g.customer_group_id=?
-        and g.revoked_at is null for update of g`,
-      [input.organization_id,input.seller_id,input.buyer_organization_id,
-       input.customer_group_id])
-    if(rows.length>1||rows.some(row=>row.proof!==true||
-       typeof row.id!=="string"||!/^dabpgm_[A-Za-z0-9_-]+$/.test(row.id)))
-      throw new IdentityAccessDenied()
-    if(input.action==="read")return {status:rows.length?"active" as const:"revoked" as const}
-    if(input.action==="grant"){
-      if(rows.length)return {status:"active" as const}
-      const grantId="dabpgm_"+randomUUID()
-      const [audit]=await this.persistAuditEventsWithOutbox_([{
-        actor_person_id:current.person_id,actor_type:current.actor_type,
-        actor_id:current.actor_id,role_context:"owner",
-        organization_id:input.organization_id,
-        action:"organization.store_price_group_granted",
-        module:DOGRUADRES_AUDIT_MODULE,resource:"store-price-group",
-        target_id:input.seller_id,
-        new_values:{grant_id:grantId,customer_group_id:input.customer_group_id,
-          buyer_organization_id:input.buyer_organization_id},occurred_at:new Date()
-      }],context)
-      await (context.transactionManager as {flush():Promise<void>}).flush()
-      const inserted=await db.execute(`insert into da_store_buyer_price_group
-        (id,owner_organization_id,seller_id,buyer_organization_id,
-         customer_group_id,issued_by_person_id,source_audit_event_id)
-        values (?,?,?,?,?,?,?) returning id`,
-        [grantId,input.organization_id,input.seller_id,input.buyer_organization_id,
-         input.customer_group_id,current.person_id,audit.id])
-      if(inserted.length!==1)throw new IdentityAccessDenied()
-      return {status:"active" as const}
-    }
-    if(!rows.length)return {status:"revoked" as const}
-    const grantId=rows[0].id as string
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:current.person_id,actor_type:current.actor_type,
-      actor_id:current.actor_id,role_context:"owner",
-      organization_id:input.organization_id,
-      action:"organization.store_price_group_revoked",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"store-price-group",
-      target_id:input.seller_id,
-      previous_values:{grant_id:grantId,customer_group_id:input.customer_group_id,
-        buyer_organization_id:input.buyer_organization_id},
-      new_values:{grant_id:grantId,status:"revoked"},occurred_at:new Date()
-    }],context)
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const updated=await db.execute(`update da_store_buyer_price_group
-      set revoked_at=clock_timestamp(),revoked_by_person_id=?,
-        revocation_audit_event_id=?
-      where id=? and revoked_at is null returning id`,
-      [current.person_id,audit.id,grantId])
-    if(updated.length!==1)throw new IdentityAccessDenied()
-    return {status:"revoked" as const}
+  ) {
+    return this.buyerOperations_(context).personalStorePriceGroupAccess(token, input, context)
   }
 
-
-  /**
-   * Server-only active Buyer Organization's Store-specific price group IDs.
-   * This is neither native Person/Customer group membership nor checkout
-   * authority. The catalog checks current Store Buyer block and native scope
-   * separately; each call verifies Foundation's current buyer + Store origin.
-   */
   @InjectTransactionManager()
   async personalBuyerStorePriceGroupIds(
     token:string,buyerOrganizationId:string,sellerId:string,
     @MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(buyerOrganizationId)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const buyer=await authorizedBuyerOrganization(db,token,buyerOrganizationId)
-    if(!buyer)return null
-    const owners=await db.execute(`select organization_id from
-      da_organization_seller_ownership where seller_id=? and revoked_at is null`,
-      [sellerId])
-    if(owners.length!==1||
-       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(owners[0]?.organization_id))
-      throw new IdentityAccessDenied()
-    const ownerOrganizationId=owners[0].organization_id as string
-    if(!(await platformApprovedSellerIds(db,ownerOrganizationId)).includes(sellerId))
-      throw new IdentityAccessDenied()
-    const rows=await db.execute(`select g.id,g.customer_group_id,
-      g.owner_organization_id,
-      exists(select 1 from da_audit_event e
-        where e.id=g.source_audit_event_id and e.deleted_at is null
-          and e.module='dogruadres-access'
-          and e.resource='store-price-group'
-          and e.action='organization.store_price_group_granted'
-          and e.organization_id=g.owner_organization_id
-          and e.actor_person_id=g.issued_by_person_id
-          and e.target_id=g.seller_id
-          and e.new_values->>'grant_id'=g.id
-          and e.new_values->>'buyer_organization_id'=g.buyer_organization_id
-          and e.new_values->>'customer_group_id'=g.customer_group_id
-          and exists(select 1 from da_audit_outbox x
-            where x.source_audit_event_id=e.id
-              and x.source_module='dogruadres-access'
-              and x.deleted_at is null)
-      ) as proof
-      from da_store_buyer_price_group g
-      where g.seller_id=? and g.buyer_organization_id=?
-        and g.revoked_at is null
-      order by g.customer_group_id,g.id limit 21`,
-      [sellerId,buyerOrganizationId])
-    if(rows.length>20||
-       new Set(rows.map(x=>x.customer_group_id)).size!==rows.length||
-       rows.some(x=>x.proof!==true||
-         typeof x.id!=="string"||!/^dabpgm_[A-Za-z0-9_-]+$/.test(x.id)||
-         x.owner_organization_id!==ownerOrganizationId||
-         typeof x.customer_group_id!=="string"||
-         !/^cusgroup_[A-Za-z0-9_-]+$/.test(x.customer_group_id)))
-      throw new IdentityAccessDenied()
-    return {person_id:buyer.person_id,
-      organization_id:buyerOrganizationId,seller_id:sellerId,
-      customer_group_ids:rows.map(x=>x.customer_group_id as string)}
+  ) {
+    return this.buyerOperations_(context).personalBuyerStorePriceGroupIds(token, buyerOrganizationId, sellerId, context)
   }
 
-  /** Read-only native Seller set against Foundation's authoritative Store
-   * Buyer Organization block ledger. A missing or malformed audit/outbox
-   * never becomes ALLOW; true means any Store denies this Buyer Organization.
-   */
   @InjectTransactionManager()
   async personalStoreBuyerBlockDecision(
     token:string,buyerOrganizationId:string,sellerIds:string[],
     @MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(buyerOrganizationId)||
-       !Array.isArray(sellerIds)||sellerIds.length>50||
-       new Set(sellerIds).size!==sellerIds.length||
-       sellerIds.some(id=>typeof id!=="string"||
-         !/^sel_[A-Za-z0-9_-]+$/.test(id)))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const buyer=await authorizedBuyerOrganization(db,token,buyerOrganizationId)
-    if(!buyer)return null
-    if(!sellerIds.length)return {blocked:false,ownership_verified:false}
-    // Each participating Seller must have exactly one current platform
-    // Organization origin before saying every Store policy was verified.
-    // A native SellerMember alone is never legal Store ownership.
-    const ownerRows=await db.execute(`select seller_id,organization_id
-      from da_organization_seller_ownership where revoked_at is null
-        and seller_id in (${sellerIds.map(()=>"?").join(",")})`,sellerIds)
-    if(ownerRows.length>sellerIds.length||
-       new Set(ownerRows.map(r=>r.seller_id)).size!==ownerRows.length||
-       ownerRows.some(r=>typeof r.organization_id!=="string"||
-         !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(r.organization_id)||
-         !sellerIds.includes(r.seller_id)))throw new IdentityAccessDenied()
-    for(const row of ownerRows){
-      const confirmed=await platformApprovedSellerIds(db,row.organization_id)
-      if(!confirmed.includes(row.seller_id))throw new IdentityAccessDenied()
-    }
-    const ownershipVerified=ownerRows.length===sellerIds.length
-    const rows=await db.execute(`select b.id,b.owner_organization_id,b.seller_id,
-      exists(select 1 from da_audit_event e
-        where e.id=b.source_audit_event_id and e.deleted_at is null
-          and e.module='dogruadres-access'
-          and e.resource='store-buyer-block'
-          and e.action='organization.store_buyer_blocked'
-          and e.organization_id=b.owner_organization_id
-          and e.actor_person_id=b.issued_by_person_id
-          and e.target_id=b.seller_id
-          and e.new_values->>'block_id'=b.id
-          and e.new_values->>'buyer_organization_id'=b.buyer_organization_id
-          and exists(select 1 from da_audit_outbox x
-            where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
-              and x.deleted_at is null)) as proof
-      from da_store_buyer_organization_block b
-      where b.buyer_organization_id=? and b.revoked_at is null
-        and b.seller_id in (${sellerIds.map(()=>"?").join(",")})`,
-      [buyerOrganizationId,...sellerIds])
-    if(rows.length>sellerIds.length||rows.some(r=>r.proof!==true||
-       typeof r.id!=="string"||!/^dasbb_[A-Za-z0-9_-]+$/.test(r.id)||
-       typeof r.owner_organization_id!=="string"||
-       typeof r.seller_id!=="string"))throw new IdentityAccessDenied()
-    for(const row of rows){
-      const confirmed=await platformApprovedSellerIds(db,row.owner_organization_id)
-      if(!confirmed.includes(row.seller_id))throw new IdentityAccessDenied()
-    }
-    return {blocked:rows.length!==0,ownership_verified:ownershipVerified}
-  }
-
-
-  /** First B22 Store-follow slice. A follow is a Buyer Organization relation,
-   * never a Person wishlist, native Seller grant or buyer price permission.
-   * Member delegation awaits the separately approved action-grant UX.
-   */
-  private async currentStoreFollowOwner_(
-    db:SecuritySql,token:string,organizationId:string
-  ){
-    const sessions=new IdentitySessions(db)
-    const actor=await sessions.current(token,false,false)
-    if(!actor)return null
-    const member=await sessions.organizations(token,organizationId,false)
-    if(!member||member.person_id!==actor.person_id||
-       member.organizations.length!==1||
-       member.organizations[0].role!=="owner")return null
-    const owner=await isCurrentProtectedOwner(db,actor.person_id,organizationId)
-    if(!organizationActionAllowed("owner","store.follow",owner,false))return null
-    return actor
-  }
-
-  private async storeFollowRow_(db:SecuritySql,organizationId:string,sellerId:string){
-    const rows=await db.execute(
-      "select f.version,f.revoked_at,exists(select 1 from da_audit_event e "+
-      "where e.id=f.source_audit_event_id and e.deleted_at is null "+
-      "and e.organization_id=f.buyer_organization_id "+
-      "and e.module='dogruadres-access' and e.resource='buyer-store-follow' "+
-      "and e.target_id=f.seller_id and e.actor_person_id is not null "+
-      "and e.action in ('organization.store_followed','organization.store_unfollowed') "+
-      "and exists(select 1 from da_audit_outbox o "+
-      "where o.source_audit_event_id=e.id and o.source_module='dogruadres-access' "+
-      "and o.deleted_at is null)) as proof "+
-      "from da_buyer_store_follow f "+
-      "where f.buyer_organization_id=? and f.seller_id=?",
-      [organizationId,sellerId])
-    if(rows.length>1||rows.some(x=>x.proof!==true||
-      !Number.isInteger(Number(x.version))||Number(x.version)<1))
-      throw new IdentityAccessDenied()
-    return rows.length?rows[0]:null
+  ) {
+    return this.buyerOperations_(context).personalStoreBuyerBlockDecision(token, buyerOrganizationId, sellerIds, context)
   }
 
   @InjectTransactionManager()
   async personalBuyerStoreFollowState(
     token:string,organizationId:string,sellerId:string,
     @MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    if(!await this.currentStoreFollowOwner_(db,token,organizationId))return null
-    const row=await this.storeFollowRow_(db,organizationId,sellerId)
-    return {organization_id:organizationId,seller_id:sellerId,
-      following:!!row&&row.revoked_at===null,
-      version:row?Number(row.version):0}
+  ) {
+    return this.buyerOperations_(context).personalBuyerStoreFollowState(token, organizationId, sellerId, context)
   }
 
-  /** Only the current protected Owner may enumerate their own active follows.
-   * Catalog visibility is deliberately irrelevant: suspended/blocked Stores
-   * must remain removable. Return IDs only, not Store names or other Buyers.
-   * The cursor is a validated Seller ID; the composite key bounds each page.
-   */
   @InjectTransactionManager()
   async personalBuyerStoreFollows(
     token:string,organizationId:string,after:string|undefined,
     @MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
-       (after!==undefined&&!/^sel_[A-Za-z0-9_-]+$/.test(after)))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    if(!await this.currentStoreFollowOwner_(db,token,organizationId))return null
-    const rows=await db.execute(
-      "select seller_id from da_buyer_store_follow "+
-      "where buyer_organization_id=? and revoked_at is null "+
-      (after===undefined?"":"and seller_id>? ")+
-      "order by seller_id limit 21",
-      after===undefined?[organizationId]:[organizationId,after])
-    if(!Array.isArray(rows)||rows.length>21||
-       rows.some(r=>typeof r.seller_id!=="string"||
-         !/^sel_[A-Za-z0-9_-]+$/.test(r.seller_id)))
-      throw new IdentityAccessDenied()
-    const stores:{seller_id:string;version:number}[]=[]
-    for(const item of rows.slice(0,20)){
-      const row=await this.storeFollowRow_(db,organizationId,item.seller_id)
-      if(!row||row.revoked_at!==null||Number(row.version)>=2147483647)
-        throw new IdentityAccessDenied()
-      stores.push({seller_id:item.seller_id,version:Number(row.version)})
-    }
-    return {organization_id:organizationId,stores,
-      next_cursor:rows.length>20?stores[stores.length-1].seller_id:null}
+  ) {
+    return this.buyerOperations_(context).personalBuyerStoreFollows(token, organizationId, after, context)
   }
 
   @InjectTransactionManager()
@@ -4808,2099 +1920,95 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     token:string,input:{action:"follow"|"unfollow";organization_id:string;
       seller_id:string;expected_version:number},
     @MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       !["follow","unfollow"].includes(input.action)||
-       !Number.isInteger(input.expected_version)||
-       input.expected_version<0||input.expected_version>=2147483647)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    // All Owner/Store policy writers lock Person/session/Owner first, then
-    // Store×Buyer. Reversing this order deadlocks follow against Store block.
-    const actor=await this.currentStoreFollowOwner_(db,token,input.organization_id)
-    if(!actor)return null
-    // Block and follow operations serialize on the same Store×Buyer pair.
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-buyer-block'),hashtext(?))",
-      [input.seller_id+":"+input.organization_id])
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-buyer-store-follow'),hashtext(?))",
-      [input.organization_id+":"+input.seller_id])
-    if(input.action==="follow"){
-      const origins=await db.execute(
-        "select organization_id from da_organization_seller_ownership "+
-        "where seller_id=? and revoked_at is null",[input.seller_id])
-      if(origins.length!==1||
-         typeof origins[0].organization_id!=="string"||
-         !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(origins[0].organization_id))
-        return null
-      const approved=await platformApprovedSellerIds(db,origins[0].organization_id)
-      if(!approved.includes(input.seller_id))return null
-      const blocked=await db.execute(
-        "select id from da_store_buyer_organization_block "+
-        "where seller_id=? and buyer_organization_id=? and revoked_at is null limit 2",
-        [input.seller_id,input.organization_id])
-      if(blocked.length)return null
-    }
-    const row=await this.storeFollowRow_(db,input.organization_id,input.seller_id)
-    const previousVersion=row?Number(row.version):0
-    const wasFollowing=!!row&&row.revoked_at===null
-    if(previousVersion!==input.expected_version||
-       wasFollowing===(input.action==="follow"))
-      return {conflict:true as const}
-    const version=previousVersion+1
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:actor.person_id,actor_type:actor.actor_type,
-      actor_id:actor.actor_id,role_context:"owner",
-      organization_id:input.organization_id,
-      action:input.action==="follow"?"organization.store_followed":
-        "organization.store_unfollowed",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"buyer-store-follow",
-      target_id:input.seller_id,
-      previous_values:{following:wasFollowing,version:previousVersion},
-      new_values:{following:input.action==="follow",version},
-      occurred_at:new Date()
-    }],context)
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    if(!row){
-      const inserted=await db.execute(
-        "insert into da_buyer_store_follow "+
-        "(buyer_organization_id,seller_id,version,source_audit_event_id) "+
-        "values (?,?,1,?) returning version",
-        [input.organization_id,input.seller_id,audit.id])
-      if(inserted.length!==1)throw new IdentityAccessDenied()
-    }else{
-      const updated=await db.execute(
-        "update da_buyer_store_follow set version=?,source_audit_event_id=?, "+
-        "updated_at=clock_timestamp(), "+
-        "followed_at=case when ?='follow' then clock_timestamp() else followed_at end, "+
-        "revoked_at=case when ?='unfollow' then clock_timestamp() else null end "+
-        "where buyer_organization_id=? and seller_id=? and version=? returning version",
-        [version,audit.id,input.action,input.action,input.organization_id,
-          input.seller_id,previousVersion])
-      if(updated.length!==1)throw new IdentityAccessDenied()
-    }
-    return {conflict:false as const,organization_id:input.organization_id,
-      seller_id:input.seller_id,following:input.action==="follow",version}
+  ) {
+    return this.buyerOperations_(context).personalChangeBuyerStoreFollow(token, input, context)
   }
 
   @InjectTransactionManager()
   async personalBuyerOrganization(
     token:string,organizationId:string,@MedusaContext() context:Context={}
-  ){
-    return authorizedBuyerOrganization(securitySql(context.transactionManager),token,organizationId)
+  ) {
+    return this.buyerOperations_(context).personalBuyerOrganization(token, organizationId, context)
   }
 
-
-  // Native Cart's customer_id is verified by the API against Medusa before
-  // and after this Foundation-only transaction. Cross-module Cart mutation
-  // cannot be locked here: this is NOT a checkout or commercial eligibility.
-  // One Cart ID may never be silently reassigned to another legal Organization.
   @InjectTransactionManager()
   async personalClaimBuyerCart(
     token:string,organizationId:string,cartId:string,customerId:string,
     @MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
-       !/^cart_[A-Za-z0-9_-]{1,123}$/.test(cartId)||
-       !/^cus_[A-Za-z0-9_-]+$/.test(customerId))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    await db.execute(`select pg_advisory_xact_lock(
-      hashtext('b22-buyer-cart-attribution'),hashtext(?))`,[cartId])
-    const identity=await new IdentitySessions(db).current(token,true,false)
-    if(!identity)return null
-    const buyer=await authorizedBuyerOrganization(db,token,organizationId)
-    const linked=await new ActorDelegation(db).binding(token,"customer")
-    if(!buyer||buyer.person_id!==identity.person_id||!linked||
-       linked.session.person_id!==identity.person_id||
-       linked.binding.person_id!==identity.person_id||
-       linked.binding.revoked_at||linked.binding.actor_id!==customerId)
-      return null
-    const existing=await db.execute(`select a.cart_id,a.organization_id,a.person_id,
-      a.customer_id,a.source_audit_event_id from da_buyer_cart_attribution a
-      where a.cart_id=? for update`,[cartId])
-    if(existing.length>1)throw new IdentityAccessDenied()
-    if(existing.length===1){
-      const row=existing[0]
-      if(row.organization_id!==organizationId||row.person_id!==identity.person_id||
-         row.customer_id!==customerId)throw new IdentityAccessDenied()
-      const evidence=await db.execute(`select e.id from da_audit_event e
-        where e.id=? and e.deleted_at is null
-          and e.module='dogruadres-access'
-          and e.resource='buyer-cart-attribution'
-          and e.action='organization.buyer_cart_attributed'
-          and e.actor_person_id=? and e.organization_id=?
-          and e.target_id=? and e.new_values->>'cart_id'=?
-          and e.new_values->>'customer_id'=?
-          and exists(select 1 from da_audit_outbox o
-            where o.source_audit_event_id=e.id
-              and o.source_module='dogruadres-access' and o.deleted_at is null)`,
-        [row.source_audit_event_id,identity.person_id,organizationId,cartId,cartId,customerId])
-      if(evidence.length!==1)throw new IdentityAccessDenied()
-      return {status:"attributed" as const,organization_id:organizationId}
-    }
-    // Refresh authority after obtaining the cart-scoped lock. Checkout must
-    // still enforce final authorization and every Seller-specific block.
-    const currentBuyer=await authorizedBuyerOrganization(db,token,organizationId)
-    const currentLink=await new ActorDelegation(db).binding(token,"customer")
-    if(!currentBuyer||currentBuyer.person_id!==identity.person_id||
-       !currentLink||currentLink.session.person_id!==identity.person_id||
-       currentLink.binding.person_id!==identity.person_id||
-       currentLink.binding.actor_id!==customerId||
-       currentLink.binding.revoked_at)return null
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:identity.person_id,actor_type:identity.actor_type,
-      actor_id:identity.actor_id,organization_id:organizationId,
-      action:"organization.buyer_cart_attributed",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"buyer-cart-attribution",
-      target_id:cartId,
-      new_values:{cart_id:cartId,customer_id:customerId},
-      occurred_at:new Date()
-    }],context)
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const inserted=await db.execute(`insert into da_buyer_cart_attribution
-      (cart_id,organization_id,person_id,customer_id,source_audit_event_id)
-      values (?,?,?,?,?) returning cart_id`,
-      [cartId,organizationId,identity.person_id,customerId,audit.id])
-    if(inserted.length!==1)throw new IdentityAccessDenied()
-    return {status:"attributed" as const,organization_id:organizationId}
+  ) {
+    return this.buyerOperations_(context).personalClaimBuyerCart(token, organizationId, cartId, customerId, context)
   }
 
   @InjectTransactionManager()
   async personalBuyerCartAttribution(
     token:string,organizationId:string,cartId:string,customerId:string,
     @MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
-       !/^cart_[A-Za-z0-9_-]{1,123}$/.test(cartId)||
-       !/^cus_[A-Za-z0-9_-]+$/.test(customerId))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const buyer=await authorizedBuyerOrganization(db,token,organizationId)
-    const linked=await new ActorDelegation(db).binding(token,"customer")
-    if(!buyer||!linked||linked.session.person_id!==buyer.person_id||
-       linked.binding.person_id!==buyer.person_id||linked.binding.revoked_at||
-       linked.binding.actor_id!==customerId)return null
-    const rows=await db.execute(`select a.source_audit_event_id from da_buyer_cart_attribution a
-      join da_audit_event e on e.id=a.source_audit_event_id
-        and e.deleted_at is null and e.module='dogruadres-access'
-        and e.resource='buyer-cart-attribution'
-        and e.action='organization.buyer_cart_attributed'
-        and e.actor_person_id=a.person_id and e.organization_id=a.organization_id
-        and e.target_id=a.cart_id
-        and e.new_values->>'cart_id'=a.cart_id
-        and e.new_values->>'customer_id'=a.customer_id
-      where a.cart_id=? and a.organization_id=? and a.person_id=?
-        and a.customer_id=?
-        and exists(select 1 from da_audit_outbox o
-          where o.source_audit_event_id=e.id
-            and o.source_module='dogruadres-access' and o.deleted_at is null)`,
-      [cartId,organizationId,buyer.person_id,customerId])
-    if(rows.length>1)throw new IdentityAccessDenied()
-    return rows.length===1
+  ) {
+    return this.buyerOperations_(context).personalBuyerCartAttribution(token, organizationId, cartId, customerId, context)
   }
 
-
-  /**
-   * B22 final checkout decision (L). Called only from Mercur's split-cart
-   * validate hook, after the native Cart lock and native source reads but
-   * before OrderGroup/order writes. One PostgreSQL statement gives all
-   * Foundation-owned facts one READ COMMITTED snapshot: a revocation committed
-   * before this SELECT is denied; a later revocation may overlap this checkout.
-   *
-   * The caller must validate the native Cart snapshot and current Mercur Seller
-   * lifecycle before calling this method. No native module manager is passed
-   * into Foundation and no cross-module transaction is claimed.
-   */
   @InjectTransactionManager()
   async authorizeBuyerCheckout(
     cartId:string,
     customerId:string,
     sellerIds:string[],
     @MedusaContext() context:Context={}
-  ):Promise<boolean>{
-    if(!/^cart_[A-Za-z0-9_-]{1,123}$/.test(cartId)||
-       !/^cus_[A-Za-z0-9_-]+$/.test(customerId)||
-       !Array.isArray(sellerIds)||sellerIds.length<1||sellerIds.length>50||
-       new Set(sellerIds).size!==sellerIds.length||
-       sellerIds.some(id=>typeof id!=="string"||!/^sel_[A-Za-z0-9_-]+$/.test(id)))
-      throw new IdentityAccessDenied()
-
-    const db=securitySql(context.transactionManager)
-    const sellerSlots=sellerIds.map(()=>"?").join(",")
-    // IMPORTANT: This is the single final Foundation SELECT (L). Do not split
-    // these predicates into sequential service reads or cached decisions.
-    const rows=await db.execute(`
-      select a.cart_id
-      from da_buyer_cart_attribution a
-      join da_person person
-        on person.id=a.person_id
-       and person.disabled_at is null
-       and person.deleted_at is null
-      join da_organization buyer
-        on buyer.id=a.organization_id
-       and buyer.status='active' and buyer.deleted_at is null
-      join da_audit_event attribution_event
-        on attribution_event.id=a.source_audit_event_id
-       and attribution_event.deleted_at is null
-       and attribution_event.module='dogruadres-access'
-       and attribution_event.resource='buyer-cart-attribution'
-       and attribution_event.action='organization.buyer_cart_attributed'
-       and attribution_event.actor_person_id=a.person_id
-       and attribution_event.organization_id=a.organization_id
-       and attribution_event.target_id=a.cart_id
-       and attribution_event.new_values->>'cart_id'=a.cart_id
-       and attribution_event.new_values->>'customer_id'=a.customer_id
-      where a.cart_id=? and a.customer_id=?
-        and exists(
-          select 1 from da_audit_outbox attribution_outbox
-          where attribution_outbox.source_audit_event_id=attribution_event.id
-            and attribution_outbox.source_module='dogruadres-access'
-            and attribution_outbox.deleted_at is null
-        )
-        and (
-          select count(*) from da_organization_membership m
-          where m.organization_id=a.organization_id
-            and m.person_id=a.person_id
-            and m.status='active' and m.revoked_at is null
-            and m.deleted_at is null
-        )=1
-        and (
-          (? and exists(select 1 from da_organization_membership protected_owner
-            where protected_owner.person_id=a.person_id
-              and protected_owner.organization_id=a.organization_id
-              and protected_owner.role='owner'
-              and protected_owner.protected_owner=true
-              and protected_owner.status='active'
-              and protected_owner.revoked_at is null
-              and protected_owner.deleted_at is null))
-          or (not exists(select 1 from da_organization_membership owner_role
-            where owner_role.person_id=a.person_id
-              and owner_role.organization_id=a.organization_id
-              and owner_role.role='owner'
-              and owner_role.status='active'
-              and owner_role.revoked_at is null
-              and owner_role.deleted_at is null)
-          and (select count(*) from da_organization_buyer_permission g
-          join da_audit_event grant_event
-            on grant_event.id=g.source_audit_event_id
-           and grant_event.deleted_at is null
-           and grant_event.module='dogruadres-access'
-           and grant_event.resource='buyer-permission'
-           and grant_event.action='organization.buyer_permission_granted'
-           and grant_event.actor_person_id=g.issued_by_person_id
-           and grant_event.organization_id=g.organization_id
-           and grant_event.target_id=g.person_id
-           and grant_event.new_values->>'grant_id'=g.id
-           and grant_event.new_values->>'person_id'=g.person_id
-           and grant_event.new_values->>'permission'=g.permission
-          join da_audit_outbox grant_outbox
-            on grant_outbox.source_audit_event_id=grant_event.id
-           and grant_outbox.source_module='dogruadres-access'
-           and grant_outbox.deleted_at is null
-          where g.person_id=a.person_id
-            and g.organization_id=a.organization_id
-            and g.permission='buyer.purchase'
-            and g.revoked_at is null
-            and (g.expires_at is null or g.expires_at>statement_timestamp())
-          )=1)
-        )
-        and (
-          select count(*) from da_verified_actor_binding binding
-          join da_actor_mapping actor
-            on actor.person_id=binding.person_id
-           and actor.actor_type=binding.actor_type
-           and actor.actor_id=binding.actor_id
-           and actor.deleted_at is null
-          where binding.person_id=a.person_id
-            and binding.actor_type='customer'
-            and binding.actor_id=a.customer_id
-            and binding.revoked_at is null
-            and binding.verified_at is not null
-        )=1
-        and (
-          select count(distinct ownership.seller_id)
-          from da_organization_seller_ownership ownership
-          join da_organization seller_organization
-            on seller_organization.id=ownership.organization_id
-           and seller_organization.status='active'
-           and seller_organization.deleted_at is null
-          join da_audit_event ownership_event
-            on ownership_event.id=ownership.verification_audit_event_id
-           and ownership_event.deleted_at is null
-           and ownership_event.organization_id=ownership.organization_id
-           and ownership_event.target_id=ownership.seller_id
-           and ownership_event.module='dogruadres-access'
-           and (
-             (ownership_event.action='organization.store_application_created'
-              and ownership_event.resource='store-application'
-              and exists (
-                select 1 from da_store_application application
-                where application.id=(ownership_event.new_values->>'application_id')
-                  and application.organization_id=ownership.organization_id
-                  and application.seller_id=ownership.seller_id
-                  and application.status='created'
-                  and application.person_id=ownership_event.actor_person_id
-              ))
-             or
-             (ownership_event.action='organization.store_association_approved'
-              and ownership_event.resource='store-association')
-           )
-          join da_audit_outbox ownership_outbox
-            on ownership_outbox.source_audit_event_id=ownership_event.id
-           and ownership_outbox.source_module='dogruadres-access'
-           and ownership_outbox.deleted_at is null
-          where ownership.seller_id in (${sellerSlots})
-            and ownership.revoked_at is null
-        )=?
-        -- One paused or unverifiable Owner pause record denies the WHOLE
-        -- multi-Seller cart. No partial order group may be written.
-        and not exists(
-          select 1 from da_store_owner_pause pause
-          where pause.seller_id in (${sellerSlots})
-            and (pause.paused=true or not exists(
-              select 1 from da_audit_event proof
-              where proof.id=pause.source_audit_event_id
-                and proof.deleted_at is null
-                and proof.module='dogruadres-access'
-                and proof.resource='store-owner-pause'
-                and proof.organization_id=pause.organization_id
-                and proof.target_id=pause.seller_id
-                and proof.action=(case when pause.paused then
-                  'organization.store_owner_paused' else
-                  'organization.store_owner_resumed' end)
-                and proof.new_values->>'request_id'=pause.request_id
-                and proof.new_values->>'version'=pause.version::text
-                and proof.new_values->>'paused'=pause.paused::text
-                and exists(select 1 from da_audit_outbox outbox
-                  where outbox.source_audit_event_id=proof.id
-                    and outbox.source_module='dogruadres-access'
-                    and outbox.deleted_at is null)))
-        )
-        and not exists(
-          select 1 from da_store_owner_closing c
-          where c.seller_id in (${sellerSlots})
-            and (c.state='closing' or not exists(
-              select 1 from da_audit_event e
-              join da_audit_outbox x on x.source_audit_event_id=e.id
-                and x.source_module='dogruadres-access' and x.deleted_at is null
-              where e.id=c.source_audit_event_id and e.deleted_at is null
-                and e.module='dogruadres-access'
-                and e.organization_id=c.organization_id and e.target_id=c.seller_id
-                and e.resource='store-owner-closing'
-                and e.action=(case when c.state='closing'
-                  then 'organization.store_owner_closing_started'
-                  else 'organization.store_owner_closing_withdrawn' end)
-                and e.new_values->>'state'=c.state
-                and e.new_values->>'version'=c.version::text
-                and e.new_values->>'request_id'=c.request_id
-                and (e.new_values->>'started_at')::timestamptz=c.started_at
-                and (e.new_values->>'due_at')::timestamptz=c.due_at))
-        )
-        -- A platform closure (including contested or unverified notification)
-        -- immediately blocks the whole multi-Seller Cart; no partial checkout.
-        and not exists(
-          select 1 from da_store_platform_closing c
-          where c.seller_id in (${sellerSlots})
-        )
-        and not exists(
-          select 1 from da_store_buyer_organization_block block
-          where block.buyer_organization_id=a.organization_id
-            and block.seller_id in (${sellerSlots})
-            and block.revoked_at is null
-        )
-      limit 2
-    `,[cartId,customerId,ownerRoleAllows("buyer.purchase"),...sellerIds,sellerIds.length,...sellerIds,...sellerIds,...sellerIds,...sellerIds])
-    if(rows.length>1)throw new IdentityAccessDenied()
-    return rows.length===1
+  ):Promise<boolean> {
+    return this.buyerOperations_(context).authorizeBuyerCheckout(cartId, customerId, sellerIds, context)
   }
 
-
-  // B22 Owner temporary break. The Foundation pause record, not a mutable
-  // native Seller closure date, is the authoritative sale-denial switch.
-  // Native Seller lifecycle remains controlled by the platform. Mercur's
-  // built-in closure fields are intentionally left untouched: they can also
-  // be written from native vendor routes and do not guard checkout.
-  private async ownerPauseRow_(db:SecuritySql,sellerId:string,lock=false){
-    const rows=await db.execute(`select p.organization_id,p.seller_id,p.paused,
-      p.version,p.request_id,
-      exists(select 1 from da_audit_event e where e.id=p.source_audit_event_id
-        and e.deleted_at is null and e.module='dogruadres-access'
-        and e.organization_id=p.organization_id and e.target_id=p.seller_id
-        and e.resource='store-owner-pause'
-        and e.action=(case when p.paused then
-          'organization.store_owner_paused' else
-          'organization.store_owner_resumed' end)
-        and e.new_values->>'request_id'=p.request_id
-        and e.new_values->>'version'=p.version::text
-        and e.new_values->>'paused'=p.paused::text
-        and exists(select 1 from da_audit_outbox o where
-          o.source_audit_event_id=e.id and o.source_module='dogruadres-access'
-          and o.deleted_at is null)) as proof
-      from da_store_owner_pause p where p.seller_id=? ${lock?'for update':''}`,
-      [sellerId])
-    if(rows.length>1||rows.some(row=>
-      row.seller_id!==sellerId||row.proof!==true||
-      !Number.isSafeInteger(Number(row.version))||Number(row.version)<1||
-      typeof row.paused!=="boolean"||
-      typeof row.organization_id!=="string"||
-      !/^dasp_[a-f0-9]{32}$/.test(String(row.request_id))))
-      throw new IdentityAccessDenied()
-    return rows.length?rows[0]:null
-  }
-
-  /** #307 P2: one real Person-first lock shared by protected Owner writers.
-   * Not an authorization grant: ownerPauseScope_ still checks live scope.
-   * Separated only so pure clock-fixture tests can mock this narrow gateway,
-   * without bypassing native session validation on any real HTTP request.
-   */
-  private async ownerPauseSessionPrelock_(db:SecuritySql,token:string){
-    return new IdentitySessions(db).currentWithPersonLock(token,true,false,true)
-  }
-
-  private async ownerPauseScope_(db:SecuritySql,token:string,organizationId:string,sellerId:string,
-    personFirst=false){
-    const sessions=new IdentitySessions(db)
-    // Closing-state GET later takes Person FOR SHARE. Acquire the compatible
-    // shared Person row lock before session/epoch; audit FK KEY SHARE remains
-    // permitted while the separate advisory-locked closing writer commits.
-    // Other Seller write paths retain their original ordering.
-    const actor=personFirst?
-      await sessions.currentWithPersonLock(token,true,false,true):
-      await sessions.current(token,true,false)
-    if(!actor)return null
-    const scope=await sessions.organizations(token,organizationId,false)
-    if(!scope||scope.person_id!==actor.person_id||
-       scope.organizations.length!==1||scope.organizations[0].role!=="owner"||
-       !await isCurrentProtectedOwner(db,actor.person_id,organizationId))
-      return null
-    if(!(await platformApprovedSellerIds(db,organizationId)).includes(sellerId))return null
-    const linked=await new ActorDelegation(db).binding(token,"member")
-    if(!linked||linked.binding.person_id!==actor.person_id||
-       linked.binding.revoked_at||!linked.binding.actor_id)return null
-    const rows=await db.execute(`select s.status,s.approved_at from seller s
-      join seller_member sm on sm.seller_id=s.id and sm.deleted_at is null
-      join member m on m.id=sm.member_id and m.deleted_at is null
-        and m.is_active=true
-      where s.id=? and s.deleted_at is null and sm.member_id=?
-      for share of s,sm,m`,[sellerId,linked.binding.actor_id])
-    if(rows.length!==1||!rows[0].approved_at||
-       !["open","suspended","terminated"].includes(rows[0].status))return null
-    return {actor,store_status:rows[0].status as string}
-  }
-
-  @InjectTransactionManager()
-  async personalOwnerStorePauseState(token:string,organizationId:string,sellerId:string,
-    @MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const authority=await this.ownerPauseScope_(db,token,organizationId,sellerId)
-    if(!authority)return null
-    const row=await this.ownerPauseRow_(db,sellerId)
-    if(row&&row.organization_id!==organizationId)throw new IdentityAccessDenied()
-    // Reuse the exact audited Foundation closing proof. Native Seller 'open'
-    // does not mean sales are open after a stronger platform closure.
-    const platformClosed=(await this.platformClosingRow_(db,sellerId))!==null
-    return {organization_id:organizationId,seller_id:sellerId,
-      paused:row?.paused===true,version:row?Number(row.version):0,
-      store_status:authority.store_status,platform_closed:platformClosed}
-  }
-
-  @InjectTransactionManager()
-  async personalOwnerStorePauseChange(token:string,input:{
-    organization_id:string;seller_id:string;action:"pause"|"resume";
-    request_id:string;expected_version:number
-  },@MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       !/^dasp_[a-f0-9]{32}$/.test(input.request_id)||
-       !["pause","resume"].includes(input.action)||
-       !Number.isSafeInteger(input.expected_version)||
-       input.expected_version<0||input.expected_version>2147483646)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    // #307 P2: Person SHARE -> live session/security -> Seller advisory.
-    // Preliminary identity is NOT Owner authority; ownerPauseScope_ rechecks
-    // protected Owner, Organization, native Member/Seller and current origin
-    // under the serialized Seller lock before any write.
-    if(!await this.ownerPauseSessionPrelock_(db,token))
-      return null
-    // Same per-Seller lock serializes parallel pause, resume, read-modify-
-    // write and the live native Seller row SHARE lock with platform updates.
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
-      [input.seller_id])
-    const scope=await this.ownerPauseScope_(db,token,input.organization_id,input.seller_id)
-    if(!scope||scope.store_status!=="open")return null
-    // Closing is stronger than a voluntary pause; a resume must never
-    // appear to reopen Store sales while the Owner closing case is pending.
-    if((await this.ownerClosingRow_(db,input.seller_id))?.state==="closing")
-      return null
-    if(await this.platformClosingRow_(db,input.seller_id))return null
-    const existing=await this.ownerPauseRow_(db,input.seller_id,true)
-    if(existing&&existing.organization_id!==input.organization_id)
-      throw new IdentityAccessDenied()
-    const paused=input.action==="pause",version=existing?Number(existing.version):0
-    if(existing?.request_id===input.request_id){
-      if(version!==input.expected_version+1||existing.paused!==paused)
-        throw new IdentityAccessDenied()
-      return {status:paused?"paused" as const:"resumed" as const,
-        version,replayed:true}
-    }
-    if(version!==input.expected_version)return {status:"conflict" as const,version}
-    if((existing?.paused===true)===paused)
-      return {status:paused?"paused" as const:"resumed" as const,
-        version,replayed:true}
-    const next=version+1
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:scope.actor.person_id,actor_type:scope.actor.actor_type,
-      actor_id:scope.actor.actor_id,role_context:"owner",
-      organization_id:input.organization_id,
-      action:paused?"organization.store_owner_paused":"organization.store_owner_resumed",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"store-owner-pause",
-      target_id:input.seller_id,
-      new_values:{request_id:input.request_id,version:next,paused},
-      occurred_at:new Date()
-    }],context)
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const changed=existing?await db.execute(`update da_store_owner_pause
-      set paused=?,version=?,request_id=?,source_audit_event_id=?,
-        updated_at=clock_timestamp()
-      where seller_id=? and organization_id=? and version=?
-      returning seller_id`,[paused,next,input.request_id,audit.id,
-        input.seller_id,input.organization_id,version]):
-      await db.execute(`insert into da_store_owner_pause
-      (seller_id,organization_id,paused,version,request_id,source_audit_event_id)
-      values (?,?,?,?,?,?) returning seller_id`,
-        [input.seller_id,input.organization_id,paused,next,input.request_id,audit.id])
-    if(changed.length!==1)throw new IdentityAccessDenied()
-    return {status:paused?"paused" as const:"resumed" as const,version:next,
-      replayed:false}
-  }
-
-  /** Internal sale/read gate, never a browser authorization grant. An
-   * unknown or damaged audit lineage denies trading instead of bypassing it.
-   * The checkout's final L rechecks this in its own single SQL snapshot.
-   */
-  @InjectTransactionManager()
-  async storeOwnerPauseAcceptingOrders(sellerIds:string[],
-    @MedusaContext() context:Context={}):Promise<boolean>{
-    if(!Array.isArray(sellerIds)||sellerIds.length>50||
-       new Set(sellerIds).size!==sellerIds.length||
-       sellerIds.some(id=>typeof id!=="string"||!/^sel_[A-Za-z0-9_-]+$/.test(id)))
-      throw new IdentityAccessDenied()
-    if(!sellerIds.length)return false
-    const db=securitySql(context.transactionManager)
-    for(const id of sellerIds){
-      const row=await this.ownerPauseRow_(db,id)
-      if(row&&row.paused!==false)return false
-      const closing=await this.ownerClosingRow_(db,id)
-      if(closing&&closing.state!=="withdrawn")return false
-      if(await this.platformClosingRow_(db,id))return false
-    }
-    return true
-  }
-
-
-  /** Private, Foundation-owned Owner closing state; never infer closure from
-   * Mercur's reversible native terminate status. Missing/broken audit linkage
-   * fails closed instead of presenting the Store as safe to trade.
-   */
-  private async ownerClosingRow_(db:SecuritySql,sellerId:string,lock=false){
-    const rows=await db.execute(`select c.organization_id,c.seller_id,c.state,
-      c.version,c.request_id,c.started_at,c.due_at,c.source_audit_event_id,
-      exists(select 1 from da_audit_event e
-        join da_audit_outbox x on x.source_audit_event_id=e.id
-          and x.source_module='dogruadres-access' and x.deleted_at is null
-        where e.id=c.source_audit_event_id and e.deleted_at is null
-          and e.module='dogruadres-access'
-          and e.organization_id=c.organization_id and e.target_id=c.seller_id
-          and e.resource='store-owner-closing'
-          and e.action=(case when c.state='closing'
-            then 'organization.store_owner_closing_started'
-            else 'organization.store_owner_closing_withdrawn' end)
-          and e.new_values->>'state'=c.state
-          and e.new_values->>'request_id'=c.request_id
-          and e.new_values->>'version'=c.version::text
-          and (e.new_values->>'started_at')::timestamptz=c.started_at
-          and (e.new_values->>'due_at')::timestamptz=c.due_at) as proof
-      from da_store_owner_closing c where c.seller_id=? ${lock?'for update':''}`,
-      [sellerId])
-    if(rows.length>1||rows.some(row=>
-       row.seller_id!==sellerId||row.proof!==true||
-       !["closing","withdrawn"].includes(row.state)||
-       !Number.isSafeInteger(Number(row.version))||Number(row.version)<1||
-       !/^dasc_[a-f0-9]{32}$/.test(String(row.request_id))||
-       !Number.isFinite(new Date(row.started_at).getTime())||
-       !Number.isFinite(new Date(row.due_at).getTime())||
-       new Date(row.due_at).getTime()-new Date(row.started_at).getTime()!==2592000000))
-      throw new IdentityAccessDenied()
-    return rows.length===1?rows[0]:null
-  }
-
-  @InjectTransactionManager()
-  async personalOwnerClosingState(token:string,organizationId:string,sellerId:string,
-    @MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const scope=await this.ownerPauseScope_(db,token,organizationId,sellerId,true)
-    if(!scope)return null
-    const row=await this.ownerClosingRow_(db,sellerId)
-    if(row&&row.organization_id!==organizationId)throw new IdentityAccessDenied()
-    const clock=await db.execute("select clock_timestamp() as now_at")
-    if(clock.length!==1)throw new IdentityAccessDenied()
-    const now=new Date(clock[0].now_at)
-    // Only the currently signed-in canonical Person's recipient record,
-    // scoped to the LATEST canonical closing audit event, is visible. No
-    // address, message ID, other Owner's attempts, or delivery claim leaks.
-    let noticeStatus="not_applicable",noticeAttempts=0
-    let smtpAccepted=false
-    if(row){
-      const own=await db.execute(`select n.id as receipt_id,
-        d.attempts,d.last_result,d.accepted_at
-        from da_notification_receipt n
-        left join da_store_owner_closing_email d
-          on d.audit_event_id=n.audit_event_id and d.person_id=n.person_id
-        where n.audit_event_id=? and n.person_id=?
-        limit 2`,[row.source_audit_event_id,scope.actor.person_id])
-      if(own.length>1)throw new IdentityAccessDenied()
-      if(own.length===1){
-        if(own[0].last_result===null){
-          noticeStatus="queued"
-        }else{
-          const status=String(own[0].last_result)
-          const attempts=Number(own[0].attempts)
-          if(!["pending","inflight","accepted","failed",
-              "unverified_identity","uncertain","invalidated"].includes(status)||
-             !Number.isSafeInteger(attempts)||attempts<0||attempts>4||
-             (status==="accepted"&&own[0].accepted_at===null))
-            throw new IdentityAccessDenied()
-          noticeStatus=status
-          noticeAttempts=attempts
-          smtpAccepted=own[0].accepted_at!==null
-        }
-      }
-    }
-    // Hold the current protected Owner grant until the read transaction
-    // commits; a concurrently committed revocation cannot return a private
-    // per-recipient status after authorization disappears.
-    const currentOwner=await db.execute(`select m.id
-      from da_organization_membership m
-      join da_person p on p.id=m.person_id
-      where m.person_id=? and m.organization_id=?
-        and m.role='owner' and m.protected_owner=true
-        and m.status='active' and m.revoked_at is null
-        and m.deleted_at is null and p.disabled_at is null
-        and p.deleted_at is null
-      limit 2 for share of m,p`,[scope.actor.person_id,organizationId])
-    if(currentOwner.length!==1)return null
-    // Only an aggregate count of current protected Owners and canonical
-    // in-account receipts. Do NOT expose another Owner's SMTP attempts,
-    // Person ID, address or read status. This is informational, NEVER an
-    // irreversible-finalization decision or mailbox-delivery proof.
-    const noticeCoverage={protected_owners:0,personal_receipts:0,
-      mailbox_delivery_verified:false}
-    if(row){
-      const coverage=await db.execute(`select
-        count(distinct m.person_id)::int as protected_owners,
-        count(distinct n.person_id)::int as personal_receipts
-        from da_organization_membership m
-        join da_person p on p.id=m.person_id and p.deleted_at is null
-          and p.disabled_at is null
-        left join da_notification_receipt n
-          on n.audit_event_id=? and n.person_id=m.person_id
-        where m.organization_id=? and m.role='owner'
-          and m.protected_owner=true and m.status='active'
-          and m.revoked_at is null and m.deleted_at is null`,
-        [row.source_audit_event_id,organizationId])
-      const owners=Number(coverage[0]?.protected_owners)
-      const receipts=Number(coverage[0]?.personal_receipts)
-      if(coverage.length!==1||!Number.isSafeInteger(owners)||
-         owners<1||owners>100||!Number.isSafeInteger(receipts)||
-         receipts<0||receipts>owners)throw new IdentityAccessDenied()
-      noticeCoverage.protected_owners=owners
-      noticeCoverage.personal_receipts=receipts
-    }
-    return {organization_id:organizationId,seller_id:sellerId,
-      notification_coverage:noticeCoverage,
-      email_notice:{status:noticeStatus,attempts:noticeAttempts,
-        smtp_accepted:smtpAccepted,mailbox_delivery_verified:false},
-      state:row?.state??"none",version:row?Number(row.version):0,
-      started_at:row?new Date(row.started_at).toISOString():null,
-      due_at:row?new Date(row.due_at).toISOString():null,
-      can_withdraw:row?.state==="closing"&&now.getTime()<new Date(row.due_at).getTime(),
-      // Read-only server-clock countdown; clients never control the deadline
-      // or the authorization to withdraw.
-      remaining_seconds:row?.state==="closing"?
-        Math.max(0,Math.ceil((new Date(row.due_at).getTime()-now.getTime())/1000)):0,
-      store_status:scope.store_status,
-      // No irreversible transition while verified mandatory delivery is absent.
-      permanent_finalization_enabled:false}
-  }
-
-  @InjectTransactionManager()
-  async personalOwnerClosingChange(token:string,input:{
-    organization_id:string;seller_id:string;action:"start"|"withdraw";
-    request_id:string;expected_version:number;consequences_acknowledged?:boolean
-  },@MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       !/^dasc_[a-f0-9]{32}$/.test(input.request_id)||
-       !["start","withdraw"].includes(input.action)||
-       (input.action==="start"&&input.consequences_acknowledged!==true)||
-       !Number.isSafeInteger(input.expected_version)||
-       input.expected_version<0||input.expected_version>2147483646)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    // #307 P2: Person SHARE -> live session/security -> Seller advisory.
-    // Preliminary identity is NOT Owner authority; ownerPauseScope_ rechecks
-    // protected Owner, Organization, native Member/Seller and current origin
-    // under the serialized Seller lock before any write.
-    if(!await this.ownerPauseSessionPrelock_(db,token))
-      return null
-    // Reuse the existing per-Seller lock, without changing the native Seller.
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
-      [input.seller_id])
-    const scope=await this.ownerPauseScope_(db,token,input.organization_id,input.seller_id)
-    if(!scope||scope.store_status==="terminated"||
-       (input.action==="start"&&scope.store_status!=="open"))
-      return null
-    // A platform-initiated closure is a separate, stronger active process.
-    // Owner cannot start a parallel clock or bypass its appeal/notice gate.
-    if(input.action==="start"&&await this.platformClosingRow_(db,input.seller_id))
-      return {status:"conflict" as const}
-    const existing=await this.ownerClosingRow_(db,input.seller_id,true)
-    if(existing&&existing.organization_id!==input.organization_id)
-      throw new IdentityAccessDenied()
-    const version=existing?Number(existing.version):0
-    const state=input.action==="start"?"closing":"withdrawn"
-    if(existing?.request_id===input.request_id){
-      if(version!==input.expected_version+1||existing.state!==state)
-        throw new IdentityAccessDenied()
-      return {status:state,version,replayed:true,
-        due_at:new Date(existing.due_at).toISOString()}
-    }
-    if(version!==input.expected_version||
-       (input.action==="start"&&existing?.state==="closing")||
-       (input.action==="withdraw"&&existing?.state!=="closing"))
-      return {status:"conflict" as const,version}
-    const history=await db.execute(`select id from da_audit_event
-      where module='dogruadres-access' and resource='store-owner-closing'
-        and target_id=? and new_values->>'request_id'=? and deleted_at is null limit 2`,
-      [input.seller_id,input.request_id])
-    if(history.length)throw new IdentityAccessDenied()
-    const clock=await db.execute("select clock_timestamp() as now_at")
-    if(clock.length!==1)throw new IdentityAccessDenied()
-    const now=new Date(clock[0].now_at)
-    if(!Number.isFinite(now.getTime()))throw new IdentityAccessDenied()
-    const start=input.action==="start"?now:new Date(existing.started_at)
-    const due=input.action==="start"?new Date(now.getTime()+2592000000):
-      new Date(existing.due_at)
-    if(input.action==="withdraw"&&now.getTime()>=due.getTime())
-      return {status:"conflict" as const,version}
-    const next=version+1
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:scope.actor.person_id,actor_type:scope.actor.actor_type,
-      actor_id:scope.actor.actor_id,role_context:"owner",
-      organization_id:input.organization_id,
-      action:input.action==="start"?
-        "organization.store_owner_closing_started":
-        "organization.store_owner_closing_withdrawn",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"store-owner-closing",
-      target_id:input.seller_id,
-      new_values:{request_id:input.request_id,version:next,state,
-        started_at:start.toISOString(),due_at:due.toISOString()},
-      occurred_at:now
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const changed=existing?await db.execute(`update da_store_owner_closing
-      set state=?,version=?,request_id=?,source_audit_event_id=?,
-        started_at=?,due_at=?,updated_at=clock_timestamp()
-      where seller_id=? and organization_id=? and version=?
-      returning seller_id`,[state,next,input.request_id,audit.id,start.toISOString(),
-        due.toISOString(),input.seller_id,input.organization_id,version]):
-      await db.execute(`insert into da_store_owner_closing
-        (seller_id,organization_id,state,version,request_id,
-         source_audit_event_id,started_at,due_at)
-        values (?,?,?,?,?,?,?,?) returning seller_id`,
-        [input.seller_id,input.organization_id,state,next,input.request_id,
-         audit.id,start.toISOString(),due.toISOString()])
-    if(changed.length!==1)throw new IdentityAccessDenied()
-    // Personal security receipts are durable in the SAME transaction for ALL
-    // currently protected Owners. SMTP delivery is not claimed by this path.
-    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
-      select 'danot_'||gen_random_uuid()::text,m.person_id,?
-      from da_organization_membership m join da_person p on p.id=m.person_id
-      where m.organization_id=? and m.role='owner' and m.protected_owner=true
-        and m.status='active' and m.deleted_at is null
-        and p.disabled_at is null and p.deleted_at is null
-      on conflict(audit_event_id,person_id) do nothing`,
-      [audit.id,input.organization_id])
-    return {status:state,version:next,replayed:false,due_at:due.toISOString()}
-  }
-
-
-  /**
-   * B22 platform-initiated closure, phase 1. No irreversible termination or
-   * deadline until independently verified mandatory security-email delivery.
-   * The existing Seller/Order/Store IDs and native Mercur lifecycle stay intact.
-   */
-  private async platformClosingRow_(db:SecuritySql,sellerId:string,lock=false){
-    const rows=await db.execute(`select c.*,
-      exists(select 1 from da_audit_event e
-        join da_audit_outbox x on x.source_audit_event_id=e.id
-          and x.source_module='dogruadres-access' and x.deleted_at is null
-        where e.id=c.source_audit_event_id and e.deleted_at is null
-          and e.module='dogruadres-access' and e.role_context='platform_staff'
-          and e.resource='store-platform-closing'
-          and e.action='organization.store_platform_closing_started'
-          and e.organization_id=c.organization_id and e.target_id=c.seller_id
-          and e.new_values->>'request_id'=c.request_id
-          and e.new_values->>'state'='notification_unverified'
-          and e.new_values->>'reason_sha256'=
-            encode(sha256(convert_to(c.reason,'UTF8')),'hex')) as start_proof,
-      (c.appeal_audit_event_id is null or exists(
-        select 1 from da_audit_event a
-        join da_audit_outbox x on x.source_audit_event_id=a.id
-          and x.source_module='dogruadres-access' and x.deleted_at is null
-        where a.id=c.appeal_audit_event_id and a.deleted_at is null
-          and a.module='dogruadres-access' and a.role_context='owner'
-          and a.resource='store-platform-closing'
-          and a.action='organization.store_platform_closing_appealed'
-          and a.organization_id=c.organization_id and a.target_id=c.seller_id
-          and a.new_values->>'request_id'=c.appeal_request_id
-          and a.new_values->>'appeal_reason_sha256'=
-            encode(sha256(convert_to(c.appeal_reason,'UTF8')),'hex')
-      )) as appeal_proof,
-      (c.final_review_audit_event_id is null or exists (
-        select 1 from da_audit_event a
-        join da_audit_outbox x on x.source_audit_event_id=a.id
-          and x.source_module='dogruadres-access' and x.deleted_at is null
-        where a.id=c.final_review_audit_event_id and a.deleted_at is null
-          and a.module='dogruadres-access' and a.role_context='owner'
-          and a.actor_person_id=c.final_review_requested_by_person_id
-          and a.resource='store-platform-closing'
-          and a.action='organization.store_platform_closing_final_review_requested'
-          and a.organization_id=c.organization_id and a.target_id=c.seller_id
-          and a.new_values->>'request_id'=c.final_review_request_id
-          and a.new_values->>'stage'='second_review'
-          and a.new_values->>'reason_sha256'=
-            encode(sha256(convert_to(c.final_review_reason,'UTF8')),'hex')
-      )) as final_review_proof,
-      (c.review_decision_audit_event_id is null or exists (
-        select 1 from da_audit_event a
-        join da_audit_outbox x on x.source_audit_event_id=a.id
-          and x.source_module='dogruadres-access' and x.deleted_at is null
-        where a.id=c.review_decision_audit_event_id and a.deleted_at is null
-          and a.module='dogruadres-access' and a.role_context='platform_staff'
-          and a.actor_person_id=c.review_decided_by_person_id
-          and a.resource='store-platform-closing'
-          and a.action='organization.store_platform_closing_review_decided'
-          and a.organization_id=c.organization_id and a.target_id=c.seller_id
-          and a.new_values->>'request_id'=c.review_decision_request_id
-          and a.new_values->>'source_request_id'=c.review_decision_source_request_id
-          and a.new_values->>'decision'=c.review_decision
-          and a.new_values->>'reason_sha256'=
-            encode(sha256(convert_to(c.review_decision_reason,'UTF8')),'hex')
-      )) as review_decision_proof,
-      (c.deadline_started_at is null or exists (
-        select 1 from da_audit_event e
-        join da_audit_outbox x on x.source_audit_event_id=e.id
-          and x.source_module='dogruadres-access' and x.deleted_at is null
-        where e.id=c.deadline_audit_event_id and e.deleted_at is null
-          and e.module='dogruadres-access' and e.organization_id=c.organization_id
-          and e.target_id=c.seller_id and e.resource='store-platform-closing'
-          and e.action='organization.store_platform_closing_deadline_started'
-          and e.role_context=(case when c.deadline_basis='owner_delivery'
-            then 'owner' else 'platform_automation' end)
-          and e.new_values->>'basis'=c.deadline_basis
-          and (e.new_values->>'deadline_started_at')::timestamptz=c.deadline_started_at
-      )) as deadline_proof
-      from da_store_platform_closing c where c.seller_id=?
-      ${lock?'for update of c':''}`,[sellerId])
-    if(rows.length>1||rows.some(row=>
-      row.seller_id!==sellerId||row.start_proof!==true||
-      row.appeal_proof!==true||row.deadline_proof!==true||
-      row.final_review_proof!==true||row.review_decision_proof!==true||
-      (row.review_decision_request_id===null?
-        row.review_decision!==null||row.review_decision_reason!==null||
-        row.review_decision_source_request_id!==null||
-        row.review_decision_audit_event_id!==null||
-        row.review_decided_by_person_id!==null||row.review_decided_at!==null:
-        !/^dasdr_[a-f0-9]{32}$/.test(String(row.review_decision_request_id))||
-        !["accepted","rejected"].includes(row.review_decision)||
-        typeof row.review_decision_reason!=="string"||
-        row.review_decision_reason.length<10||row.review_decision_reason.length>500||
-        row.review_decision_source_request_id!==
-          (row.appeal_request_id??row.final_review_request_id)||
-        !Number.isFinite(new Date(row.review_decided_at).getTime()))||
-      (row.final_review_request_id===null?
-        row.final_review_reason!==null||
-        row.final_review_audit_event_id!==null||
-        row.final_review_requested_by_person_id!==null||
-        row.final_review_requested_at!==null:
-        !/^dasfr_[a-f0-9]{32}$/.test(String(row.final_review_request_id))||
-        typeof row.final_review_reason!=="string"||
-        row.final_review_reason.length<10||
-        row.final_review_reason.length>500||
-        !/^daprs_[A-Za-z0-9_-]+$/.test(String(row.final_review_requested_by_person_id))||
-        !Number.isFinite(new Date(row.final_review_requested_at).getTime())||
-        row.state!=="notification_unverified")||
-      !["notification_unverified","appealed"].includes(row.state)||
-      !/^dascp_[a-f0-9]{32}$/.test(String(row.request_id))||
-      !Number.isFinite(new Date(row.started_at).getTime())||
-      (row.state==="notification_unverified"?
-        Number(row.version)!==1||row.appeal_audit_event_id!==null:
-        Number(row.version)!==2||
-        !/^dapa_[a-f0-9]{32}$/.test(String(row.appeal_request_id))||
-        !Number.isFinite(new Date(row.appealed_at).getTime()))))
-      throw new IdentityAccessDenied()
-    return rows.length===1?rows[0]:null
-  }
-
-  /** Dedicated platform task; store.approve MUST NOT imply closing power. */
-  @InjectTransactionManager()
-  async personalReviewablePlatformStoreClosings(token:string,page=0,
-    @MedusaContext() context:Context={},
-    target?:{organization_id:string;seller_id:string}){
-    if(!Number.isSafeInteger(page)||page<0||page>1000)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"store.closing.manage","platform")
-    if(!staff)return null
-    // Both current audited Store Origins are valid: a new application or a
-    // historically approved association. Never infer ownership from Seller
-    // status alone; require the unrevoked Origin and canonical audit/outbox.
-    const rows=await db.execute(`select o.organization_id,o.seller_id,
-      d.name organization_name,s.name store_name,s.status store_status
-      from da_organization_seller_ownership o
-      join da_organization d on d.id=o.organization_id
-        and d.status='active' and d.deleted_at is null
-      join da_audit_event e on e.id=o.verification_audit_event_id
-        and e.deleted_at is null and e.module='dogruadres-access'
-        and e.organization_id=o.organization_id and e.target_id=o.seller_id
-        and (
-          (e.action='organization.store_application_created'
-           and e.resource='store-application'
-           and exists(select 1 from da_store_application a
-             where a.id=(e.new_values->>'application_id')
-               and a.organization_id=o.organization_id
-               and a.seller_id=o.seller_id and a.status='created'
-               and a.person_id=e.actor_person_id))
-          or (e.action='organization.store_association_approved'
-              and e.resource='store-association')
-        )
-      join seller s on s.id=o.seller_id and s.deleted_at is null
-        and s.approved_at is not null and s.status in ('open','suspended')
-      where o.revoked_at is null and o.verified_at is not null
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
-            and x.deleted_at is null)
-        ${target?'and o.organization_id=? and o.seller_id=?':''}
-        and not exists(select 1 from da_store_owner_closing c
-          where c.seller_id=s.id and c.state='closing')
-      order by o.verified_at desc,o.id desc
-      limit ${target?2:31} offset ${target?0:page*30}`,
-      target?[target.organization_id,target.seller_id]:[])
-    if(!Array.isArray(rows)||rows.length>(target?1:31)||
-       rows.some(x=>!/^sel_[A-Za-z0-9_-]+$/.test(x.seller_id)||
-         !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(x.organization_id)))
-      throw new IdentityAccessDenied()
-    return (target?rows:rows.slice(0,30)).map(x=>({
-      organization_id:x.organization_id as string,seller_id:x.seller_id as string,
-      organization_name:x.organization_name as string,
-      store_name:x.store_name as string,store_status:x.store_status as string
-    }))
-  }
-
-  @InjectTransactionManager()
-  async personalStartPlatformStoreClosing(token:string,input:{
-    organization_id:string;seller_id:string;request_id:string;reason:string
-  },@MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       !/^dascp_[a-f0-9]{32}$/.test(input.request_id)||
-       typeof input.reason!=="string"||input.reason.trim()!==input.reason||
-       input.reason.length<10||input.reason.length>500)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const staff=await sessions.staff(token,"store.closing.manage","platform")
-    if(!staff)return null
-    const grant=await db.execute(`select id from da_platform_staff_grant
-      where id=? and person_id=? and task='store.closing.manage'
-        and resource='platform' and revoked_at is null
-        and (expires_at is null or expires_at>clock_timestamp())
-      for share`,[staff.grant_id,staff.person_id])
-    if(grant.length!==1)return null
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
-      [input.seller_id])
-    const targets=await this.personalReviewablePlatformStoreClosings(
-      token,0,context,{organization_id:input.organization_id,seller_id:input.seller_id})
-    if(!targets||targets.length!==1)return null
-    const current=await this.platformClosingRow_(db,input.seller_id,true)
-    if(current){
-      if(current.organization_id!==input.organization_id)
-        throw new IdentityAccessDenied()
-      if(current.request_id===input.request_id&&current.reason===input.reason)
-        return {status:current.state,version:Number(current.version),replayed:true}
-      return {status:"conflict" as const}
-    }
-    const reasonSha=createHash("sha256").update(input.reason).digest("hex")
-    const clock=await db.execute("select clock_timestamp() as now_at")
-    if(clock.length!==1)throw new IdentityAccessDenied()
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:staff.person_id,actor_type:staff.actor_type,
-      actor_id:staff.actor_id,role_context:"platform_staff",
-      organization_id:input.organization_id,
-      action:"organization.store_platform_closing_started",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"store-platform-closing",
-      target_id:input.seller_id,
-      new_values:{request_id:input.request_id,
-        state:"notification_unverified",reason_sha256:reasonSha},
-      occurred_at:new Date(clock[0].now_at)
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const inserted=await db.execute(`insert into da_store_platform_closing
-      (seller_id,organization_id,state,version,request_id,reason,
-       source_audit_event_id,started_at)
-      values (?,?,'notification_unverified',1,?,?,?,?) returning seller_id`,
-      [input.seller_id,input.organization_id,input.request_id,input.reason,
-       audit.id,new Date(clock[0].now_at).toISOString()])
-    if(inserted.length!==1)throw new IdentityAccessDenied()
-    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
-      select 'danot_'||gen_random_uuid()::text,m.person_id,?
-      from da_organization_membership m join da_person p on p.id=m.person_id
-      where m.organization_id=? and m.role='owner' and m.protected_owner=true
-        and m.status='active' and m.revoked_at is null and m.deleted_at is null
-        and p.disabled_at is null and p.deleted_at is null
-      on conflict (audit_event_id,person_id) do nothing`,
-      [audit.id,input.organization_id])
-    // Durable first-attempt queue is born with the sale-blocking decision.
-    // One per current protected Owner; no e-mail is sent inside the transaction.
-    await db.execute(`insert into da_store_platform_closing_email
-      (seller_id,person_id,next_attempt_at)
-      select ?,m.person_id,?
-      from da_organization_membership m join da_person p on p.id=m.person_id
-      where m.organization_id=? and m.role='owner' and m.protected_owner=true
-        and m.status='active' and m.revoked_at is null and m.deleted_at is null
-        and p.disabled_at is null and p.deleted_at is null
-      on conflict (seller_id,person_id) do nothing`,
-      [input.seller_id,new Date(clock[0].now_at).toISOString(),input.organization_id])
-    return {status:"notification_unverified" as const,version:1,replayed:false}
-  }
-
-
-  /**
-   * Scheduled B22 fallback. Admin notification and 10+20 clock are one
-   * atomic Foundation operation with a canonical audit/outbox. An SMTP
-   * acceptance or expired lease NEVER counts as delivery proof. The initial
-   * authorized Staff is the audit attribution; the deadline is explicitly
-   * marked as platform automation, not a new Staff decision.
-   */
-  @InjectTransactionManager()
-  async settlePlatformClosingAdminFallback(@MedusaContext() context:Context={}){
-    const db=securitySql(context.transactionManager)
-    const candidates=await db.execute(`select c.seller_id,c.organization_id,
-      c.source_audit_event_id
-      from da_store_platform_closing c
-      where c.deadline_started_at is null
-        and c.started_at<=clock_timestamp()-interval '72 hours'
-        and exists (
-          select 1 from da_organization_membership m
-          join da_person p on p.id=m.person_id and p.deleted_at is null
-            and p.disabled_at is null
-          where m.organization_id=c.organization_id and m.role='owner'
-            and m.protected_owner=true and m.status='active'
-            and m.revoked_at is null and m.deleted_at is null
-        )
-        and not exists (
-          select 1 from da_store_platform_closing_email d
-          join da_organization_membership m on m.person_id=d.person_id
-            and m.organization_id=c.organization_id and m.status='active'
-            and m.role='owner' and m.protected_owner=true
-            and m.revoked_at is null and m.deleted_at is null
-          join da_person p on p.id=m.person_id and p.deleted_at is null
-            and p.disabled_at is null
-          where d.seller_id=c.seller_id
-            -- Only recipients of the original closure may hold its 72h
-            -- fallback clock. Later Owners keep their own separate notice.
-            and d.late_notice_id is null and (
-            d.attempts<4 or d.lease_until is not null
-            or d.last_result='inflight' or d.delivered_at is not null)
-        )
-        and not exists (
-          select 1 from da_organization_membership m
-          join da_person p on p.id=m.person_id
-            and p.disabled_at is null and p.deleted_at is null
-          where m.organization_id=c.organization_id and m.status='active'
-            and m.role='owner' and m.protected_owner=true
-            and m.revoked_at is null and m.deleted_at is null
-            and exists(select 1 from da_notification_receipt n
-              where n.audit_event_id=c.source_audit_event_id
-                and n.person_id=m.person_id)
-            and not exists(select 1 from da_store_platform_closing_email d
-              where d.seller_id=c.seller_id and d.person_id=m.person_id
-                and d.late_notice_id is null)
-        )
-      order by c.started_at,c.seller_id
-      for update of c skip locked limit 5`)
-    let started=0
-    for(const candidate of candidates){
-      const sellerId=String(candidate.seller_id)
-      const organizationId=String(candidate.organization_id)
-      const closure=await this.platformClosingRow_(db,sellerId,true)
-      if(!closure||closure.organization_id!==organizationId||
-         closure.deadline_started_at!==null||
-         closure.source_audit_event_id!==candidate.source_audit_event_id)
-        throw new IdentityAccessDenied()
-      const recipients=await db.execute(`select distinct g.person_id
-        from da_platform_staff_grant g
-        join da_person p on p.id=g.person_id and p.disabled_at is null
-          and p.deleted_at is null
-        where g.task='store.closing.manage' and g.resource='platform'
-          and g.revoked_at is null
-          and (g.expires_at is null or g.expires_at>clock_timestamp())
-        limit 101`)
-      if(!recipients.length)continue
-      if(recipients.length>100)throw new IdentityAccessDenied()
-      await db.execute(`insert into da_store_platform_closing_admin_notice
-        (id,seller_id,person_id)
-        select 'danal_'||replace(gen_random_uuid()::text,'-',''),?,g.person_id
-        from da_platform_staff_grant g
-        join da_person p on p.id=g.person_id and p.disabled_at is null
-          and p.deleted_at is null
-        where g.task='store.closing.manage' and g.resource='platform'
-          and g.revoked_at is null
-          and (g.expires_at is null or g.expires_at>clock_timestamp())
-        on conflict (seller_id,person_id) do nothing`,[sellerId])
-      const noticed=await db.execute(`select count(*)::int as n
-        from da_store_platform_closing_admin_notice n
-        join da_platform_staff_grant g on g.person_id=n.person_id
-          and g.task='store.closing.manage' and g.resource='platform'
-          and g.revoked_at is null
-          and (g.expires_at is null or g.expires_at>clock_timestamp())
-        join da_person p on p.id=g.person_id and p.disabled_at is null
-          and p.deleted_at is null where n.seller_id=?`,[sellerId])
-      if(!Number(noticed[0]?.n))throw new IdentityAccessDenied()
-      const actor=await db.execute(`select e.actor_person_id,e.actor_type,e.actor_id
-        from da_audit_event e where e.id=? and e.module='dogruadres-access'
-          and e.action='organization.store_platform_closing_started'
-          and e.resource='store-platform-closing' and e.role_context='platform_staff'
-          and e.organization_id=? and e.target_id=? and e.deleted_at is null
-        limit 2`,[closure.source_audit_event_id,organizationId,sellerId])
-      if(actor.length!==1)throw new IdentityAccessDenied()
-      const clock=await db.execute("select clock_timestamp() as at")
-      if(clock.length!==1)throw new IdentityAccessDenied()
-      const at=new Date(clock[0].at).toISOString()
-      const [deadlineAudit]=await this.persistAuditEventsWithOutbox_([{
-        actor_person_id:actor[0].actor_person_id,
-        actor_type:actor[0].actor_type,actor_id:actor[0].actor_id,
-        role_context:"platform_automation",organization_id:organizationId,
-        action:"organization.store_platform_closing_deadline_started",
-        module:DOGRUADRES_AUDIT_MODULE,resource:"store-platform-closing",
-        target_id:sellerId,
-        new_values:{basis:"admin_alert",deadline_started_at:at,
-          evidence:"four_scheduled_attempts_without_verified_delivery"},
-        occurred_at:new Date(at)
-      }],context)
-      if(!deadlineAudit?.id)throw new IdentityAccessDenied()
-      await (context.transactionManager as {flush():Promise<void>}).flush()
-      const updated=await db.execute(`update da_store_platform_closing
-        set deadline_started_at=?::timestamptz,deadline_basis='admin_alert',
-          admin_alert_at=?::timestamptz,deadline_audit_event_id=?,
-          updated_at=clock_timestamp()
-        where seller_id=? and organization_id=? and deadline_started_at is null
-        returning seller_id`,[at,at,deadlineAudit.id,sellerId,organizationId])
-      if(updated.length!==1)throw new IdentityAccessDenied()
-      started++
-    }
-    return started
-  }
-
-  /**
-   * B22 mandatory Owner mail preflight (read only).
-   * Resolves current protected Owner Persons against the canonical initial
-   * closure audit event and its private receipts, not a caller-supplied email.
-   * Actual SMTP dispatch and mailbox delivery are NOT authorized by this
-   * check and may never start the 10+20-day clock.
-   */
-  @InjectTransactionManager()
-  async personalPlatformStoreClosingEmailAudience(token:string,organizationId:string,
-    sellerId:string,@MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"store.closing.manage","platform")
-    if(!staff)return null
-    const grant=await db.execute(`select id from da_platform_staff_grant
-      where id=? and person_id=? and task='store.closing.manage'
-        and resource='platform' and revoked_at is null
-        and (expires_at is null or expires_at>clock_timestamp())
-      for share`,[staff.grant_id,staff.person_id])
-    if(grant.length!==1)return null
-    const closure=await this.platformClosingRow_(db,sellerId)
-    if(!closure||closure.organization_id!==organizationId)return null
-    const owners=await db.execute(`select m.person_id,n.id as receipt_id,
-      case when map.person_id is not null then b.auth_identity_id end as auth_identity_id,
-      case when map.person_id is not null then b.actor_type end as actor_type,
-      case when map.person_id is not null then b.actor_id end as actor_id
-      from da_organization_membership m
-      join da_person p on p.id=m.person_id and p.disabled_at is null
-        and p.deleted_at is null
-      left join da_notification_receipt n on n.person_id=m.person_id
-        and n.audit_event_id=?
-      left join da_login_binding b on b.person_id=m.person_id
-        and b.revoked_at is null and b.verified_at is not null
-      left join da_actor_mapping map on map.person_id=m.person_id
-        and map.actor_type=b.actor_type and map.actor_id=b.actor_id
-        and map.deleted_at is null
-      where m.organization_id=? and m.role='owner' and m.protected_owner=true
-        and m.status='active' and m.revoked_at is null
-        and m.deleted_at is null order by m.person_id`,
-      [closure.source_audit_event_id,organizationId])
-    if(!Array.isArray(owners)||owners.length>100||
-       owners.some(row=>typeof row.person_id!=="string"||
-         (row.receipt_id!==null&&typeof row.receipt_id!=="string")))
-      throw new IdentityAccessDenied()
-    return owners.map(row=>({
-      person_id:row.person_id as string,
-      receipt_id:row.receipt_id as string|null,
-      actor_type:row.actor_type as string|null,
-      actor_id:row.actor_id as string|null,
-      auth_identity_id:row.auth_identity_id as string|null
-    }))
-  }
-
-  /** Scoped staff-only progress. The output is status metadata only; email,
-   * Person ID, private reason and native auth IDs stay server-side. */
-  @InjectTransactionManager()
-  async personalPlatformStoreClosingEmailProgress(token:string,organizationId:string,
-    sellerId:string,@MedusaContext() context:Context={}){
-    const audience=await this.personalPlatformStoreClosingEmailAudience(
-      token,organizationId,sellerId,context)
-    if(!audience)return null
-    const db=securitySql(context.transactionManager)
-    const closure=await this.platformClosingRow_(db,sellerId)
-    if(!closure||closure.organization_id!==organizationId)return null
-    const rows=await db.execute(`select d.person_id,d.attempts,d.last_result,
-      d.message_id,d.last_attempt_at,d.next_attempt_at,d.delivered_at,
-      d.delivery_source,d.email_link_visited_at,d.account_viewed_at
-      from da_store_platform_closing_email d
-      where d.seller_id=? order by d.person_id`,[sellerId])
-    const byPerson=new Map(rows.map(row=>[row.person_id as string,row]))
-    const unique=[...new Set(audience.map(row=>row.person_id))].sort()
-    const owners=unique.map((personId,index)=>{
-      const row=byPerson.get(personId)
-      return {
-        label:`Owner ${index+1}`,attempts:row?Number(row.attempts):0,
-        // A proven SMTP 250 is independent from later link delivery.
-        // The message ID itself remains private to the server.
-        smtp_accepted:typeof row?.message_id==="string"&&row.message_id.length>0,
-        status:row?.delivered_at?'delivered':row?.last_result??'pending',
-        last_attempt_at:row?.last_attempt_at?
-          new Date(row.last_attempt_at).toISOString():null,
-        next_attempt_at:row&&Number(row.attempts)<4&& !row.delivered_at?
-          new Date(row.next_attempt_at).toISOString():null,
-        delivered_at:row?.delivered_at?
-          new Date(row.delivered_at).toISOString():null,
-        link_visited_at:row?.email_link_visited_at?
-          new Date(row.email_link_visited_at).toISOString():null,
-        account_viewed_at:row?.account_viewed_at?
-          new Date(row.account_viewed_at).toISOString():null
-      }
-    })
-    const started=closure.deadline_started_at?
-      new Date(closure.deadline_started_at).toISOString():null
-    // Advisory-only closure blockers for the authorized Staff view. The
-    // canonical PostgreSQL clock controls the appeal-window calculation;
-    // none of these flags authorizes a native Seller termination or name
-    // release. Finance/legal verification is not integrated and must be
-    // represented as unknown rather than inferred from absence of orders.
-    const ticks=await db.execute("select clock_timestamp() as now_at")
-    if(ticks.length!==1)throw new IdentityAccessDenied()
-    const now=new Date(ticks[0].now_at).getTime()
-    if(!Number.isFinite(now))throw new IdentityAccessDenied()
-    const appealWindowElapsed=started!==null&&
-      now>=new Date(started).getTime()+2592000000
-    const appealReviewPending=closure.review_decision===null&&
-      (closure.appeal_request_id!==null||
-       closure.final_review_request_id!==null)
-    return {
-      owners,deadline_started_at:started,
-      terminal_preflight:{
-        appeal_window_elapsed:appealWindowElapsed,
-        appeal_review_pending:appealReviewPending,
-        appeal_accepted:closure.review_decision==="accepted",
-        notification_exception_review_required:
-          closure.deadline_basis==="admin_alert",
-        financial_legal_clearance_verified:false,
-        permanent_finalization_enabled:false
-      },
-      deadline_basis:closure.deadline_basis??null,
-      admin_alert_at:closure.admin_alert_at?
-        new Date(closure.admin_alert_at).toISOString():null,
-      // No mailbox verification is inferred from SMTP acceptance.
-      delivery_verified_count:owners.filter(o=>o.delivered_at!==null).length,
-      delivered_evidence_available:owners.some(o=>o.delivered_at!==null)
-    }
-  }
-
-  /** A deliberate authenticated Owner visit to a link from their mail.
-   * Link fetches and scanner GETs must NEVER mutate the clock. A SHA-256
-   * digest and exact current protected-Owner authority are both required. */
-  @InjectTransactionManager()
-  async personalPlatformStoreClosingEmailLinkVisit(
-    token:string,linkToken:string,@MedusaContext() context:Context={}
-  ){
-    if(!/^[a-f0-9]{64}$/.test(linkToken))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const current=await new IdentitySessions(db).current(token,true,false)
-    if(!current)return null
-    const digest=createHash("sha256").update(linkToken).digest("hex")
-    const choices=await db.execute(`select l.seller_id,l.person_id,c.organization_id
-      from da_store_platform_closing_email_link l
-      join da_store_platform_closing c on c.seller_id=l.seller_id
-      where l.token_sha256=? and l.issued_at>
-        clock_timestamp()-interval '30 days'
-      limit 2`,[digest])
-    if(choices.length!==1||choices[0].person_id!==current.person_id)
-      return null
-    const {seller_id:sellerId,organization_id:orgId}=choices[0]
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
-      [sellerId])
-    const owner=await this.ownerPauseScope_(db,token,orgId,sellerId)
-    if(!owner||owner.actor.person_id!==current.person_id)return null
-    const locks=await db.execute(`select l.seller_id,l.person_id,l.issued_at,
-      d.delivered_at,c.deadline_started_at,c.reason
-      from da_store_platform_closing_email_link l
-      join da_store_platform_closing_email d on d.seller_id=l.seller_id
-        and d.person_id=l.person_id
-      join da_store_platform_closing c on c.seller_id=l.seller_id
-        and c.organization_id=?
-      where l.token_sha256=? and l.person_id=?
-        and l.issued_at>clock_timestamp()-interval '30 days'
-      for update of l,d,c`,[orgId,digest,current.person_id])
-    if(locks.length!==1||locks[0].seller_id!==sellerId)return null
-    // Single server-clock event; a repeated click never resets any timestamp.
-    const tick=await db.execute("select clock_timestamp() as at")
-    if(tick.length!==1)throw new IdentityAccessDenied()
-    const at=new Date(tick[0].at).toISOString()
-    await db.execute(`update da_store_platform_closing_email_link
-      set visited_at=coalesce(visited_at,?::timestamptz)
-      where token_sha256=? and person_id=?`,[at,digest,current.person_id])
-    await db.execute(`update da_store_platform_closing_email
-      set delivered_at=coalesce(delivered_at,?::timestamptz),
-        delivery_source='authenticated_owner',
-        email_link_visited_at=coalesce(email_link_visited_at,?::timestamptz),
-        account_viewed_at=coalesce(account_viewed_at,?::timestamptz),
-        last_result='delivered',claim_id=null,lease_until=null,
-        updated_at=clock_timestamp()
-      where seller_id=? and person_id=?`,
-      [at,at,at,sellerId,current.person_id])
-    // Audit and clock share the same physical Foundation transaction. A
-    // repeated Owner visit must not create a second deadline audit/outbox.
-    if(locks[0].deadline_started_at===null){
-      const [deadlineAudit]=await this.persistAuditEventsWithOutbox_([{
-        actor_person_id:owner.actor.person_id,
-        actor_type:owner.actor.actor_type,actor_id:owner.actor.actor_id,
-        role_context:"owner",organization_id:orgId,
-        action:"organization.store_platform_closing_deadline_started",
-        module:DOGRUADRES_AUDIT_MODULE,
-        resource:"store-platform-closing",target_id:sellerId,
-        new_values:{basis:"owner_delivery",deadline_started_at:at,
-          evidence:"authenticated_owner_link"},
-        occurred_at:new Date(at)
-      }],context)
-      if(!deadlineAudit?.id)throw new IdentityAccessDenied()
-      await (context.transactionManager as {flush():Promise<void>}).flush()
-      const started=await db.execute(`update da_store_platform_closing
-        set deadline_started_at=?::timestamptz,deadline_basis='owner_delivery',
-          deadline_audit_event_id=?,updated_at=clock_timestamp()
-        where seller_id=? and organization_id=? and deadline_started_at is null
-        returning seller_id`,[at,deadlineAudit.id,sellerId,orgId])
-      if(started.length!==1)throw new IdentityAccessDenied()
-    }
-    return {viewed:true,reason:String(locks[0].reason),
-      deadline_started:true}
-  }
-
-  @InjectTransactionManager()
-  async personalPlatformStoreClosingState(token:string,organizationId:string,
-    sellerId:string,@MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const owner=await this.ownerPauseScope_(db,token,organizationId,sellerId)
-    if(!owner)return null
-    const row=await this.platformClosingRow_(db,sellerId)
-    if(row&&row.organization_id!==organizationId)throw new IdentityAccessDenied()
-    const windows=await db.execute(`select
-      (x.started_at is null or x.now_at <
-        x.started_at + interval '240 hours') as first_window,
-      (x.started_at is not null and x.now_at >=
-        x.started_at + interval '240 hours' and x.now_at <
-        x.started_at + interval '720 hours') as second_window
-      from (select ?::timestamptz as started_at,
-        clock_timestamp() as now_at) x`,[row?.deadline_started_at??null])
-    if(windows.length!==1||
-       typeof windows[0].first_window!=="boolean"||
-       typeof windows[0].second_window!=="boolean")
-      throw new IdentityAccessDenied()
-    return {organization_id:organizationId,seller_id:sellerId,
-      state:row?.state??"none",version:row?Number(row.version):0,
-      first_appeal_open:row?.state==="notification_unverified"&&
-        windows[0].first_window&&row?.final_review_request_id==null,
-      final_review_open:row?.state==="notification_unverified"&&
-        windows[0].second_window&&row?.final_review_request_id==null,
-      final_review_requested:row?.final_review_request_id!=null,
-      final_review_requested_at:row?.final_review_requested_at?
-        new Date(row.final_review_requested_at).toISOString():null,
-      final_review_reason:row?.final_review_reason??null,
-      review_decision:row?.review_decision??null,
-      review_decision_reason:row?.review_decision_reason??null,
-      review_decided_at:row?.review_decided_at?
-        new Date(row.review_decided_at).toISOString():null,
-      reason:row?.reason??null,started_at:row?
-        new Date(row.started_at).toISOString():null,
-      appeal_reason:row?.appeal_reason??null,
-      // Owner sees the real server-owned 10+20 clock, never a browser clock
-      // used as authority. Sale denial was effective at initial Staff decision.
-      mandatory_email_verified:row?.deadline_basis==="owner_delivery",
-      deadline_started:!!row?.deadline_started_at,
-      deadline_started_at:row?.deadline_started_at?
-        new Date(row.deadline_started_at).toISOString():null,
-      first_appeal_until:row?.deadline_started_at?
-        new Date(new Date(row.deadline_started_at).getTime()+864000000).toISOString():null,
-      final_review_until:row?.deadline_started_at?
-        new Date(new Date(row.deadline_started_at).getTime()+2592000000).toISOString():null,
-      deadline_basis:row?.deadline_basis??null,
-      permanent_finalization_enabled:false}
-  }
-
-  @InjectTransactionManager()
-  async personalAppealPlatformStoreClosing(token:string,input:{
-    organization_id:string;seller_id:string;request_id:string;
-    expected_version:number;reason:string
-  },@MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       !/^dapa_[a-f0-9]{32}$/.test(input.request_id)||
-       input.expected_version!==1||
-       typeof input.reason!=="string"||input.reason.trim()!==input.reason||
-       input.reason.length<10||input.reason.length>500)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    // #307 P2: Person SHARE -> live session/security -> Seller advisory.
-    // Preliminary identity is NOT Owner authority; ownerPauseScope_ rechecks
-    // protected Owner, Organization, native Member/Seller and current origin
-    // under the serialized Seller lock before any write.
-    if(!await this.ownerPauseSessionPrelock_(db,token))
-      return null
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
-      [input.seller_id])
-    const owner=await this.ownerPauseScope_(db,token,input.organization_id,input.seller_id)
-    if(!owner)return null
-    const row=await this.platformClosingRow_(db,input.seller_id,true)
-    if(!row||row.organization_id!==input.organization_id)
-      return {status:"conflict" as const}
-    if(row.state==="appealed"){
-      if(row.appeal_request_id===input.request_id&&row.appeal_reason===input.reason)
-        return {status:"appealed" as const,version:2,replayed:true}
-      return {status:"conflict" as const}
-    }
-    if(row.state!=="notification_unverified"||Number(row.version)!==1)
-      return {status:"conflict" as const}
-    // Existing accepted appeal replays are handled above. For a new first
-    // appeal, the canonical 10-day window is enforced by the PG16 clock,
-    // never by the browser. A pre-clock appeal remains allowed.
-    // Compare native timestamptz values in PostgreSQL at microsecond
-    // precision. 240 hours matches the existing UTC 10*24h contract;
-    // converting the cutoff to JS milliseconds could shift its last instant.
-    const clock=await db.execute(`select t.now_at,
-      coalesce(t.now_at >= (?::timestamptz + interval '240 hours'),false)
-        as first_appeal_expired
-      from (select clock_timestamp() as now_at) t`,[row.deadline_started_at])
-    if(clock.length!==1||
-       !Number.isFinite(new Date(clock[0].now_at).getTime())||
-       typeof clock[0].first_appeal_expired!=="boolean")
-      throw new IdentityAccessDenied()
-    if(clock[0].first_appeal_expired)
-      return {status:"conflict" as const}
-    const history=await db.execute(`select id from da_audit_event
-      where module='dogruadres-access' and resource='store-platform-closing'
-        and target_id=? and new_values->>'request_id'=?
-        and deleted_at is null limit 2`,[input.seller_id,input.request_id])
-    if(history.length)throw new IdentityAccessDenied()
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:owner.actor.person_id,actor_type:owner.actor.actor_type,
-      actor_id:owner.actor.actor_id,role_context:"owner",
-      organization_id:input.organization_id,
-      action:"organization.store_platform_closing_appealed",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"store-platform-closing",
-      target_id:input.seller_id,
-      new_values:{request_id:input.request_id,
-        appeal_reason_sha256:createHash("sha256").update(input.reason).digest("hex")},
-      occurred_at:new Date(clock[0].now_at)
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const changed=await db.execute(`update da_store_platform_closing
-      set state='appealed',version=2,appeal_request_id=?,appeal_reason=?,
-        appeal_audit_event_id=?,appealed_at=?,updated_at=clock_timestamp()
-      where seller_id=? and organization_id=? and version=1
-        and state='notification_unverified' returning seller_id`,
-      [input.request_id,input.reason,audit.id,new Date(clock[0].now_at).toISOString(),
-       input.seller_id,input.organization_id])
-    if(changed.length!==1)throw new IdentityAccessDenied()
-    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
-      select 'danot_'||gen_random_uuid()::text,m.person_id,?
-      from da_organization_membership m join da_person p on p.id=m.person_id
-      where m.organization_id=? and m.role='owner' and m.protected_owner=true
-        and m.status='active' and m.revoked_at is null and m.deleted_at is null
-        and p.disabled_at is null and p.deleted_at is null
-      on conflict (audit_event_id,person_id) do nothing`,
-      [audit.id,input.organization_id])
-    return {status:"appealed" as const,version:2,replayed:false}
-  }
-
-  /** A protected Owner may request independent platform review only
-   * in the second (10–30 day) window when no first appeal was filed.
-   * This is a durable pending request, NOT a Staff decision or finalizer.
-   */
-  @InjectTransactionManager()
-  async personalRequestPlatformStoreClosingFinalReview(token:string,input:{
-    organization_id:string;seller_id:string;request_id:string;
-    expected_version:number;reason:string
-  },@MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       !/^dasfr_[a-f0-9]{32}$/.test(input.request_id)||
-       input.expected_version!==1||
-       typeof input.reason!=="string"||input.reason.trim()!==input.reason||
-       input.reason.length<10||input.reason.length>500)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    // #307 P2: Person SHARE -> live session/security -> Seller advisory.
-    // Preliminary identity is NOT Owner authority; ownerPauseScope_ rechecks
-    // protected Owner, Organization, native Member/Seller and current origin
-    // under the serialized Seller lock before any write.
-    if(!await this.ownerPauseSessionPrelock_(db,token))
-      return null
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
-      [input.seller_id])
-    const owner=await this.ownerPauseScope_(db,token,input.organization_id,input.seller_id)
-    if(!owner)return null
-    const row=await this.platformClosingRow_(db,input.seller_id,true)
-    if(!row||row.organization_id!==input.organization_id)
-      return {status:"conflict" as const}
-    // Replay is limited to the same currently authorized Owner and content.
-    if(row.final_review_request_id!==null){
-      if(row.final_review_request_id===input.request_id&&
-         row.final_review_reason===input.reason&&
-         row.final_review_requested_by_person_id===owner.actor.person_id)
-        return {status:"review_requested" as const,replayed:true}
-      return {status:"conflict" as const}
-    }
-    if(row.state!=="notification_unverified"||Number(row.version)!==1||
-       row.deadline_started_at===null)
-      return {status:"conflict" as const}
-    const clock=await db.execute(`select x.now_at,
-      (x.now_at >= (?::timestamptz + interval '240 hours') and
-       x.now_at < (?::timestamptz + interval '720 hours'))
-        as second_window
-      from (select clock_timestamp() as now_at) x`,
-      [row.deadline_started_at,row.deadline_started_at])
-    if(clock.length!==1||
-       !Number.isFinite(new Date(clock[0].now_at).getTime())||
-       typeof clock[0].second_window!=="boolean")
-      throw new IdentityAccessDenied()
-    if(!clock[0].second_window)return {status:"conflict" as const}
-    const duplicate=await db.execute(`select id from da_audit_event
-      where module='dogruadres-access' and resource='store-platform-closing'
-        and target_id=? and new_values->>'request_id'=?
-        and deleted_at is null limit 2`,
-      [input.seller_id,input.request_id])
-    if(duplicate.length)throw new IdentityAccessDenied()
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:owner.actor.person_id,actor_type:owner.actor.actor_type,
-      actor_id:owner.actor.actor_id,role_context:"owner",
-      organization_id:input.organization_id,
-      action:"organization.store_platform_closing_final_review_requested",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"store-platform-closing",
-      target_id:input.seller_id,
-      new_values:{request_id:input.request_id,stage:"second_review",
-        reason_sha256:createHash("sha256").update(input.reason).digest("hex")},
-      occurred_at:new Date(clock[0].now_at)
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const changed=await db.execute(`update da_store_platform_closing
-      set final_review_request_id=?,final_review_reason=?,
-        final_review_audit_event_id=?,
-        final_review_requested_by_person_id=?,
-        -- Keep the persisted cutoff timestamp at PostgreSQL microsecond
-        -- precision, not a lossy JavaScript Date millisecond conversion.
-        final_review_requested_at=clock_timestamp(),
-        updated_at=clock_timestamp()
-      where seller_id=? and organization_id=? and version=1
-        and state='notification_unverified'
-        and final_review_request_id is null
-      returning seller_id`,[
-      input.request_id,input.reason,audit.id,owner.actor.person_id,
-      input.seller_id,input.organization_id])
-    if(changed.length!==1)throw new IdentityAccessDenied()
-    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
-      select 'danot_'||gen_random_uuid()::text,m.person_id,?
-      from da_organization_membership m join da_person p on p.id=m.person_id
-      where m.organization_id=? and m.role='owner' and m.protected_owner=true
-        and m.status='active' and m.revoked_at is null and m.deleted_at is null
-        and p.disabled_at is null and p.deleted_at is null
-      on conflict (audit_event_id,person_id) do nothing`,
-      [audit.id,input.organization_id])
-    return {status:"review_requested" as const,replayed:false}
-  }
-
-  /**
-   * Independent Staff queue. The initiating closing Staff has NO implicit
-   * review authority. A separate explicit strong platform grant is required.
-   * Only verified source-backed Owner submissions are displayed.
-   */
-  @InjectTransactionManager()
-  async personalReviewablePlatformClosingAppeals(token:string,page=0,
-    @MedusaContext() context:Context={}){
-    if(!Number.isSafeInteger(page)||page<0||page>1000)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"store.closing.review","platform")
-    if(!staff)return null
-    const rows=await db.execute(`select c.seller_id,c.organization_id,
-      d.name organization_name,s.name store_name,
-      src.actor_person_id closing_staff_person_id
-      from da_store_platform_closing c
-      join da_organization d on d.id=c.organization_id
-        and d.status='active' and d.deleted_at is null
-      join seller s on s.id=c.seller_id and s.deleted_at is null
-        and s.approved_at is not null
-      join da_organization_seller_ownership o
-        on o.organization_id=c.organization_id and o.seller_id=c.seller_id
-        and o.revoked_at is null
-      join da_audit_event src on src.id=c.source_audit_event_id
-        and src.deleted_at is null and src.module='dogruadres-access'
-        and src.action='organization.store_platform_closing_started'
-        and src.resource='store-platform-closing'
-        and src.organization_id=c.organization_id and src.target_id=c.seller_id
-      where (c.appeal_request_id is not null or
-             c.final_review_request_id is not null)
-        and c.review_decision_request_id is null
-        and src.actor_person_id<>?
-      order by coalesce(c.final_review_requested_at,c.appealed_at),c.seller_id
-      limit 31 offset ?`,[staff.person_id,page*30])
-    if(rows.length>31)throw new IdentityAccessDenied()
-    const result:Array<{
-      seller_id:string;organization_id:string;organization_name:string;
-      store_name:string;stage:string;source_request_id:string;request_reason:string
-    }>=[]
-    for(const item of rows.slice(0,30)){
-      if(!(await platformApprovedSellerIds(db,item.organization_id)).includes(item.seller_id))
-        throw new IdentityAccessDenied()
-      const row=await this.platformClosingRow_(db,item.seller_id)
-      if(!row||row.organization_id!==item.organization_id||
-         row.review_decision_request_id!==null||
-         (row.appeal_request_id===null&&row.final_review_request_id===null))
-        throw new IdentityAccessDenied()
-      result.push({
-        seller_id:item.seller_id as string,
-        organization_id:item.organization_id as string,
-        organization_name:item.organization_name as string,
-        store_name:item.store_name as string,
-        stage:row.appeal_request_id!==null?"first_appeal":"second_review",
-        source_request_id:(row.appeal_request_id??row.final_review_request_id) as string,
-        request_reason:(row.appeal_reason??row.final_review_reason) as string
-      })
-    }
-    // Source reads can span many statements: a Staff task may be revoked
-    // while this private queue is assembled. Revalidate the same session,
-    // Person and grant immediately before release, then hold the live grant
-    // FOR SHARE until the read transaction commits. Concurrent revocation
-    // must commit before this check (403), or wait for this read to finish.
-    const fresh=await new IdentitySessions(db).staff(token,"store.closing.review","platform")
-    if(!fresh||fresh.person_id!==staff.person_id||
-       fresh.grant_id!==staff.grant_id)return null
-    const grant=await db.execute(`select g.id from da_platform_staff_grant g
-      where g.id=? and g.person_id=? and g.task='store.closing.review'
-        and g.resource='platform' and g.revoked_at is null
-        and (g.expires_at is null or g.expires_at>clock_timestamp())
-      for share`,[fresh.grant_id,fresh.person_id])
-    if(grant.length!==1)return null
-    return {candidates:result,page,has_more:rows.length>30}
-  }
-
-  /**
-   * Single, reasoned review decision, NOT the irreversible finalizer.
-   * Accepted requests preserve the closure sale block pending a separate
-   * authorized reopening; rejected requests preserve it likewise.
-   */
-  @InjectTransactionManager()
-  async personalDecidePlatformClosingAppeal(token:string,input:{
-    organization_id:string;seller_id:string;source_request_id:string;
-    request_id:string;decision:"accepted"|"rejected";reason:string
-  },@MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       !/^(dapa_|dasfr_)[a-f0-9]{32}$/.test(input.source_request_id)||
-       !/^dasdr_[a-f0-9]{32}$/.test(input.request_id)||
-       !["accepted","rejected"].includes(input.decision)||
-       typeof input.reason!=="string"||input.reason.trim()!==input.reason||
-       input.reason.length<10||input.reason.length>500)
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"store.closing.review","platform")
-    if(!staff)return null
-    const grant=await db.execute(`select g.id from da_platform_staff_grant g
-      where g.id=? and g.person_id=? and g.task='store.closing.review'
-        and g.resource='platform' and g.revoked_at is null
-        and (g.expires_at is null or g.expires_at>clock_timestamp())
-      for share`,[staff.grant_id,staff.person_id])
-    if(grant.length!==1)return null
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
-      [input.seller_id])
-    const row=await this.platformClosingRow_(db,input.seller_id,true)
-    if(!row||row.organization_id!==input.organization_id)
-      return {status:"conflict" as const}
-    // A historical closure audit is not a current Organization/Store grant.
-    // Revalidate the canonical approved native Seller relationship at write.
-    if(!(await platformApprovedSellerIds(db,input.organization_id)).includes(input.seller_id))
-      return null
-    const sourceId=row.appeal_request_id??row.final_review_request_id
-    if(sourceId!==input.source_request_id||sourceId===null)
-      return {status:"conflict" as const}
-    const initial=await db.execute(`select actor_person_id from da_audit_event
-      where id=? and action='organization.store_platform_closing_started'
-        and role_context='platform_staff' and organization_id=?
-        and target_id=? and deleted_at is null limit 2`,
-      [row.source_audit_event_id,input.organization_id,input.seller_id])
-    if(initial.length!==1||initial[0].actor_person_id===staff.person_id||
-       await isCurrentProtectedOwner(db,staff.person_id,input.organization_id))
-      return null
-    if(row.review_decision_request_id!==null){
-      if(row.review_decision_request_id===input.request_id&&
-         row.review_decision===input.decision&&
-         row.review_decision_reason===input.reason&&
-         row.review_decided_by_person_id===staff.person_id)
-        return {status:"decided" as const,replayed:true,
-          decision:row.review_decision as "accepted"|"rejected"}
-      return {status:"conflict" as const}
-    }
-    const duplicate=await db.execute(`select id from da_audit_event
-      where module='dogruadres-access' and resource='store-platform-closing'
-        and target_id=? and new_values->>'request_id'=?
-        and deleted_at is null limit 2`,[input.seller_id,input.request_id])
-    if(duplicate.length)throw new IdentityAccessDenied()
-    const clock=await db.execute("select clock_timestamp() as at")
-    if(clock.length!==1||
-       !Number.isFinite(new Date(clock[0].at).getTime()))
-      throw new IdentityAccessDenied()
-    const [audit]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:staff.person_id,actor_type:staff.actor_type,
-      actor_id:staff.actor_id,role_context:"platform_staff",
-      organization_id:input.organization_id,
-      action:"organization.store_platform_closing_review_decided",
-      module:DOGRUADRES_AUDIT_MODULE,resource:"store-platform-closing",
-      target_id:input.seller_id,
-      new_values:{request_id:input.request_id,
-        source_request_id:sourceId,decision:input.decision,
-        reason_sha256:createHash("sha256").update(input.reason).digest("hex")},
-      occurred_at:new Date(clock[0].at)
-    }],context)
-    if(!audit?.id)throw new IdentityAccessDenied()
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const changed=await db.execute(`update da_store_platform_closing
-      set review_decision_request_id=?,review_decision=?,
-        review_decision_reason=?,review_decision_source_request_id=?,
-        review_decision_audit_event_id=?,review_decided_by_person_id=?,
-        review_decided_at=clock_timestamp(),updated_at=clock_timestamp()
-      where seller_id=? and organization_id=?
-        and review_decision_request_id is null
-      returning seller_id`,[
-      input.request_id,input.decision,input.reason,sourceId,
-      audit.id,staff.person_id,input.seller_id,input.organization_id])
-    if(changed.length!==1)throw new IdentityAccessDenied()
-    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
-      select 'danot_'||gen_random_uuid()::text,m.person_id,?
-      from da_organization_membership m join da_person p on p.id=m.person_id
-      where m.organization_id=? and m.role='owner' and m.protected_owner=true
-        and m.status='active' and m.revoked_at is null and m.deleted_at is null
-        and p.disabled_at is null and p.deleted_at is null
-      on conflict(audit_event_id,person_id) do nothing`,
-      [audit.id,input.organization_id])
-    return {status:"decided" as const,replayed:false,
-      decision:input.decision}
-  }
-
-  // B22 product draft: Foundation-owned intent ledger, not another product
-  // service. Never interpret a reserved/uncertain native outcome as retryable.
   @InjectTransactionManager()
   async personalProductDraftScope(
     token:string,organizationId:string,sellerId:string,
     @MedusaContext() context:Context={}
-  ){
-    const db=securitySql(context.transactionManager),s=new IdentitySessions(db)
-    const current=await s.current(token,true,false)
-    if(!current)return null
-    const scope=await authorizedProductEditScope(db,token,organizationId,sellerId)
-    return scope?.person_id===current.person_id?scope:null
+  ) {
+    return this.productDrafts_(context).personalProductDraftScope(token, organizationId, sellerId, context)
   }
 
   @InjectTransactionManager()
   async personalProductDraftCandidates(
     token:string,organizationId:string,@MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId))
-      throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const current=await sessions.current(token,true,false)
-    if(!current)return null
-    const member=await sessions.organizations(token,organizationId,false)
-    if(!member||member.person_id!==current.person_id||
-       member.organizations.length!==1)return null
-    const stores=await platformApprovedSellerIds(db,organizationId)
-    const role=member.organizations[0].role
-    const owner=role==="owner" &&
-      await isCurrentProtectedOwner(db,current.person_id,organizationId)
-    const allowed:string[]=[]
-    for(const id of stores){
-      const grant=role==="owner"?false:
-        await verifiedStoreProductEditGrant(db,current.person_id,organizationId,id)
-      if(organizationActionAllowed(role,"products.edit",owner,grant))
-        allowed.push(id)
-    }
-    return {person_id:current.person_id,organization_id:organizationId,seller_ids:allowed}
+  ) {
+    return this.productDrafts_(context).personalProductDraftCandidates(token, organizationId, context)
   }
 
-
-  // Read-only receipt for an uncertain browser submission. A reserved intent
-  // is NOT evidence that Mercur did or did not create a product. No retry and
-  // no native workflow is triggered by this lookup.
   @InjectTransactionManager()
   async personalProductDraftReceipt(
     token:string,organizationId:string,sellerId:string,requestId:string,
     @MedusaContext() context:Context={}
-  ){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId)||
-       !/^dapd_[0-9a-f]{32}$/.test(requestId))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const current=await sessions.current(token,true,false)
-    if(!current)return null
-    const scope=await authorizedProductEditScope(db,token,organizationId,sellerId)
-    if(!scope||scope.person_id!==current.person_id)return null
-    const rows=await db.execute(`select status,product_id,completion_audit_event_id
-      from da_product_draft_request
-      where id=? and person_id=? and organization_id=? and seller_id=?`,
-      [requestId,current.person_id,organizationId,sellerId])
-    if(rows.length>1)throw new IdentityAccessDenied()
-    if(rows.length===0)return {status:"unverified" as const}
-    const row=rows[0]
-    if(row.status==="reserved"&&row.product_id==null&&row.completion_audit_event_id==null)
-      return {status:"review_required" as const}
-    if(row.status!=="created"||typeof row.product_id!=="string"||
-       !/^prod_[A-Za-z0-9_-]+$/.test(row.product_id)||
-       typeof row.completion_audit_event_id!=="string")
-      throw new IdentityAccessDenied()
-    const proof=await db.execute(`select e.id from da_audit_event e
-      where e.id=? and e.actor_person_id=? and e.organization_id=?
-        and e.target_id=? and e.action='organization.product_draft_created'
-        and e.module='dogruadres-access' and e.resource='product-draft'
-        and e.new_values->>'request_id'=?
-        and e.new_values->>'product_id'=?
-        and e.deleted_at is null
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
-            and x.deleted_at is null)`,
-      [row.completion_audit_event_id,current.person_id,organizationId,
-       sellerId,requestId,row.product_id])
-    if(proof.length!==1)throw new IdentityAccessDenied()
-    return {status:"created" as const,product_id:row.product_id as string}
+  ) {
+    return this.productDrafts_(context).personalProductDraftReceipt(token, organizationId, sellerId, requestId, context)
   }
 
-  /**
-   * B22: keep the SAME Foundation products.edit advisory lock as the grant
-   * writer for the full native product-create + Foundation completion window.
-   * Revocation cannot COMMIT while the native workflow is in progress.
-   *
-   * This is a bounded, in-process transaction lock, NOT an atomic native /
-   * Foundation transaction. Existing durable request keys and reconciliation
-   * remain necessary for crash/uncertain native outcomes.
-   */
   @InjectTransactionManager()
   async personalWithProductDraftPermissionLock<T>(
     token:string,input:{organization_id:string;seller_id:string},
     execute:(context:Context)=>Promise<T>,@MedusaContext() context:Context={}
-  ):Promise<T|null>{
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       typeof execute!=="function")throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const current=await sessions.current(token,true,false)
-    if(!current)return null
-    // Same key as personalChangeStoreProductPermission. Acquire before the
-    // fresh authorization read, so a committed earlier revocation denies
-    // BEFORE native creation, and later revocation waits for completion.
-    await db.execute(`select pg_advisory_xact_lock(
-      hashtext('b22-products-edit'),hashtext(?))`,
-      [input.organization_id+":"+input.seller_id+":"+current.person_id])
-    const allowed=await authorizedProductEditScope(
-      db,token,input.organization_id,input.seller_id)
-    if(!allowed||allowed.person_id!==current.person_id)return null
-    // Carry the same manager into nested Foundation reads/completion.
-    // A second transaction would wait on this transaction's FOR UPDATE
-    // session/person rows, creating a self-deadlock.
-    return await execute(context)
+  ):Promise<T|null> {
+    return this.productDrafts_(context).personalWithProductDraftPermissionLock(token, input, execute, context)
   }
 
   @InjectTransactionManager()
   async personalReserveProductDraft(
     token:string,input:{request_id:string;organization_id:string;seller_id:string;title:string},
     @MedusaContext() context:Context={}
-  ){
-    if(!/^dapd_[0-9a-f]{32}$/.test(input.request_id)||
-       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
-       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       typeof input.title!=="string"||input.title.trim()!==input.title||
-       input.title.length<2||input.title.length>120)throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const current=await sessions.current(token,true,false)
-    if(!current)return null
-    const decision=await authorizedProductEditScope(db,token,input.organization_id,input.seller_id)
-    if(!decision||decision.person_id!==current.person_id)return null
-    const fingerprint=createHash("sha256").update(JSON.stringify([
-      input.organization_id,input.seller_id,input.title
-    ])).digest("hex")
-    // PK locks simultaneous attempts across processes. A second request
-    // cannot proceed to Mercur, even if the first native result is uncertain.
-    const added=await db.execute(`insert into da_product_draft_request
-      (id,person_id,organization_id,seller_id,request_fingerprint)
-      values (?,?,?,?,?) on conflict (id) do nothing returning id`,
-      [input.request_id,current.person_id,input.organization_id,input.seller_id,fingerprint])
-    if(added.length>1)throw new IdentityAccessDenied()
-    if(added.length===1)return {status:"reserved" as const,person_id:current.person_id}
-    const existing=await db.execute(`select person_id,organization_id,seller_id,
-      request_fingerprint,status,product_id,completion_audit_event_id
-      from da_product_draft_request where id=? for update`,[input.request_id])
-    if(existing.length!==1)throw new IdentityAccessDenied()
-    const row=existing[0]
-    if(row.person_id!==current.person_id||
-       row.organization_id!==input.organization_id||
-       row.seller_id!==input.seller_id||
-       row.request_fingerprint!==fingerprint)throw new IdentityAccessDenied()
-    if(row.status==="reserved")return {status:"uncertain" as const,person_id:current.person_id}
-    if(row.status!=="created"||typeof row.product_id!=="string")
-      throw new IdentityAccessDenied()
-    const proof=await db.execute(`select e.id from da_audit_event e
-      where e.id=? and e.actor_person_id=? and e.organization_id=?
-        and e.target_id=? and e.action='organization.product_draft_created'
-        and e.module='dogruadres-access' and e.resource='product-draft'
-        and e.new_values->>'request_id'=?
-        and e.new_values->>'product_id'=?
-        and e.deleted_at is null
-        and exists(select 1 from da_audit_outbox x
-          where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
-            and x.deleted_at is null)`,
-      [row.completion_audit_event_id,current.person_id,input.organization_id,
-       input.seller_id,input.request_id,row.product_id])
-    if(proof.length!==1)throw new IdentityAccessDenied()
-    return {status:"created" as const,person_id:current.person_id,product_id:row.product_id as string}
+  ) {
+    return this.productDrafts_(context).personalReserveProductDraft(token, input, context)
   }
 
   @InjectTransactionManager()
   async personalCompleteProductDraft(
     token:string,input:{request_id:string;organization_id:string;seller_id:string;title:string},
     productId:string,@MedusaContext() context:Context={}
-  ){
-    if(!/^dapd_[0-9a-f]{32}$/.test(input.request_id)||
-       !/^prod_[A-Za-z0-9_-]+$/.test(productId))throw new IdentityAccessDenied()
-    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const current=await sessions.current(token,false,false)
-    if(!current)return null
-    const rows=await db.execute(`select person_id,organization_id,seller_id,
-       request_fingerprint,status,product_id from da_product_draft_request
-       where id=? for update`,[input.request_id])
-    const fingerprint=createHash("sha256").update(JSON.stringify([
-      input.organization_id,input.seller_id,input.title
-    ])).digest("hex")
-    if(rows.length!==1||rows[0].person_id!==current.person_id||
-       rows[0].organization_id!==input.organization_id||
-       rows[0].seller_id!==input.seller_id||
-       rows[0].request_fingerprint!==fingerprint)throw new IdentityAccessDenied()
-    if(rows[0].status==="created"){
-      if(rows[0].product_id!==productId)throw new IdentityAccessDenied()
-      return {status:"created" as const,product_id:productId}
-    }
-    if(rows[0].status!=="reserved")throw new IdentityAccessDenied()
-    const [event]=await this.persistAuditEventsWithOutbox_([{
-      actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
-      organization_id:input.organization_id,
-      action:"organization.product_draft_created",module:DOGRUADRES_AUDIT_MODULE,
-      resource:"product-draft",target_id:input.seller_id,
-      new_values:{request_id:input.request_id,product_id:productId,status:"draft"},
-      occurred_at:new Date()
-    }],context)
-    await (context.transactionManager as {flush():Promise<void>}).flush()
-    const changed=await db.execute(`update da_product_draft_request
-      set status='created',product_id=?,completion_audit_event_id=?,
-          completed_at=clock_timestamp()
-      where id=? and status='reserved' returning id`,
-      [productId,event.id,input.request_id])
-    if(changed.length!==1)throw new IdentityAccessDenied()
-    return {status:"created" as const,product_id:productId}
-  }
-
-  // ---------------------------------------------------------------------------
-  // B20: explicit Company workspace navigation only; NOT a permission source.
-  // Recheck session, active Organization and current protected Owner on every
-  // read/write. The membership/Organization SHARE locks serialize with revoke.
-  // ---------------------------------------------------------------------------
-  private async companyLauncherActor_(
-    token: string, org: string, context: Context
-  ): Promise<{person_id:string;role:string}|null> {
-    if (!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org)) throw new IdentityAccessDenied()
-    const decision = await this.readablePersonalOrganizations_(token,org,true,context)
-    if (!decision || decision.organizations.length !== 1) return null
-    const candidate=decision.organizations[0]
-    const db=securitySql(context.transactionManager)
-    const rows=await db.execute(`select m.id,m.role from da_organization_membership m
-      join da_organization o on o.id=m.organization_id
-      join da_person p on p.id=m.person_id
-      where m.id=? and m.person_id=? and m.organization_id=? and
-        m.status='active' and m.revoked_at is null and m.deleted_at is null and
-        o.status='active' and o.deleted_at is null and
-        p.disabled_at is null and p.deleted_at is null
-      for share of m,o`,
-      [candidate.membership_id,decision.person_id,org])
-    if (rows.length !== 1 || rows[0].role !== candidate.role) return null
-    if (candidate.role==="owner" &&
-       !await isCurrentProtectedOwner(db,decision.person_id,org))return null
-    return {person_id:decision.person_id,role:candidate.role}
+  ) {
+    return this.productDrafts_(context).personalCompleteProductDraft(token, input, productId, context)
   }
 
   @InjectTransactionManager()
   async personalCompanyLauncher(
     token:string,org:string,@MedusaContext() context:Context={}
-  ){
-    const actor=await this.companyLauncherActor_(token,org,context)
-    if(!actor)return null
-    const db=securitySql(context.transactionManager)
-    const rows=await db.execute(`select app_ids,collapsed_ids,version from da_company_launcher_preference
-      where person_id=? and organization_id=?`,
-      [actor.person_id,org]) as Array<{app_ids:unknown;collapsed_ids:unknown;version:unknown}>
-    if (rows.length>1)throw new IdentityAccessDenied()
-    return {organization_id:org,...companyLauncherProject(
-      rows[0]??null,companyLauncherAvailable(actor.role))}
+  ) {
+    return this.launchers_(context).personalCompanyLauncher(token, org, context)
   }
 
   @InjectTransactionManager()
@@ -6908,71 +2016,15 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     token:string,input:{organization:string;app_ids:string[];
       collapsed_ids:string[];expected_version:number},
     @MedusaContext() context:Context={}
-  ){
-    const actor=await this.companyLauncherActor_(token,input.organization,context)
-    if(!actor)return null
-    const db=securitySql(context.transactionManager)
-    const allowed=companyLauncherAvailable(actor.role)
-    const preference=companyLauncherValidate(
-      input.app_ids,input.collapsed_ids,input.expected_version,allowed)
-    let saved: Array<{app_ids:unknown;collapsed_ids:unknown;version:unknown}>
-    if (preference.expected_version===0) {
-      saved=await db.execute(`insert into da_company_launcher_preference
-        (id,person_id,organization_id,app_ids,collapsed_ids,version,updated_at)
-        values(?,?,?,?,?,1,clock_timestamp())
-        on conflict(person_id,organization_id) do nothing
-        returning app_ids,collapsed_ids,version`,
-        [randomUUID(),actor.person_id,input.organization,
-          JSON.stringify(preference.app_ids),JSON.stringify(preference.collapsed_ids)])
-    } else {
-      saved=await db.execute(`update da_company_launcher_preference
-        set app_ids=?,collapsed_ids=?,version=version+1,updated_at=clock_timestamp()
-        where person_id=? and organization_id=? and version=?
-        returning app_ids,collapsed_ids,version`,
-        [JSON.stringify(preference.app_ids),JSON.stringify(preference.collapsed_ids),
-          actor.person_id,input.organization,preference.expected_version])
-    }
-    if(saved.length!==1)throw new CompanyLauncherConflict()
-    return {organization_id:input.organization,
-      ...companyLauncherProject(saved[0],allowed)}
-  }
-
-  private async platformLauncherActor_(
-    token: string, context: Context
-  ): Promise<{ person_id: string; tasks: string[] } | null> {
-    const db = securitySql(context.transactionManager)
-    const session = await new IdentitySessions(db).current(token, true)
-    if (!session) return null
-    const rows = await db.execute(`select distinct g.task from da_platform_staff_grant g
-      join da_person p on p.id=g.person_id
-      join da_browser_session s on s.person_id=p.id and s.id=? and s.status='active'
-      join da_person_security e on e.person_id=p.id and e.epoch=s.epoch
-      join da_login_binding b on b.auth_identity_id=s.auth_identity_id and b.person_id=p.id and b.actor_type=s.actor_type and b.actor_id=s.actor_id and b.revoked_at is null and b.verified_at is not null
-      join da_actor_mapping a on a.person_id=p.id and a.actor_type=s.actor_type and a.actor_id=s.actor_id and a.deleted_at is null
-      join da_session_policy q on q.id='current'
-      where g.person_id=? and g.resource='platform' and g.revoked_at is null
-      and statement_timestamp()<s.created_at+q.absolute_lifetime_seconds*interval '1 second'
-      and statement_timestamp()<s.last_activity_at+q.idle_timeout_seconds*interval '1 second'
-      and s.last_strong_auth_at is not null and statement_timestamp()<s.last_strong_auth_at+q.recent_auth_seconds*interval '1 second'
-      and p.disabled_at is null and p.deleted_at is null and (g.expires_at is null or g.expires_at>clock_timestamp())`,
-      [session.id, session.person_id]) as Array<{ task: string }>
-    return { person_id: session.person_id, tasks: rows.map(r => r.task) }
+  ) {
+    return this.launchers_(context).personalSaveCompanyLauncher(token, input, context)
   }
 
   @InjectTransactionManager()
   async personalPlatformLauncher(
     token: string, @MedusaContext() context: Context = {}
   ) {
-    const actor = await this.platformLauncherActor_(token, context)
-    if (!actor) return null
-    const allowed = platformLauncherAvailable(actor.tasks)
-    if (!allowed.length) return null
-    const db = securitySql(context.transactionManager)
-    const rows = await db.execute(`select app_ids,collapsed_ids,version from da_platform_launcher_preference
-      where person_id=?`,
-      [actor.person_id]) as Array<{ app_ids: unknown; collapsed_ids: unknown; version: unknown }>
-    if (rows.length > 1) throw new IdentityAccessDenied()
-    return platformLauncherProject(rows[0] ?? null, allowed)
+    return this.launchers_(context).personalPlatformLauncher(token, context)
   }
 
   @InjectTransactionManager()
@@ -6980,64 +2032,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     token: string, input: { app_ids: string[]; collapsed_ids: string[]; expected_version: number },
     @MedusaContext() context: Context = {}
   ) {
-    const actor = await this.platformLauncherActor_(token, context)
-    if (!actor) return null
-    const allowed = platformLauncherAvailable(actor.tasks)
-    if (!allowed.length) return null
-    const db = securitySql(context.transactionManager)
-    const preference = platformLauncherValidate(
-      input.app_ids, input.collapsed_ids, input.expected_version, allowed)
-    let saved: Array<{ app_ids: unknown; collapsed_ids: unknown; version: unknown }>
-    if (preference.expected_version === 0) {
-      saved = await db.execute(`insert into da_platform_launcher_preference
-        (id,person_id,app_ids,collapsed_ids,version,updated_at)
-        values(?,?,?,?,1,clock_timestamp())
-        on conflict(person_id) do nothing
-        returning app_ids,collapsed_ids,version`,
-        [randomUUID(), actor.person_id,
-          JSON.stringify(preference.app_ids), JSON.stringify(preference.collapsed_ids)])
-    } else {
-      saved = await db.execute(`update da_platform_launcher_preference
-        set app_ids=?,collapsed_ids=?,version=version+1,updated_at=clock_timestamp()
-        where person_id=? and version=?
-        returning app_ids,collapsed_ids,version`,
-        [JSON.stringify(preference.app_ids), JSON.stringify(preference.collapsed_ids),
-          actor.person_id, preference.expected_version])
-    }
-    if (saved.length !== 1) throw new PlatformLauncherConflict()
-    return platformLauncherProject(saved[0], allowed)
+    return this.launchers_(context).personalSavePlatformLauncher(token, input, context)
   }
-
-  // ---------------------------------------------------------------------------
-  // B20: per-Person persistent launcher preference
-  // ---------------------------------------------------------------------------
-  // Retain historic B20 app IDs non-destructively. B22 deprecates
-  // the vendor app as a separate end-user commercial panel. Only public
-  // catalog discovery is shown by launcher GET at present.
-  // A stored preference is not a commercial permission or Store entitlement.
-  static readonly KNOWN_APP_IDS: ReadonlySet<string> = new Set(['storefront', 'vendor'])
 
   @InjectTransactionManager()
   async getLauncherPreference(token: string, @MedusaContext() context: Context = {}) {
-    const sql = securitySql(context.transactionManager)
-    const session = await new IdentitySessions(sql).current(token)
-    if (!session) return null
-    const rows = await sql.execute(
-      `select app_ids,collapsed_ids,version from da_launcher_preference where person_id=?`,
-      [session.person_id]
-    ) as Array<{app_ids: unknown; collapsed_ids: unknown; version: number}>
-    const row = rows[0]
-    const parseJsonb = (v: unknown): string[] => {
-      if (Array.isArray(v)) return v as string[]
-      if (typeof v === 'string') { try { return JSON.parse(v) } catch { return [] } }
-      return []
-    }
-    return {
-      person_id: session.person_id,
-      app_ids: row ? parseJsonb(row.app_ids) : [],
-      collapsed_ids: row ? parseJsonb(row.collapsed_ids) : [],
-      version: row ? row.version : 0,
-    }
+    return this.launchers_(context).getLauncherPreference(token, context)
   }
 
   @InjectTransactionManager()
@@ -7048,49 +2048,89 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     expectedVersion: number,
     @MedusaContext() context: Context = {}
   ) {
-    const sql = securitySql(context.transactionManager)
-    const session = await new IdentitySessions(sql).current(token, true)
-    if (!session) throw new MedusaError(MedusaError.Types.UNAUTHORIZED, 'Session required')
-    const known = DogruAdresAccessModuleService.KNOWN_APP_IDS
-    const seen = new Set<string>()
-    const appIds = rawAppIds.filter(id => {
-      if (typeof id !== 'string' || !known.has(id) || seen.has(id)) return false
-      seen.add(id); return true
-    })
-    const collSeen = new Set<string>()
-    const collapsedIds = rawCollapsedIds.filter(id => {
-      if (typeof id !== 'string' || !known.has(id) || collSeen.has(id)) return false
-      collSeen.add(id); return true
-    })
-    if (expectedVersion < 0 || !Number.isInteger(expectedVersion)) {
-      throw new MedusaError(MedusaError.Types.INVALID_DATA, 'Invalid version')
-    }
-    const personId = session.person_id
-    if (expectedVersion === 0) {
-      await sql.execute(
-        `insert into da_launcher_preference(id,person_id,app_ids,collapsed_ids,version,updated_at)
-         values(?,?,?,?,1,now())
-         on conflict(person_id) do nothing`,
-        [randomUUID(), personId, JSON.stringify(appIds), JSON.stringify(collapsedIds)]
-      )
-      const stored = await sql.execute(
-        `select app_ids,collapsed_ids,version from da_launcher_preference where person_id=?`,
-        [personId]
-      ) as Array<{app_ids: unknown; collapsed_ids: unknown; version: number}>
-      const pa = (v: unknown): string[] => Array.isArray(v) ? v as string[] : typeof v==='string' ? (() => { try { return JSON.parse(v) } catch { return [] } })() : []
-      return { app_ids: pa(stored[0].app_ids), collapsed_ids: pa(stored[0].collapsed_ids), version: stored[0].version }
-    }
-    const updated = await sql.execute(
-      `update da_launcher_preference
-         set app_ids=?,collapsed_ids=?,version=version+1,updated_at=now()
-         where person_id=? and version=?
-         returning app_ids,collapsed_ids,version`,
-      [JSON.stringify(appIds), JSON.stringify(collapsedIds), personId, expectedVersion]
-    ) as Array<{app_ids: unknown; collapsed_ids: unknown; version: number}>
-    if (!updated.length) {
-      throw new MedusaError(MedusaError.Types.CONFLICT, 'Launcher preference version conflict — reload and retry')
-    }
-    const pu2 = (v: unknown): string[] => Array.isArray(v) ? v as string[] : typeof v==='string' ? (() => { try { return JSON.parse(v) } catch { return [] } })() : []
-    return { app_ids: pu2(updated[0].app_ids), collapsed_ids: pu2(updated[0].collapsed_ids), version: updated[0].version }
+    return this.launchers_(context).saveLauncherPreference(token, rawAppIds, rawCollapsedIds, expectedVersion, context)
+  }
+
+  @InjectTransactionManager()
+  async personalBeginMfaEnrollment(token:string,authIdentityId:string,factorId:string,@MedusaContext() context:Context={}) {
+    return this.nativeMfa_(context).personalBeginMfaEnrollment(token, authIdentityId, factorId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalRevokePendingMfaEnrollment(token:string,factorId:string,@MedusaContext() context:Context={}) {
+    return this.nativeMfa_(context).personalRevokePendingMfaEnrollment(token, factorId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalClaimMfaVerification(token:string,ticket:string,@MedusaContext() context:Context={}) {
+    return this.nativeMfa_(context).personalClaimMfaVerification(token, ticket, context)
+  }
+
+  @InjectTransactionManager()
+  async personalCompleteMfaEnrollment(token:string,ticket:string,factorId:string,@MedusaContext() context:Context={}) {
+    return this.nativeMfa_(context).personalCompleteMfaEnrollment(token, ticket, factorId, context)
+  }
+
+  @InjectTransactionManager()
+  async personalMfaSettings(token: string, @MedusaContext() context: Context = {}) {
+    return this.nativeMfa_(context).personalMfaSettings(token, context)
+  }
+
+  @InjectTransactionManager()
+  async personalSetMfaPreference(token: string, enabled: boolean, expectedVersion: number, @MedusaContext() context: Context = {}) {
+    return this.nativeMfa_(context).personalSetMfaPreference(token, enabled, expectedVersion, context)
+  }
+
+  @InjectTransactionManager()
+  async personalManageNativeMfa(token:string,action:"recovery_codes"|"disable",operation:(identityId:string)=>Promise<unknown>,@MedusaContext() context:Context={}) {
+    return this.nativeMfa_(context).personalManageNativeMfa(token, action, operation, context)
+  }
+
+  @InjectTransactionManager()
+  async personalPrepareNativeMfaDisable(token:string,@MedusaContext() context:Context={}) {
+    return this.nativeMfa_(context).personalPrepareNativeMfaDisable(token, context)
+  }
+
+  @InjectTransactionManager()
+  async personalCompletePreparedNativeMfaDisable(
+    prepared:Readonly<{session_id:string;person_id:string;auth_identity_id:string;actor_type:MfaAuditActor["actor_type"];actor_id:string}>,
+    operation:(identityId:string)=>Promise<unknown>,
+    @MedusaContext() context:Context={}
+  ) {
+    return this.nativeMfa_(context).personalCompletePreparedNativeMfaDisable(prepared, operation, context)
+  }
+
+  @InjectTransactionManager()
+  async personalSetPlatformMfaMode(token: string, mode: MfaPlatformMode, expectedVersion: number, @MedusaContext() context: Context = {}) {
+    return this.nativeMfa_(context).personalSetPlatformMfaMode(token, mode, expectedVersion, context)
+  }
+
+  @InjectTransactionManager()
+  async getActiveSmtpConfig(@MedusaContext() context: Context = {}) {
+    return this.smtpOperations_(context).getActiveSmtpConfig(context)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformSmtpSettings(token: string, @MedusaContext() context: Context = {}) {
+    return this.smtpOperations_(context).personalPlatformSmtpSettings(token, context)
+  }
+
+  @InjectTransactionManager()
+  async personalUpdatePlatformSmtpSettings(
+    token: string,
+    input: UpdateSmtpSettingsInput,
+    @MedusaContext() context: Context = {}
+  ) {
+    return this.smtpOperations_(context).personalUpdatePlatformSmtpSettings(token, input, context)
+  }
+
+  @InjectTransactionManager()
+  async personalTestPlatformSmtpSettings(
+    token: string,
+    targetRecipient: string,
+    candidateSettings?: Partial<UpdateSmtpSettingsInput>,
+    @MedusaContext() context: Context = {}
+  ) {
+    return this.smtpOperations_(context).personalTestPlatformSmtpSettings(token, targetRecipient, candidateSettings, context)
   }
 }
