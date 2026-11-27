@@ -2,13 +2,13 @@ import { describe, it, expect, mock, beforeAll } from "bun:test"
 import React from "react"
 
 mock.module("next/image", () => ({
-  default: ({ src, alt, ...props }: any) =>
-    React.createElement("img", { src, alt, ...props }),
+  default: ({ src, alt, ...props }: Record<string, unknown>) =>
+    React.createElement("img", { src: String(src), alt: String(alt), ...props }),
 }))
 
 mock.module("next/link", () => ({
-  default: ({ href, children, ...props }: any) =>
-    React.createElement("a", { href, ...props }, children),
+  default: ({ href, children, ...props }: Record<string, unknown>) =>
+    React.createElement("a", { href: String(href), ...props }, children as React.ReactNode),
 }))
 
 mock.module("next/navigation", () => ({
@@ -21,39 +21,34 @@ mock.module("next/navigation", () => ({
 import { renderToString } from "react-dom/server"
 
 describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
-  let WelcomeHeader: any
-  let WelcomeHero: any
-  let TargetAudienceSection: any
-  let IntegratedSolutionsSection: any
-  let HowItWorksSection: any
-  let TrustAndFaqSection: any
-  let WelcomeFooter: any
+  let CORPORATE_NAV_LINKS: ReadonlyArray<{ href: string; label: string; testId: string }>
+  let WelcomeHero: React.ComponentType
+  let TargetAudienceSection: React.ComponentType
+  let IntegratedSolutionsSection: React.ComponentType
+  let HowItWorksSection: React.ComponentType
+  let TrustAndFaqSection: React.ComponentType
+  let Footer: React.ComponentType
 
   beforeAll(async () => {
     const mod = await import("../index")
-    WelcomeHeader = mod.WelcomeHeader
+    CORPORATE_NAV_LINKS = mod.CORPORATE_NAV_LINKS
     WelcomeHero = mod.WelcomeHero
     TargetAudienceSection = mod.TargetAudienceSection
     IntegratedSolutionsSection = mod.IntegratedSolutionsSection
     HowItWorksSection = mod.HowItWorksSection
     TrustAndFaqSection = mod.TrustAndFaqSection
-    WelcomeFooter = mod.WelcomeFooter
+    const footerMod = await import("../../../organisms/Footer/Footer")
+    Footer = footerMod.Footer
   })
 
-  describe("Bölüm 1 & Üst Gezinme (WelcomeHeader)", () => {
-    it("renders corporate logo, section navigation links, and auth action buttons", () => {
-      const html = renderToString(<WelcomeHeader locale="tr" />)
-      expect(html).toContain('data-testid="welcome-header"')
-      expect(html).toContain('data-testid="welcome-logo-link"')
-      expect(html).toContain("Kurumsal Otomotiv B4B")
-      expect(html).toContain('href="#kimler-icin"')
-      expect(html).toContain('href="#cozumler"')
-      expect(html).toContain('href="#nasil-calisir"')
-      expect(html).toContain('href="#guven-ve-sss"')
-      expect(html).toContain('data-testid="welcome-login-button"')
-      expect(html).toContain("Giriş Yap")
-      expect(html).toContain('data-testid="welcome-register-button"')
-      expect(html).toContain("Hesap Oluştur")
+  describe("Bölüm 1: Kurumsal Gezinme Bağlantıları (CORPORATE_NAV_LINKS)", () => {
+    it("exposes all four corporate section anchors", () => {
+      expect(CORPORATE_NAV_LINKS.map((l) => l.href)).toEqual([
+        "/#kimler-icin",
+        "/#cozumler",
+        "/#nasil-calisir",
+        "/#guven-ve-sss",
+      ])
     })
   })
 
@@ -65,7 +60,6 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
       expect(html).toContain("DoğruAdres’te")
       expect(html).toContain("ulaşın.")
 
-      // Positioning text check
       expect(html).toContain(
         "DoğruAdres, otomotiv sektöründeki profesyonel işletmeler için yalnız bir pazaryeri değil"
       )
@@ -73,11 +67,9 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
       expect(html).toContain("toptancı/distribütör, üretici, filo/kurumsal araç işletmecisi")
       expect(html).toContain("sigorta/hasar yönetimi")
 
-      // Action buttons
       expect(html).toContain('data-testid="welcome-hero-login-cta"')
       expect(html).toContain('data-testid="welcome-hero-register-cta"')
 
-      // Closed B4B Trust highlights
       expect(html).toContain("Tamamen Kapalı B4B")
       expect(html).toContain("Doğrulanmış İşletmeler")
       expect(html).toContain("Bütünleşik Süreçler")
@@ -103,7 +95,6 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
         expect(html).toContain(audience)
       }
 
-      // Ensure no confidential/stale pricing or catalog leaks
       expect(html).not.toContain("Snag your style")
       expect(html).not.toContain("trending listings")
     })
@@ -128,7 +119,6 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
         expect(html).toContain(solution)
       }
 
-      // No in-development or coming soon badges
       expect(html).not.toContain("yakında")
       expect(html).not.toContain("Geliştirme Aşamasında")
       expect(html).not.toContain("Coming Soon")
@@ -150,7 +140,6 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
       expect(html).toContain("04")
       expect(html).toContain("Mağaza, Tedarik ve Modüller")
 
-      // Verified disclaimer against automatic approvals or unconditional discounts
       expect(html).toContain("otomatik onay, koşulsuz mağaza açma veya garantili indirim vaat edilmez")
     })
   })
@@ -161,7 +150,6 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
       expect(html).toContain('id="guven-ve-sss"')
       expect(html).toContain("Kurumsal Güven Yaklaşımı ve SSS")
 
-      // Key Q&As
       expect(html).toContain("DoğruAdres neden bütünüyle kapalı bir B4B platformudur?")
       expect(html).toContain("Kişisel hesap ile şirket çalışma alanı arasındaki fark nedir?")
       expect(html).toContain("İşletme başvurusu nasıl incelenir ve onaylanır?")
@@ -169,17 +157,16 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
       expect(html).toContain("Kişisel ve kurumsal veriler nasıl korunur?")
       expect(html).toContain("Hangi otomotiv işletmeleri platforma katılabilir?")
 
-      // Verified natural pricing policy (#78)
       expect(html).toContain("geçerli en uygun fiyatı görür")
       expect(html).not.toContain("%100 güvenli")
       expect(html).not.toContain("garantili en ucuz")
     })
   })
 
-  describe("Bölüm 7: Altbilgi (WelcomeFooter)", () => {
+  describe("Bölüm 7: Altbilgi (Footer)", () => {
     it("renders corporate identity, policy links, and copyright", () => {
-      const html = renderToString(<WelcomeFooter />)
-      expect(html).toContain('data-testid="welcome-footer"')
+      const html = renderToString(<Footer />)
+      expect(html).toContain('data-testid="footer"')
       expect(html).toContain("DoğruAdres")
       expect(html).toContain("Kullanım Koşulları")
       expect(html).toContain("Gizlilik ve KVKK Politikası")

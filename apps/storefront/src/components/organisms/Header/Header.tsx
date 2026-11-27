@@ -10,6 +10,7 @@ import { listCategories } from "@/lib/data/categories"
 import { listRegions } from "@/lib/data/regions"
 import { retrieveCustomer } from "@/lib/data/customer"
 import { ParentCategoryLinks } from "@/components/molecules/ParentCategoryLinks/ParentCategoryLinks"
+import { CORPORATE_NAV_LINKS } from "@/components/sections/WelcomePage"
 
 export const Header = async ({}: { locale: string }) => {
   const user = await retrieveCustomer().catch(() => null)
@@ -53,30 +54,16 @@ export const Header = async ({}: { locale: string }) => {
             aria-label="Kurumsal bölümler"
             data-testid="header-corporate-nav"
           >
-            <a
-              href="#kimler-icin"
-              className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs px-1"
-            >
-              Kimler İçin?
-            </a>
-            <a
-              href="#cozumler"
-              className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs px-1"
-            >
-              Bütünleşik Çözümler
-            </a>
-            <a
-              href="#nasil-calisir"
-              className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs px-1"
-            >
-              Nasıl Çalışır?
-            </a>
-            <a
-              href="#guven-ve-sss"
-              className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs px-1"
-            >
-              Kurumsal Güven & SSS
-            </a>
+            {CORPORATE_NAV_LINKS.map((item) => (
+              <LocalizedClientLink
+                key={item.href}
+                href={item.href}
+                className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs px-1"
+                data-testid={item.testId}
+              >
+                {item.label}
+              </LocalizedClientLink>
+            ))}
           </nav>
         ) : (
           <div className="flex items-center">

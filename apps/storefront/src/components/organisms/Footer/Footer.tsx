@@ -1,4 +1,5 @@
 import LocalizedClientLink from "@/components/molecules/LocalizedLink/LocalizedLink"
+import { CORPORATE_NAV_LINKS } from "@/components/sections/WelcomePage"
 
 export function Footer() {
   return (
@@ -32,38 +33,16 @@ export function Footer() {
               Platform Bölümleri
             </h3>
             <ul className="space-y-2 text-xs sm:text-sm">
-              <li>
-                <a
-                  href="#kimler-icin"
-                  className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs"
-                >
-                  Hedef Kitle (6 Faaliyet Grubu)
-                </a>
-              </li>
-              <li>
-                <a
-                  href="#cozumler"
-                  className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs"
-                >
-                  Bütünleşik Çözümler
-                </a>
-              </li>
-              <li>
-                <a
-                  href="#nasil-calisir"
-                  className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs"
-                >
-                  Nasıl Çalışır?
-                </a>
-              </li>
-              <li>
-                <a
-                  href="#guven-ve-sss"
-                  className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs"
-                >
-                  Kurumsal Güven & SSS
-                </a>
-              </li>
+              {CORPORATE_NAV_LINKS.map((item) => (
+                <li key={item.href}>
+                  <LocalizedClientLink
+                    href={item.href}
+                    className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs"
+                  >
+                    {item.label}
+                  </LocalizedClientLink>
+                </li>
+              ))}
             </ul>
           </div>
 
