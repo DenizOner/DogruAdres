@@ -11,6 +11,13 @@ import { ProductDetailsPage } from "./ProductDetailsPage/ProductDetailsPage"
 import { SearchProductsListing } from "./ProductListing/SearchProductsListing"
 import { SellerOffersListing } from "./SellerOffersListing/SellerOffersListing"
 import { OrdersPagination } from "../organisms/OrdersPagination/OrdersPagination"
+import {
+  WelcomeHero,
+  TargetAudienceSection,
+  IntegratedSolutionsSection,
+  HowItWorksSection,
+  TrustAndFaqSection,
+} from "./WelcomePage"
 
 export {
   Hero,
@@ -26,4 +33,9 @@ export {
   SearchProductsListing,
   SellerOffersListing,
   OrdersPagination,
+  WelcomeHero,
+  TargetAudienceSection,
+  IntegratedSolutionsSection,
+  HowItWorksSection,
+  TrustAndFaqSection,
 }

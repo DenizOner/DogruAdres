@@ -10,6 +10,7 @@ import { listCategories } from "@/lib/data/categories"
 import { listRegions } from "@/lib/data/regions"
 import { retrieveCustomer } from "@/lib/data/customer"
 import { ParentCategoryLinks } from "@/components/molecules/ParentCategoryLinks/ParentCategoryLinks"
+import { CORPORATE_NAV_LINKS } from "@/components/sections/WelcomePage"
 
 export const Header = async ({}: { locale: string }) => {
   const user = await retrieveCustomer().catch(() => null)
@@ -18,45 +19,98 @@ export const Header = async ({}: { locale: string }) => {
   const regions = await listRegions()
 
   // The closed B4B API deliberately denies native public categories.
-  // Keep login/verification usable without pretending a catalog exists.
-  // An unavailable catalog must never reveal stale products or categories.
-  const { categories, parentCategories } = (await listCategories({ query: { include_ancestors_tree: true } })
-    .catch(() => ({ categories: [], parentCategories: [] }))) as {
-    categories: HttpTypes.StoreProductCategory[]
-    parentCategories: HttpTypes.StoreProductCategory[]
-  }
+  // Skip category fetching for guests and keep login/verification usable.
+  const { categories, parentCategories } = isLoggedIn
+    ? ((await listCategories({ query: { include_ancestors_tree: true } })
+        .catch(() => ({ categories: [], parentCategories: [] }))) as {
+        categories: HttpTypes.StoreProductCategory[]
+        parentCategories: HttpTypes.StoreProductCategory[]
+      })
+    : { categories: [], parentCategories: [] }
+
   return (
-    <header data-testid="header">
-      <div className="flex py-2 lg:px-8 px-4 md:px-5" data-testid="header-top">
-        <div className="flex items-center lg:w-1/3">
-          <MobileNavbar
-            parentCategories={parentCategories}
-            categories={categories}
-          />
-          <ParentCategoryLinks
-            parentCategories={parentCategories}
-            categories={categories}
-          />
-        </div>
-        <div className="flex lg:justify-center lg:w-1/3 items-center pl-4 lg:pl-0">
-          <LocalizedClientLink href="/" className="text-2xl font-bold" data-testid="header-logo-link">
+    <header data-testid="header" className="border-b border-primary bg-primary/95 backdrop-blur-xs sticky top-0 z-40">
+      <div className="flex items-center justify-between py-3 lg:px-8 px-4 md:px-5" data-testid="header-top">
+        {/* Sol Alan: Logo & Kurumsal Etiket */}
+        <div className="flex items-center gap-4">
+          <LocalizedClientLink href="/" className="flex items-center gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-sm" data-testid="header-logo-link">
             <Image
               src="/Logo.svg"
-              width={126}
+              width={130}
               height={40}
-              alt="Logo"
+              alt="DoğruAdres Logo"
               priority
+              className="h-9 w-auto"
             />
           </LocalizedClientLink>
+          <span className="hidden xl:inline-block border-l border-primary pl-3 text-xs font-semibold text-secondary uppercase tracking-wider">
+            Kurumsal Otomotiv B4B
+          </span>
         </div>
-        <div className="flex items-center justify-end gap-2 lg:gap-4 w-full lg:w-1/3 py-2" data-testid="header-actions">
+
+        {/* Orta Alan: Misafir için Kurumsal Gezinme; Girişli için Kategori Navigasyonu */}
+        {!isLoggedIn ? (
+          <nav
+            className="hidden md:flex items-center gap-6 text-sm font-medium text-secondary"
+            aria-label="Kurumsal bölümler"
+            data-testid="header-corporate-nav"
+          >
+            {CORPORATE_NAV_LINKS.map((item) => (
+              <LocalizedClientLink
+                key={item.href}
+                href={item.href}
+                className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs px-1"
+                data-testid={item.testId}
+              >
+                {item.label}
+              </LocalizedClientLink>
+            ))}
+          </nav>
+        ) : (
+          <div className="flex items-center">
+            <MobileNavbar
+              parentCategories={parentCategories}
+              categories={categories}
+            />
+            <ParentCategoryLinks
+              parentCategories={parentCategories}
+              categories={categories}
+            />
+          </div>
+        )}
+
+        {/* Sağ Alan: Ülke Seçici ve Kullanıcı Aksiyonları */}
+        <div className="flex items-center justify-end gap-3" data-testid="header-actions">
           <CountrySelector regions={regions} />
-          {isLoggedIn && <MessageButton />}
-          <UserDropdown isLoggedIn={isLoggedIn} />
-          <CartDropdown />
+          {isLoggedIn ? (
+            <>
+              <MessageButton />
+              <UserDropdown isLoggedIn={isLoggedIn} />
+              <CartDropdown />
+            </>
+          ) : (
+            <div className="flex items-center gap-2" data-testid="header-guest-auth-actions">
+              <a
+                href="/personal"
+                className="inline-flex items-center justify-center rounded-sm px-3.5 py-1.5 text-sm font-medium border border-primary text-primary hover:bg-component transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                data-testid="header-login-btn"
+              >
+                Giriş Yap
+              </a>
+              <a
+                href="/personal"
+                className="inline-flex items-center justify-center rounded-sm px-3.5 py-1.5 text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 transition-colors shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                data-testid="header-register-btn"
+              >
+                Hesap Oluştur
+              </a>
+            </div>
+          )}
         </div>
       </div>
-      <Navbar categories={categories} parentCategories={parentCategories} />
+      {isLoggedIn && categories.length > 0 && (
+        <Navbar categories={categories} parentCategories={parentCategories} />
+      )}
     </header>
   )
 }
