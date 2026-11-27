@@ -289,7 +289,11 @@ export async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, conta
   const enabled=process.env.DOGRUADRES_IDENTITY_ENABLED
   try {
     process.env.DOGRUADRES_IDENTITY_ENABLED="false"
-    await reload(browser,503);await hidden(browser)
+    const start503=browser.http.length
+    await browser.send("Page.reload",{ignoreCache:true})
+    await until(async()=>browser.http.slice(start503).some(r=>r.path==='/personal'&&r.method==='GET'&&r.status===503),
+      20000,'New document /personal GET 503')
+    await browser.wait("!document.querySelector('#smtp-form')")
     assert.equal((await read(browser)).status,503)
   } finally {process.env.DOGRUADRES_IDENTITY_ENABLED=enabled}
   mark("Real GET500 and GET503 keep configuration form hidden")
