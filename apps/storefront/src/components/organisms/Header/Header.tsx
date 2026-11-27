@@ -36,7 +36,7 @@ export const Header = async ({}: { locale: string }) => {
           <LocalizedClientLink href="/" className="flex items-center gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-sm" data-testid="header-logo-link">
             <Image
               src="/Logo.svg"
-              width={130}
+              width={188}
               height={40}
               alt="DoğruAdres Logo"
               priority
@@ -98,7 +98,7 @@ export const Header = async ({}: { locale: string }) => {
                 Giriş Yap
               </a>
               <a
-                href="/personal"
+                href="/personal?action=register#register-details"
                 className="inline-flex items-center justify-center rounded-sm px-3.5 py-1.5 text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 transition-colors shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
                 data-testid="header-register-btn"
               >

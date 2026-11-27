@@ -70,6 +70,7 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
       expect(html).toContain('data-testid="welcome-hero-login-cta"')
       expect(html).toContain('data-testid="welcome-hero-register-cta"')
       expect(html).toContain('href="/personal"')
+      expect(html).toContain('href="/personal?action=register#register-details"')
       expect(html).not.toContain('href="/register"')
 
       expect(html).toContain("Tamamen Kapalı B4B")
