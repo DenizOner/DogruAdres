@@ -53,24 +53,24 @@ export function Footer() {
             </h3>
             <ul className="space-y-2 text-xs sm:text-sm">
               <li>
-                <LocalizedClientLink
-                  href="/login"
+                <a
+                  href="/personal"
                   className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs"
                 >
                   Kullanıcı Girişi
-                </LocalizedClientLink>
+                </a>
               </li>
               <li>
-                <LocalizedClientLink
-                  href="/register"
+                <a
+                  href="/personal"
                   className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs"
                 >
                   Yeni Hesap Oluştur
-                </LocalizedClientLink>
+                </a>
               </li>
               <li>
                 <LocalizedClientLink
-                  href="/reset-password"
+                  href="/forgot-password"
                   className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs"
                 >
                   Parola Sıfırlama

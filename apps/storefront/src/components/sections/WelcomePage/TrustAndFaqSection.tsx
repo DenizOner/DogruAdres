@@ -18,7 +18,7 @@ export function TrustAndFaqSection() {
     },
     {
       q: "Kişisel ve kurumsal veriler nasıl korunur?",
-      a: "DoğruAdres, KVKK mevzuatına ve yetkilendirme ilkelerine tam uyumludur. Şirketlerin stokları, mali kayıtları, çalışan bilgileri ve özel teklifleri diğer firmalardan ve yetkisiz kullanıcılardan sunucu düzeyinde izole edilir. Denetim izleri güvenli şekilde tutulur.",
+      a: "Şirketlerin stokları, mali kayıtları, çalışan bilgileri ve özel teklifleri diğer firmalardan ve yetkisiz kullanıcılardan sunucu düzeyinde izole edilir. Erişimler fail-closed yetkilendirme kuralları ve denetim izleriyle korunur.",
     },
     {
       q: "Hangi otomotiv işletmeleri platforma katılabilir?",

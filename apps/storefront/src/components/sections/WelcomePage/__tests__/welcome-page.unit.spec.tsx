@@ -69,6 +69,8 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
 
       expect(html).toContain('data-testid="welcome-hero-login-cta"')
       expect(html).toContain('data-testid="welcome-hero-register-cta"')
+      expect(html).toContain('href="/personal"')
+      expect(html).not.toContain('href="/register"')
 
       expect(html).toContain("Tamamen Kapalı B4B")
       expect(html).toContain("Doğrulanmış İşletmeler")
@@ -158,6 +160,8 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
       expect(html).toContain("Hangi otomotiv işletmeleri platforma katılabilir?")
 
       expect(html).toContain("geçerli en uygun fiyatı görür")
+      expect(html).toContain("fail-closed yetkilendirme")
+      expect(html).not.toContain("KVKK mevzuatına ve yetkilendirme ilkelerine tam uyumludur")
       expect(html).not.toContain("%100 güvenli")
       expect(html).not.toContain("garantili en ucuz")
     })
@@ -172,6 +176,9 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
       expect(html).toContain("Gizlilik ve KVKK Politikası")
       expect(html).toContain("Çerez Politikası")
       expect(html).toContain("© 2026 DoğruAdres. Tüm hakları saklıdır.")
+      expect(html).toContain('href="/personal"')
+      expect(html).toContain('href="/tr/forgot-password"')
+      expect(html).not.toContain('reset-password')
       expect(html).not.toContain("Fleek")
     })
   })

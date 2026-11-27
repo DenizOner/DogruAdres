@@ -19,13 +19,14 @@ export const Header = async ({}: { locale: string }) => {
   const regions = await listRegions()
 
   // The closed B4B API deliberately denies native public categories.
-  // Keep login/verification usable without pretending a catalog exists.
-  // An unavailable catalog must never reveal stale products or categories.
-  const { categories, parentCategories } = (await listCategories({ query: { include_ancestors_tree: true } })
-    .catch(() => ({ categories: [], parentCategories: [] }))) as {
-    categories: HttpTypes.StoreProductCategory[]
-    parentCategories: HttpTypes.StoreProductCategory[]
-  }
+  // Skip category fetching for guests and keep login/verification usable.
+  const { categories, parentCategories } = isLoggedIn
+    ? ((await listCategories({ query: { include_ancestors_tree: true } })
+        .catch(() => ({ categories: [], parentCategories: [] }))) as {
+        categories: HttpTypes.StoreProductCategory[]
+        parentCategories: HttpTypes.StoreProductCategory[]
+      })
+    : { categories: [], parentCategories: [] }
 
   return (
     <header data-testid="header" className="border-b border-primary bg-primary/95 backdrop-blur-xs sticky top-0 z-40">
@@ -89,20 +90,20 @@ export const Header = async ({}: { locale: string }) => {
             </>
           ) : (
             <div className="flex items-center gap-2" data-testid="header-guest-auth-actions">
-              <LocalizedClientLink
-                href="/login"
+              <a
+                href="/personal"
                 className="inline-flex items-center justify-center rounded-sm px-3.5 py-1.5 text-sm font-medium border border-primary text-primary hover:bg-component transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
                 data-testid="header-login-btn"
               >
                 Giriş Yap
-              </LocalizedClientLink>
-              <LocalizedClientLink
-                href="/register"
+              </a>
+              <a
+                href="/personal"
                 className="inline-flex items-center justify-center rounded-sm px-3.5 py-1.5 text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 transition-colors shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
                 data-testid="header-register-btn"
               >
                 Hesap Oluştur
-              </LocalizedClientLink>
+              </a>
             </div>
           )}
         </div>

@@ -28,7 +28,11 @@ export const metadata: Metadata = {
 
 export default function LoginPage() {
   return (
-    <div className="flex min-h-[70vh] items-center justify-center p-4">
+    <main
+      id="main-content"
+      tabIndex={-1}
+      className="flex min-h-[70vh] items-center justify-center p-4 focus:outline-none"
+    >
       <div className="max-w-lg w-full rounded-2xl border border-neutral-200 bg-white p-8 shadow-sm">
         <div className="flex items-center gap-3 mb-4">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-700 text-white font-bold">
@@ -61,6 +65,6 @@ export default function LoginPage() {
           DoğruAdres Tek Giriş Kapısına Git (/personal)
         </a>
       </div>
-    </div>
+    </main>
   )
 }

@@ -1,5 +1,3 @@
-import LocalizedClientLink from "@/components/molecules/LocalizedLink/LocalizedLink"
-
 export function WelcomeHero() {
   return (
     <section
@@ -41,20 +39,20 @@ export function WelcomeHero() {
             className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4"
             data-testid="welcome-hero-ctas"
           >
-            <LocalizedClientLink
-              href="/login"
+            <a
+              href="/personal"
               className="w-full sm:w-auto inline-flex items-center justify-center px-8 py-3.5 rounded-sm text-base font-semibold bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 transition-all shadow-md hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
               data-testid="welcome-hero-login-cta"
             >
               Giriş Yap
-            </LocalizedClientLink>
-            <LocalizedClientLink
-              href="/register"
+            </a>
+            <a
+              href="/personal"
               className="w-full sm:w-auto inline-flex items-center justify-center px-8 py-3.5 rounded-sm text-base font-semibold border-2 border-primary text-primary hover:bg-component transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
               data-testid="welcome-hero-register-cta"
             >
               Hesap Oluştur
-            </LocalizedClientLink>
+            </a>
           </div>
 
           {/* Güven ve Nitelik Vurguları (Katalog/Fiyat Açılmadan Kurumsal Güvence) */}
