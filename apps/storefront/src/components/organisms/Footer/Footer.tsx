@@ -54,7 +54,7 @@ export function Footer() {
             <ul className="space-y-2 text-xs sm:text-sm">
               <li>
                 <a
-                  href="/personal"
+                  href="/login"
                   className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs"
                 >
                   Kullanıcı Girişi
@@ -62,7 +62,7 @@ export function Footer() {
               </li>
               <li>
                 <a
-                  href="/personal?action=register#register-details"
+                  href="/register"
                   className="hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-xs"
                 >
                   Yeni Hesap Oluştur

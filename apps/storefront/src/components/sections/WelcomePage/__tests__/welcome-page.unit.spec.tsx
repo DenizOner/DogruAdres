@@ -69,9 +69,8 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
 
       expect(html).toContain('data-testid="welcome-hero-login-cta"')
       expect(html).toContain('data-testid="welcome-hero-register-cta"')
-      expect(html).toContain('href="/personal"')
-      expect(html).toContain('href="/personal?action=register#register-details"')
-      expect(html).not.toContain('href="/register"')
+      expect(html).toContain('href="/login"')
+      expect(html).toContain('href="/register"')
 
       expect(html).toContain("Tamamen Kapalı B4B")
       expect(html).toContain("Doğrulanmış İşletmeler")
@@ -178,10 +177,41 @@ describe("DoğruAdres Kurumsal Karşılama Sayfası (Issue #255)", () => {
       expect(html).toContain("Gizlilik ve KVKK Politikası")
       expect(html).toContain("Çerez Politikası")
       expect(html).toContain("© 2026 DoğruAdres. Tüm hakları saklıdır.")
-      expect(html).toContain('href="/personal"')
+      expect(html).toContain('href="/login"')
+      expect(html).toContain('href="/register"')
       expect(html).toContain('href="/tr/forgot-password"')
       expect(html).not.toContain('reset-password')
       expect(html).not.toContain("Fleek")
+    })
+  })
+
+  describe("Bölüm 8: Ayrı /login ve /register Sayfaları (Stitch Split-Screen)", () => {
+    it("renders LoginClient with login form only and link to /register", async () => {
+      const { LoginClient } = await import(
+        "../../../../app/[locale]/(auth)/login/LoginClient"
+      )
+      const html = renderToString(<LoginClient />)
+      expect(html).toContain('data-testid="login-form"')
+      expect(html).toContain('data-testid="login-to-register-link"')
+      expect(html).toContain('href="/register"')
+      expect(html).not.toContain('data-testid="register-form"')
+    })
+
+    it("renders RegisterClient with canonical Person fields and link to /login", async () => {
+      const { RegisterClient } = await import(
+        "../../../../app/[locale]/(auth)/register/RegisterClient"
+      )
+      const html = renderToString(<RegisterClient />)
+      expect(html).toContain('data-testid="register-form"')
+      expect(html).toContain('name="first_name"')
+      expect(html).toContain('name="last_name"')
+      expect(html).toContain('name="email"')
+      expect(html).toContain('name="mobile_phone"')
+      expect(html).toContain('name="password"')
+      expect(html).toContain('minLength="12"')
+      expect(html).toContain('data-testid="register-to-login-link"')
+      expect(html).toContain('href="/login"')
+      expect(html).not.toContain('data-testid="login-form"')
     })
   })
 
