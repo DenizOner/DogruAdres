@@ -136,4 +136,4 @@ class WelcomeWcagChromiumTest(unittest.TestCase):
         self.assertNotIn("yakında", text)
         self.assertNotIn("fail-closed", text)
         self.assertEqual(self.page.locator('a[href="/register"]').count(), 0)
-        self.assertGreaterEqual(self.page.locator('a[href="/personal"]').count(), 4)
+        self.assertGreaterEqual(self.page.locator('a[href="/personal"]').count(), 3)

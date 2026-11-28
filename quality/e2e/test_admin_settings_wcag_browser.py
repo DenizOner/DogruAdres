@@ -62,9 +62,13 @@ class AdminSettingsWcagChromiumTest(unittest.TestCase):
                   if (window.__daMfaStatus === 401) {
                     return { ok: false, status: 401, json: async () => ({}) };
                   }
-                  return { ok: true, status: 200, json: async () => ({ csrf_token: "synthetic-csrf" }) };
+                  return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({ csrf_token: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }),
+                  };
                 }
-                if (path === "/platform/mfa" && method === "GET") {
+                if (path === "/personal/mfa" && method === "GET") {
                   return {
                     ok: true,
                     status: 200,
@@ -75,7 +79,7 @@ class AdminSettingsWcagChromiumTest(unittest.TestCase):
                     }),
                   };
                 }
-                if (path === "/platform/mfa" && method === "POST") {
+                if (path === "/personal/mfa" && method === "POST") {
                   window.__daMfaPosts++;
                   return {
                     ok: true,
