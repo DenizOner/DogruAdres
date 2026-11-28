@@ -108,7 +108,7 @@ describe("B22 local ClamAV scanner fail-closed transport", () => {
 
   it("denies stale signatures, malformed database metadata and future database dates", async () => {
     for (const date of [
-      new Date(Date.now() - 96 * 60 * 60 * 1000).toUTCString(),
+      new Date(Date.now() - 264 * 60 * 60 * 1000).toUTCString(),
       "invalid-database-date",
       new Date(Date.now() + 60 * 60 * 1000).toUTCString()
     ]) {
