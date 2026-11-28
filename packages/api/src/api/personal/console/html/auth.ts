@@ -1,6 +1,6 @@
 // Kişisel konsol HTML parçası: auth.ts
-export const htmlAuth: string = `  <form id="login"><label>E-posta<input name="email" type="email" autocomplete="username" required></label><label>Parola<input name="password" type="password" autocomplete="current-password" required></label><button>Giriş yap</button><p class="da-help-text"><a href="mailto:destek@dogruadres.com.tr">Yardım veya erişim sorunu mu var?</a></p></form>
-  <details id="register-details"><summary>Yeni kişi hesabı oluştur</summary>
+export const htmlAuth: string = `  <form id="login"><label>E-posta<input name="email" type="email" autocomplete="username" required></label><label>Parola<input name="password" type="password" autocomplete="current-password" required></label><button>Giriş yap</button><p class="da-help-text">Hesabınız yok mu? <a href="/register">Yeni kişi hesabı oluştur</a> · <a href="mailto:destek@dogruadres.com.tr">Yardım veya erişim sorunu mu var?</a></p></form>
+  <details id="register-details" hidden><summary>Yeni kişi hesabı oluştur</summary>
     <p>Tek kişisel hesap oluşturun. İşletme ve mağaza yetkileri kayıtla birlikte verilmez; cep telefonu numaranızın sahipliği henüz doğrulanmaz.</p>
     <form id="register">
       <label>Ad<input name="first_name" autocomplete="given-name" maxlength="50" required></label>
