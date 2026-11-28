@@ -14,7 +14,7 @@ export class TaxCertificateScannerUnavailable extends Error {
 
 const RESPONSE_MAX = 384
 const SOCKET_TIMEOUT_MS = 20_000
-const SIGNATURE_MAX_AGE_MS = 72 * 60 * 60 * 1000
+const SIGNATURE_MAX_AGE_MS = 240 * 60 * 60 * 1000
 const FUTURE_SKEW_MS = 10 * 60 * 1000
 const CHUNK = 64 * 1024
 
