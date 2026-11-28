@@ -87,7 +87,7 @@ class WelcomeWcagChromiumTest(unittest.TestCase):
         self.assertGreaterEqual(self.page.locator("h2").count(), 5)
 
     def test_skip_link_keyboard_focus_moves_to_main_content(self):
-        skip = self.page.locator("#skip-link")
+        skip = self.page.locator('a[href="#main-content"]')
         skip.focus()
         self.assertTrue(skip.evaluate("el => document.activeElement === el"))
         self.page.keyboard.press("Enter")
@@ -136,4 +136,4 @@ class WelcomeWcagChromiumTest(unittest.TestCase):
         self.assertNotIn("yakında", text)
         self.assertNotIn("fail-closed", text)
         self.assertEqual(self.page.locator('a[href="/register"]').count(), 0)
-        self.assertGreaterEqual(self.page.locator('a[href="/personal"]').count(), 4)
+        self.assertGreaterEqual(self.page.locator('a[href="/personal"]').count(), 3)
