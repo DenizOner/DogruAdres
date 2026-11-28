@@ -87,7 +87,7 @@ class WelcomeWcagChromiumTest(unittest.TestCase):
         self.assertGreaterEqual(self.page.locator("h2").count(), 5)
 
     def test_skip_link_keyboard_focus_moves_to_main_content(self):
-        skip = self.page.locator("#skip-link")
+        skip = self.page.locator('a[href="#main-content"]')
         skip.focus()
         self.assertTrue(skip.evaluate("el => document.activeElement === el"))
         self.page.keyboard.press("Enter")
